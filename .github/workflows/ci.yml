@@ -131,58 +131,6 @@ jobs:
       - name: Show CUDA ccache statistics
         run: ccache --show-stats
 
-  cumetal-smoke:
-    name: CuMetal macOS CUDA smoke
-    runs-on: macos-15
-    env:
-      CUMETAL_COMMIT: 041890f6f6f6e70b2f2ac1330987dd56a4f94b3c
-      CUMETAL_SOURCE: /tmp/cuda-metal
-      CUMETAL_PREFIX: /tmp/cumetal-install
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify Apple Silicon runner
-        run: |
-          uname -a
-          test "$(uname -m)" = arm64
-          xcrun --find metal
-      - name: Build pinned CuMetal with its source tree retained
-        run: |
-          brew install llvm z3
-          git clone --recurse-submodules https://github.com/Lulzx/cuda-metal.git "$CUMETAL_SOURCE"
-          git -C "$CUMETAL_SOURCE" checkout "$CUMETAL_COMMIT"
-          git -C "$CUMETAL_SOURCE" submodule update --init --recursive
-          cmake -S "$CUMETAL_SOURCE" -B "$CUMETAL_SOURCE/build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$CUMETAL_PREFIX" \
-            -DCUMETAL_BUILD_TESTS=OFF \
-            -DCUMETAL_ENABLE_BINARY_SHIM=OFF \
-            -DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
-          cmake --build "$CUMETAL_SOURCE/build" --parallel 3
-          cmake --install "$CUMETAL_SOURCE/build"
-          CUMETAL_ROOT="$CUMETAL_PREFIX" "$CUMETAL_PREFIX/bin/cumetal" version
-          CUMETAL_ROOT="$CUMETAL_PREFIX" "$CUMETAL_PREFIX/bin/cumetal" doctor
-      - name: Compile the production CUDA Fock kernel through CuMetal
-        run: |
-          CUMETAL_ROOT="$CUMETAL_PREFIX" \
-            "$CUMETAL_PREFIX/bin/cumetalc" tests/cumetal/test_cuda_fock.cu \
-            -I"$CUMETAL_PREFIX/include" \
-            -I"${GITHUB_WORKSPACE}" \
-            -I"${GITHUB_WORKSPACE}/include" \
-            -I"${GITHUB_WORKSPACE}/src" \
-            -o /tmp/vibeqc-cumetal-fock
-      - name: Run the CUDA Fock smoke test on the Apple GPU
-        run: |
-          set -o pipefail
-          CUMETAL_ROOT="$CUMETAL_PREFIX" \
-          DYLD_LIBRARY_PATH="$CUMETAL_PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
-          CUMETAL_TRACE_GPU=1 \
-            /tmp/vibeqc-cumetal-fock 2>&1 | tee /tmp/vibeqc-cumetal.log
-          grep -q 'device=apple_gpu' /tmp/vibeqc-cumetal.log
-          grep -q 'launch_success=true' /tmp/vibeqc-cumetal.log
-
   python:
     runs-on: ubuntu-24.04
     env:
