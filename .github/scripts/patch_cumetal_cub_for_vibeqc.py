@@ -5,14 +5,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 root = Path(os.environ["CUMETAL_SOURCE"]) / "runtime/api/cub/block"
 header = root / "block_scan.h"
 if not header.exists():
     raise SystemExit(f"missing pinned CuMetal BlockScan header: {header}")
 
 header.write_text(
-    r'''#pragma once
+    r"""#pragma once
 // CuMetal CUB shim: BlockScan.
 //
 // Match the cooperative device behavior used by VibeQC.  The stock 0.5.0
@@ -144,7 +143,7 @@ private:
 };
 
 }  // namespace cub
-''',
+""",
     encoding="utf-8",
 )
 
