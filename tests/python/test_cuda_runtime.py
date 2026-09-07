@@ -22,11 +22,11 @@ def test_cuda_minimal_rhf_matches_cpu_reference():
         Shell(0, 0, (Primitive(1.0, 1.0),)),
         Shell(1, 0, (Primitive(1.0, 1.0),)),
     )
-    options = dict(
-        basis=basis,
-        energy_tolerance=1.0e-10,
-        density_tolerance=1.0e-8,
-    )
+    options = {
+        "basis": basis,
+        "energy_tolerance": 1.0e-10,
+        "density_tolerance": 1.0e-8,
+    }
     reference = Calculator(device="cpu", **options).singlepoint(atoms)
     try:
         result = Calculator(device="cuda", **options).singlepoint(atoms)
@@ -44,12 +44,12 @@ def test_cuda_minimal_uhf_matches_cpu_reference():
 
     atoms = [("H", (0.0, 0.0, 0.0))]
     basis = (Shell(0, 0, (Primitive(1.0, 1.0),)),)
-    options = dict(
-        method="uhf",
-        basis=basis,
-        energy_tolerance=1.0e-10,
-        density_tolerance=1.0e-8,
-    )
+    options = {
+        "method": "uhf",
+        "basis": basis,
+        "energy_tolerance": 1.0e-10,
+        "density_tolerance": 1.0e-8,
+    }
     reference = Calculator(device="cpu", **options).singlepoint(atoms, multiplicity=2)
     try:
         result = Calculator(device="cuda", **options).singlepoint(atoms, multiplicity=2)
