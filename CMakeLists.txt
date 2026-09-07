@@ -460,6 +460,12 @@ if(VIBEQC_BUILD_TESTS)
     COMMAND vibeqc_mixed_precision_tests)
 
   if(VIBEQC_ENABLE_CUDA)
+    add_executable(vibeqc_cuda_runtime_tests tests/native/test_cuda_runtime.cu)
+    target_link_libraries(vibeqc_cuda_runtime_tests PRIVATE vibeqc CUDA::cudart CUDA::cublas)
+    target_include_directories(vibeqc_cuda_runtime_tests
+      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_cuda_runtime_tests COMMAND vibeqc_cuda_runtime_tests)
+
     add_executable(vibeqc_aot_profile_tests tests/native/test_aot_profile.cpp)
     target_link_libraries(vibeqc_aot_profile_tests PRIVATE vibeqc CUDA::cudart)
     target_include_directories(vibeqc_aot_profile_tests
