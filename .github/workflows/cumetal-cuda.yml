@@ -59,7 +59,6 @@ jobs:
             /tmp/cuda-metal
             /tmp/cumetal-install
           key: cumetal-${{ runner.os }}-${{ runner.arch }}-${{ env.CUMETAL_COMMIT }}-${{ hashFiles('.github/scripts/patch_cumetal_*.py') }}
-          save-always: true
 
       - name: Restore VibeQC ccache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -153,7 +152,7 @@ jobs:
       - name: Show ccache statistics
         run: ccache --show-stats
 
-      - name: Compile CUDA Fock kernel contract through CuMetal
+      - name: Compile FP32 CUDA logic contracts through CuMetal
         if: github.event_name == 'pull_request'
         run: |
           CUMETAL_ROOT="$CUMETAL_PREFIX" \
@@ -162,9 +161,9 @@ jobs:
             -I"${GITHUB_WORKSPACE}" \
             -I"${GITHUB_WORKSPACE}/include" \
             -I"${GITHUB_WORKSPACE}/src" \
-            -o /tmp/vibeqc-cumetal-fock
+            -o /tmp/vibeqc-cumetal-logic
 
-      - name: Run CUDA Fock kernel contract on the Apple GPU
+      - name: Run FP32 CUDA logic contracts on the Apple GPU
         if: github.event_name == 'pull_request'
         timeout-minutes: 2
         run: |
@@ -172,24 +171,14 @@ jobs:
           CUMETAL_ROOT="$CUMETAL_PREFIX" \
           DYLD_LIBRARY_PATH="$CUMETAL_PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
           CUMETAL_TRACE_GPU=1 \
-            /tmp/vibeqc-cumetal-fock 2>&1 | tee /tmp/vibeqc-cumetal-kernel.log
-          grep -q 'device=apple_gpu' /tmp/vibeqc-cumetal-kernel.log
-          grep -q 'launch_success=true' /tmp/vibeqc-cumetal-kernel.log
+            /tmp/vibeqc-cumetal-logic 2>&1 | tee /tmp/vibeqc-cumetal-logic.log
+          grep -q 'device=apple_gpu' /tmp/vibeqc-cumetal-logic.log
+          grep -q 'launch_success=true' /tmp/vibeqc-cumetal-logic.log
+          grep -q 'PASS: CuMetal FP32 CUDA logic contracts' /tmp/vibeqc-cumetal-logic.log
 
       - name: Install Python test dependencies
+        if: github.event_name != 'pull_request'
         run: uv pip install --python .venv/bin/python --editable '.[test]'
-
-      - name: Run focused CUDA PR integrations on the Apple GPU
-        if: github.event_name == 'pull_request'
-        timeout-minutes: 3
-        env:
-          CUMETAL_ROOT: /tmp/cumetal-install
-          DYLD_LIBRARY_PATH: /tmp/cuda-metal/build
-          VIBEQC_LIBRARY: ${{ github.workspace }}/build-cumetal/libvibeqc.dylib
-          CUMETAL_TRACE_GPU: "1"
-          CUMETAL_CUDA_TEST_MODE: gate
-          CUMETAL_CUDA_TEST_TIMEOUT_SECONDS: "60"
-        run: .venv/bin/python .github/scripts/run_cumetal_cuda_pytests.py
 
       - name: Run full CUDA suite on the Apple GPU
         if: github.event_name != 'pull_request'
