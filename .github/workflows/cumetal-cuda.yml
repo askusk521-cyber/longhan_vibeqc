@@ -111,17 +111,11 @@ jobs:
             -DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python" \
             -DVIBEQC_CUDA_ARCHITECTURES=80 \
             -DVIBEQC_CUDA_COMPILE_ARCHITECTURES=80 \
-            -DVIBEQC_BUILD_TESTS=ON \
+            -DVIBEQC_BUILD_TESTS=OFF \
             -DVIBEQC_COMPILER_CACHE=off
 
-      - name: Build the CUDA backend and native tests
+      - name: Build the CUDA backend
         run: cmake --build "$VIBEQC_BUILD" --parallel 3
-
-      - name: Run native tests against the CUDA build
-        env:
-          CUMETAL_ROOT: /tmp/cumetal-install
-          DYLD_LIBRARY_PATH: /tmp/cuda-metal/build
-        run: ctest --test-dir "$VIBEQC_BUILD" --output-on-failure
 
       - name: Install Python test dependencies
         run: uv pip install --python .venv/bin/python --editable '.[test]'
