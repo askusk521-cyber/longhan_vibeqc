@@ -131,6 +131,38 @@ jobs:
       - name: Show CUDA ccache statistics
         run: ccache --show-stats
 
+  cumetal-smoke:
+    name: CuMetal macOS CUDA smoke
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify Apple Silicon runner
+        run: |
+          uname -a
+          test "$(uname -m)" = arm64
+          xcrun --find metal
+      - name: Install CuMetal
+        run: |
+          brew install lulzx/tap/cumetal
+          cumetal version
+          cumetal doctor
+      - name: Compile the production CUDA Fock kernel through CuMetal
+        run: >-
+          cumetalc tests/cumetal/test_cuda_fock.cu
+          -I"${GITHUB_WORKSPACE}"
+          -I"${GITHUB_WORKSPACE}/include"
+          -I"${GITHUB_WORKSPACE}/src"
+          -o /tmp/vibeqc-cumetal-fock
+      - name: Run the CUDA Fock smoke test on the Apple GPU
+        run: |
+          set -o pipefail
+          CUMETAL_TRACE_GPU=1 /tmp/vibeqc-cumetal-fock 2>&1 | tee /tmp/vibeqc-cumetal.log
+          grep -q 'device=apple_gpu' /tmp/vibeqc-cumetal.log
+          grep -q 'launch_success=true' /tmp/vibeqc-cumetal.log
+
   python:
     runs-on: ubuntu-24.04
     env:
