@@ -1,9 +1,10 @@
 """Run CuMetal-backed CUDA pytest cases with bounded CI latency.
 
-Pull-request mode executes a representative set of existing CUDA integration
-tests and fails fast on the first error or timeout. Full mode (nightly/manual)
-runs every existing CUDA test from the selected files and keeps collecting
-results after failures so provider gaps remain diagnosable.
+Pull-request mode executes focused public-CUDA integration tests and fails fast
+on the first error or timeout. Full mode (nightly/manual) runs the complete CUDA
+regression set and keeps collecting results after failures so provider gaps
+remain diagnosable without turning every pull request into a long FP64-emulated
+SCF run.
 """
 
 from __future__ import annotations
@@ -16,15 +17,17 @@ import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-TEST_FILES = ("tests/python/test_batch.py", "tests/python/test_calculator.py")
+TEST_FILES = (
+    "tests/python/test_cuda_runtime.py",
+    "tests/python/test_batch.py",
+    "tests/python/test_calculator.py",
+)
 GATE_NODEIDS = (
-    "tests/python/test_batch.py::test_device_resident_cuda_rhf_matches_reference_when_device_is_available",
-    "tests/python/test_batch.py::test_cuda_direct_jk_batch_reuses_stable_pair_tasks",
-    "tests/python/test_batch.py::test_cuda_uhf_ragged_batch_warm_start_and_failure_isolation",
-    "tests/python/test_batch.py::test_cuda_real_spherical_batch_reuses_fixed_topology_plan",
+    "tests/python/test_cuda_runtime.py::test_cuda_minimal_rhf_matches_cpu_reference",
+    "tests/python/test_cuda_runtime.py::test_cuda_minimal_uhf_matches_cpu_reference",
 )
 MODE = os.environ.get("CUMETAL_CUDA_TEST_MODE", "gate").strip().lower()
-TIMEOUT_SECONDS = int(os.environ.get("CUMETAL_CUDA_TEST_TIMEOUT_SECONDS", "90"))
+TIMEOUT_SECONDS = int(os.environ.get("CUMETAL_CUDA_TEST_TIMEOUT_SECONDS", "60"))
 
 
 def collect_full_nodeids() -> list[str]:
