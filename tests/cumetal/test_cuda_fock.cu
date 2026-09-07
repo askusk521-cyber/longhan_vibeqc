@@ -1,5 +1,5 @@
-#include <cublas_v2.h>
 #include <cub/block/block_scan.h>
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include <cmath>
@@ -10,13 +10,13 @@
 // too slow for a pull-request gate.  Keep the PR runtime checks in FP32 so they
 // validate CUDA indexing, synchronization, atomics and provider wiring without
 // pretending to validate VibeQC's production FP64 numerics.
-extern "C" __global__ void vibeqc_cumetal_rhf_fock_fp32_kernel(
-    std::size_t batch_size, std::size_t n, const float* hcore, const float* eri,
-    const float* density, float* fock) {
+extern "C" __global__ void vibeqc_cumetal_rhf_fock_fp32_kernel(std::size_t batch_size,
+                                                               std::size_t n, const float* hcore,
+                                                               const float* eri,
+                                                               const float* density, float* fock) {
   const std::size_t matrix_size = n * n;
   const std::size_t eri_size = matrix_size * matrix_size;
-  const std::size_t element =
-      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (element >= batch_size * matrix_size) return;
 
   const std::size_t system = element / matrix_size;
@@ -39,9 +39,8 @@ extern "C" __global__ void vibeqc_cumetal_rhf_fock_fp32_kernel(
   fock[element] = hcore[element] + coulomb - 0.5F * exchange;
 }
 
-extern "C" __global__ void vibeqc_cumetal_block_scan_kernel(const int* input,
-                                                             int* exclusive,
-                                                             int* aggregate) {
+extern "C" __global__ void vibeqc_cumetal_block_scan_kernel(const int* input, int* exclusive,
+                                                            int* aggregate) {
   using BlockScan = cub::BlockScan<int, 32>;
   __shared__ typename BlockScan::TempStorage storage;
   int prefix = 0;
@@ -51,9 +50,7 @@ extern "C" __global__ void vibeqc_cumetal_block_scan_kernel(const int* input,
   if (threadIdx.x == 0) *aggregate = total;
 }
 
-extern "C" __global__ void vibeqc_cumetal_atomic_kernel(float* output) {
-  atomicAdd(output, 1.0F);
-}
+extern "C" __global__ void vibeqc_cumetal_atomic_kernel(float* output) { atomicAdd(output, 1.0F); }
 
 namespace {
 
@@ -65,8 +62,7 @@ bool check_cuda(cudaError_t error, const char* expression) {
 
 bool check_cublas(cublasStatus_t status, const char* expression) {
   if (status == CUBLAS_STATUS_SUCCESS) return true;
-  std::fprintf(stderr, "FAIL: %s: cuBLAS status %d\n", expression,
-               static_cast<int>(status));
+  std::fprintf(stderr, "FAIL: %s: cuBLAS status %d\n", expression, static_cast<int>(status));
   return false;
 }
 
@@ -111,37 +107,30 @@ bool run_fock_contract(cudaStream_t stream) {
   float* device_density = nullptr;
   float* device_fock = nullptr;
   bool ok =
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_hcore),
-                            matrix_size * sizeof(float)),
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_hcore), matrix_size * sizeof(float)),
                  "cudaMalloc(hcore)") &&
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_eri),
-                            eri_size * sizeof(float)),
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_eri), eri_size * sizeof(float)),
                  "cudaMalloc(eri)") &&
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_density),
-                            matrix_size * sizeof(float)),
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_density), matrix_size * sizeof(float)),
                  "cudaMalloc(density)") &&
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_fock),
-                            matrix_size * sizeof(float)),
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_fock), matrix_size * sizeof(float)),
                  "cudaMalloc(fock)");
   if (!ok) return false;
 
-  ok = check_cuda(cudaMemcpyAsync(device_hcore, hcore.data(),
-                                  matrix_size * sizeof(float),
+  ok = check_cuda(cudaMemcpyAsync(device_hcore, hcore.data(), matrix_size * sizeof(float),
                                   cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(hcore)") &&
        check_cuda(cudaMemcpyAsync(device_eri, eri.data(), eri_size * sizeof(float),
                                   cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(eri)") &&
-       check_cuda(cudaMemcpyAsync(device_density, density.data(),
-                                  matrix_size * sizeof(float),
+       check_cuda(cudaMemcpyAsync(device_density, density.data(), matrix_size * sizeof(float),
                                   cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(density)");
   if (ok) {
-    vibeqc_cumetal_rhf_fock_fp32_kernel<<<1, 32, 0, stream>>>(
-        1, n, device_hcore, device_eri, device_density, device_fock);
+    vibeqc_cumetal_rhf_fock_fp32_kernel<<<1, 32, 0, stream>>>(1, n, device_hcore, device_eri,
+                                                              device_density, device_fock);
     ok = check_cuda(cudaGetLastError(), "FP32 Fock launch") &&
-         check_cuda(cudaMemcpyAsync(actual.data(), device_fock,
-                                    matrix_size * sizeof(float),
+         check_cuda(cudaMemcpyAsync(actual.data(), device_fock, matrix_size * sizeof(float),
                                     cudaMemcpyDeviceToHost, stream),
                     "cudaMemcpyAsync(fock)") &&
          check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(Fock)");
@@ -163,8 +152,7 @@ bool run_fock_contract(cudaStream_t stream) {
                  static_cast<double>(max_error));
     return false;
   }
-  std::printf("PASS: FP32 Fock indexing/assembly max_error=%.9e\n",
-              static_cast<double>(max_error));
+  std::printf("PASS: FP32 Fock indexing/assembly max_error=%.9e\n", static_cast<double>(max_error));
   return true;
 }
 
@@ -178,26 +166,22 @@ bool run_block_scan_contract(cudaStream_t stream) {
   int* device_input = nullptr;
   int* device_output = nullptr;
   int* device_aggregate = nullptr;
-  bool ok =
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_input),
-                            threads * sizeof(int)),
-                 "cudaMalloc(scan input)") &&
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_output),
-                            threads * sizeof(int)),
-                 "cudaMalloc(scan output)") &&
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_aggregate), sizeof(int)),
-                 "cudaMalloc(scan aggregate)");
+  bool ok = check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_input), threads * sizeof(int)),
+                       "cudaMalloc(scan input)") &&
+            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_output), threads * sizeof(int)),
+                       "cudaMalloc(scan output)") &&
+            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_aggregate), sizeof(int)),
+                       "cudaMalloc(scan aggregate)");
   if (!ok) return false;
 
   ok = check_cuda(cudaMemcpyAsync(device_input, input.data(), threads * sizeof(int),
                                   cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(scan input)");
   if (ok) {
-    vibeqc_cumetal_block_scan_kernel<<<1, threads, 0, stream>>>(
-        device_input, device_output, device_aggregate);
+    vibeqc_cumetal_block_scan_kernel<<<1, threads, 0, stream>>>(device_input, device_output,
+                                                                device_aggregate);
     ok = check_cuda(cudaGetLastError(), "BlockScan launch") &&
-         check_cuda(cudaMemcpyAsync(output.data(), device_output,
-                                    threads * sizeof(int),
+         check_cuda(cudaMemcpyAsync(output.data(), device_output, threads * sizeof(int),
                                     cudaMemcpyDeviceToHost, stream),
                     "cudaMemcpyAsync(scan output)") &&
          check_cuda(cudaMemcpyAsync(&aggregate, device_aggregate, sizeof(int),
@@ -214,15 +198,13 @@ bool run_block_scan_contract(cudaStream_t stream) {
   int running = 0;
   for (int i = 0; i < threads; ++i) {
     if (output[i] != running) {
-      std::fprintf(stderr, "FAIL: BlockScan[%d]=%d expected=%d\n", i,
-                   output[i], running);
+      std::fprintf(stderr, "FAIL: BlockScan[%d]=%d expected=%d\n", i, output[i], running);
       return false;
     }
     running += input[i];
   }
   if (aggregate != running) {
-    std::fprintf(stderr, "FAIL: BlockScan aggregate=%d expected=%d\n",
-                 aggregate, running);
+    std::fprintf(stderr, "FAIL: BlockScan aggregate=%d expected=%d\n", aggregate, running);
     return false;
   }
   std::printf("PASS: CUB BlockScan cooperative semantics\n");
@@ -239,16 +221,15 @@ bool run_atomic_contract(cudaStream_t stream) {
   if (ok) {
     vibeqc_cumetal_atomic_kernel<<<1, 32, 0, stream>>>(device_value);
     ok = check_cuda(cudaGetLastError(), "atomicAdd launch") &&
-         check_cuda(cudaMemcpyAsync(&value, device_value, sizeof(float),
-                                    cudaMemcpyDeviceToHost, stream),
-                    "cudaMemcpyAsync(atomic)") &&
+         check_cuda(
+             cudaMemcpyAsync(&value, device_value, sizeof(float), cudaMemcpyDeviceToHost, stream),
+             "cudaMemcpyAsync(atomic)") &&
          check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(atomic)");
   }
   cudaFree(device_value);
   if (!ok) return false;
   if (std::fabs(value - 32.0F) > 1.0e-5F) {
-    std::fprintf(stderr, "FAIL: atomicAdd result=%.7g expected=32\n",
-                 static_cast<double>(value));
+    std::fprintf(stderr, "FAIL: atomicAdd result=%.7g expected=32\n", static_cast<double>(value));
     return false;
   }
   std::printf("PASS: FP32 atomicAdd semantics\n");
@@ -270,31 +251,26 @@ bool run_cublas_contract(cudaStream_t stream) {
   bool ok = check_cublas(cublasCreate(&handle), "cublasCreate") &&
             check_cublas(cublasSetStream(handle, stream), "cublasSetStream") &&
             check_cuda(cudaMalloc(&workspace, 4096), "cudaMalloc(cuBLAS workspace)") &&
-            check_cublas(cublasSetWorkspace(handle, workspace, 4096),
-                         "cublasSetWorkspace") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_a),
-                                  4 * sizeof(float)),
+            check_cublas(cublasSetWorkspace(handle, workspace, 4096), "cublasSetWorkspace") &&
+            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_a), 4 * sizeof(float)),
                        "cudaMalloc(SGEMM A)") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_b),
-                                  4 * sizeof(float)),
+            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_b), 4 * sizeof(float)),
                        "cudaMalloc(SGEMM B)") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_c),
-                                  4 * sizeof(float)),
+            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_c), 4 * sizeof(float)),
                        "cudaMalloc(SGEMM C)");
   if (ok) {
-    ok = check_cuda(cudaMemcpyAsync(device_a, a.data(), 4 * sizeof(float),
-                                    cudaMemcpyHostToDevice, stream),
-                    "cudaMemcpyAsync(SGEMM A)") &&
+    ok = check_cuda(
+             cudaMemcpyAsync(device_a, a.data(), 4 * sizeof(float), cudaMemcpyHostToDevice, stream),
+             "cudaMemcpyAsync(SGEMM A)") &&
          check_cuda(cudaMemcpyAsync(device_b, identity.data(), 4 * sizeof(float),
                                     cudaMemcpyHostToDevice, stream),
                     "cudaMemcpyAsync(SGEMM B)") &&
-         check_cublas(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 2, 2, 2,
-                                  &alpha, device_a, 2, device_b, 2, &beta,
-                                  device_c, 2),
+         check_cublas(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 2, 2, 2, &alpha, device_a, 2,
+                                  device_b, 2, &beta, device_c, 2),
                       "cublasSgemm") &&
-         check_cuda(cudaMemcpyAsync(c.data(), device_c, 4 * sizeof(float),
-                                    cudaMemcpyDeviceToHost, stream),
-                    "cudaMemcpyAsync(SGEMM C)") &&
+         check_cuda(
+             cudaMemcpyAsync(c.data(), device_c, 4 * sizeof(float), cudaMemcpyDeviceToHost, stream),
+             "cudaMemcpyAsync(SGEMM C)") &&
          check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SGEMM)");
   }
 
@@ -307,8 +283,8 @@ bool run_cublas_contract(cudaStream_t stream) {
 
   for (std::size_t i = 0; i < a.size(); ++i) {
     if (std::fabs(c[i] - a[i]) > 1.0e-5F) {
-      std::fprintf(stderr, "FAIL: SGEMM[%zu]=%.7g expected=%.7g\n", i,
-                   static_cast<double>(c[i]), static_cast<double>(a[i]));
+      std::fprintf(stderr, "FAIL: SGEMM[%zu]=%.7g expected=%.7g\n", i, static_cast<double>(c[i]),
+                   static_cast<double>(a[i]));
       return false;
     }
   }
@@ -322,17 +298,13 @@ int main() {
   if (!check_cuda(cudaSetDevice(0), "cudaSetDevice(0)")) return 1;
 
   cudaDeviceProp properties{};
-  if (!check_cuda(cudaGetDeviceProperties(&properties, 0),
-                  "cudaGetDeviceProperties")) {
+  if (!check_cuda(cudaGetDeviceProperties(&properties, 0), "cudaGetDeviceProperties")) {
     return 2;
   }
-  if (properties.maxThreadsPerMultiProcessor <= 0 ||
-      properties.maxBlocksPerMultiProcessor <= 0 ||
+  if (properties.maxThreadsPerMultiProcessor <= 0 || properties.maxBlocksPerMultiProcessor <= 0 ||
       properties.regsPerMultiprocessor <= 0) {
-    std::fprintf(stderr,
-                 "FAIL: invalid occupancy properties threads=%d blocks=%d regs=%d\n",
-                 properties.maxThreadsPerMultiProcessor,
-                 properties.maxBlocksPerMultiProcessor,
+    std::fprintf(stderr, "FAIL: invalid occupancy properties threads=%d blocks=%d regs=%d\n",
+                 properties.maxThreadsPerMultiProcessor, properties.maxBlocksPerMultiProcessor,
                  properties.regsPerMultiprocessor);
     return 3;
   }
