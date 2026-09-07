@@ -1,9 +1,9 @@
 #include <cublas_v2.h>
-#include <cub/block/block_scan.cuh>
 #include <cuda_runtime.h>
 
 #include <cmath>
 #include <cstdio>
+#include <cub/block/block_scan.cuh>
 #include <vector>
 
 extern "C" __global__ void vibeqc_test_indexing_kernel(const float* input, float* output,
@@ -13,7 +13,7 @@ extern "C" __global__ void vibeqc_test_indexing_kernel(const float* input, float
 }
 
 extern "C" __global__ void vibeqc_test_block_scan_kernel(const int* input, int* exclusive,
-                                                          int* aggregate) {
+                                                         int* aggregate) {
   using BlockScan = cub::BlockScan<int, 32>;
   __shared__ typename BlockScan::TempStorage storage;
   int prefix = 0;
@@ -155,9 +155,9 @@ bool test_atomic(cudaStream_t stream) {
   if (ok) {
     vibeqc_test_atomic_kernel<<<1, 32, 0, stream>>>(device_value);
     ok = check_cuda(cudaGetLastError(), "atomicAdd launch") &&
-         check_cuda(cudaMemcpyAsync(&value, device_value, sizeof(float), cudaMemcpyDeviceToHost,
-                                    stream),
-                    "cudaMemcpyAsync(atomic)") &&
+         check_cuda(
+             cudaMemcpyAsync(&value, device_value, sizeof(float), cudaMemcpyDeviceToHost, stream),
+             "cudaMemcpyAsync(atomic)") &&
          check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(atomic)");
   }
   cudaFree(device_value);
@@ -187,18 +187,18 @@ bool test_cublas(cudaStream_t stream) {
             check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_c), 4 * sizeof(float)),
                        "cudaMalloc(SGEMM C)");
   if (ok) {
-    ok = check_cuda(cudaMemcpyAsync(device_a, a.data(), 4 * sizeof(float),
-                                    cudaMemcpyHostToDevice, stream),
-                    "cudaMemcpyAsync(SGEMM A)") &&
+    ok = check_cuda(
+             cudaMemcpyAsync(device_a, a.data(), 4 * sizeof(float), cudaMemcpyHostToDevice, stream),
+             "cudaMemcpyAsync(SGEMM A)") &&
          check_cuda(cudaMemcpyAsync(device_b, identity.data(), 4 * sizeof(float),
                                     cudaMemcpyHostToDevice, stream),
                     "cudaMemcpyAsync(SGEMM B)") &&
          check_cublas(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 2, 2, 2, &alpha, device_a, 2,
                                   device_b, 2, &beta, device_c, 2),
                       "cublasSgemm") &&
-         check_cuda(cudaMemcpyAsync(c.data(), device_c, 4 * sizeof(float),
-                                    cudaMemcpyDeviceToHost, stream),
-                    "cudaMemcpyAsync(SGEMM C)") &&
+         check_cuda(
+             cudaMemcpyAsync(c.data(), device_c, 4 * sizeof(float), cudaMemcpyDeviceToHost, stream),
+             "cudaMemcpyAsync(SGEMM C)") &&
          check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SGEMM)");
   }
 
