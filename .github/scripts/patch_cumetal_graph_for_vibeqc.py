@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 header = Path(os.environ["CUMETAL_SOURCE"]) / "runtime/api/cuda_runtime.h"
 text = header.read_text(encoding="utf-8")
 old = (
