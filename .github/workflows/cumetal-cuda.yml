@@ -64,7 +64,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-cumetal-${{ runner.os }}-${{ runner.arch }}-${{ env.CUMETAL_COMMIT }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'include/**', 'src/**', 'tools/**') }}
+          key: ccache-cumetal-${{ runner.os }}-${{ runner.arch }}-${{ env.CUMETAL_COMMIT }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'include/**', 'src/**', 'tests/native/**', 'tools/**') }}
           restore-keys: |
             ccache-cumetal-${{ runner.os }}-${{ runner.arch }}-${{ env.CUMETAL_COMMIT }}-
 
@@ -129,7 +129,7 @@ jobs:
       - name: Reset ccache statistics
         run: ccache --zero-stats
 
-      - name: Configure VibeQC with CUDA enabled
+      - name: Configure VibeQC with CUDA tests enabled
         run: |
           FAKE_CUDA="$CUMETAL_SOURCE/build/cumetal-cuda-toolkit"
           PATH="$FAKE_CUDA/bin:$PATH" cmake -S . -B "$VIBEQC_BUILD" -G Ninja \
@@ -143,38 +143,29 @@ jobs:
             -DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python" \
             -DVIBEQC_CUDA_ARCHITECTURES=80 \
             -DVIBEQC_CUDA_COMPILE_ARCHITECTURES=80 \
-            -DVIBEQC_BUILD_TESTS=OFF \
+            -DVIBEQC_BUILD_TESTS=ON \
             -DVIBEQC_COMPILER_CACHE=ccache
 
-      - name: Build the CUDA backend
-        run: cmake --build "$VIBEQC_BUILD" --parallel 3
+      - name: Build CUDA runtime test target
+        run: cmake --build "$VIBEQC_BUILD" --target vibeqc_cuda_runtime_tests --parallel 3
 
       - name: Show ccache statistics
         run: ccache --show-stats
 
-      - name: Compile FP32 CUDA logic contracts through CuMetal
-        if: github.event_name == 'pull_request'
-        run: |
-          CUMETAL_ROOT="$CUMETAL_PREFIX" \
-            "$CUMETAL_PREFIX/bin/cumetalc" tests/cumetal/test_cuda_fock.cu \
-            -I"$CUMETAL_PREFIX/include" \
-            -I"${GITHUB_WORKSPACE}" \
-            -I"${GITHUB_WORKSPACE}/include" \
-            -I"${GITHUB_WORKSPACE}/src" \
-            -o /tmp/vibeqc-cumetal-logic
-
-      - name: Run FP32 CUDA logic contracts on the Apple GPU
-        if: github.event_name == 'pull_request'
+      - name: Run CUDA runtime CTest on the Apple GPU
         timeout-minutes: 2
         run: |
           set -o pipefail
           CUMETAL_ROOT="$CUMETAL_PREFIX" \
-          DYLD_LIBRARY_PATH="$CUMETAL_PREFIX/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+          DYLD_LIBRARY_PATH="$CUMETAL_SOURCE/build${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
           CUMETAL_TRACE_GPU=1 \
-            /tmp/vibeqc-cumetal-logic 2>&1 | tee /tmp/vibeqc-cumetal-logic.log
-          grep -q 'device=apple_gpu' /tmp/vibeqc-cumetal-logic.log
-          grep -q 'launch_success=true' /tmp/vibeqc-cumetal-logic.log
-          grep -q 'PASS: CuMetal FP32 CUDA logic contracts' /tmp/vibeqc-cumetal-logic.log
+            ctest --test-dir "$VIBEQC_BUILD" -V \
+              -R '^vibeqc_cuda_runtime_tests$' \
+              --output-junit /tmp/vibeqc-cuda-runtime-junit.xml \
+              2>&1 | tee /tmp/vibeqc-cuda-runtime.log
+          grep -q 'device=apple_gpu' /tmp/vibeqc-cuda-runtime.log
+          grep -q 'launch_success=true' /tmp/vibeqc-cuda-runtime.log
+          grep -q 'PASS: CUDA runtime contracts' /tmp/vibeqc-cuda-runtime.log
 
       - name: Install Python test dependencies
         if: github.event_name != 'pull_request'
