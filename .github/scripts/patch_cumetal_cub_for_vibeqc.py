@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-root = Path(os.environ["CUMETAL_SOURCE"]) / "runtime/api/cub/block"
+source = Path(os.environ["CUMETAL_SOURCE"])
+root = source / "runtime/api/cub/block"
 header = root / "block_scan.h"
 if not header.exists():
     raise SystemExit(f"missing pinned CuMetal BlockScan header: {header}")
@@ -147,7 +148,21 @@ private:
     encoding="utf-8",
 )
 
-# CUDA Toolkit/CUB exposes .cuh includes.  CuMetal 0.5.0 installs only .h.
+# CUDA Toolkit/CUB exposes .cuh includes. CuMetal 0.5.0 installs only .h;
+# keep the source and installed compatibility surfaces identical so both its
+# fake-nvcc CMake path and source-first cumetalc path consume the same header.
 (root / "block_scan.cuh").write_text(
     '#pragma once\n#include "block_scan.h"\n', encoding="utf-8"
+)
+
+cmake = source / "CMakeLists.txt"
+text = cmake.read_text(encoding="utf-8")
+anchor = "    runtime/api/cub/block/block_scan.h\n"
+if text.count(anchor) != 1:
+    raise SystemExit(
+        "CUB BlockScan install list: expected one block_scan.h anchor in pinned CuMetal"
+    )
+cmake.write_text(
+    text.replace(anchor, anchor + "    runtime/api/cub/block/block_scan.cuh\n", 1),
+    encoding="utf-8",
 )
