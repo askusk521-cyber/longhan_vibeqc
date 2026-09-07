@@ -23,7 +23,7 @@ jobs:
       CUMETAL_SOURCE: /tmp/cuda-metal
       CUMETAL_PREFIX: /tmp/cumetal-install
       VIBEQC_BUILD: ${{ github.workspace }}/build-cumetal
-      CCACHE_DIR: ${{ runner.temp }}/ccache
+      CCACHE_DIR: /tmp/vibeqc-ccache
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
