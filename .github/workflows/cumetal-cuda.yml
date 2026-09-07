@@ -1,0 +1,145 @@
+name: CuMetal CUDA
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cumetal-cuda-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  cuda-tests:
+    name: CUDA runtime tests (CuMetal / Apple GPU)
+    runs-on: macos-15
+    env:
+      CUMETAL_COMMIT: 041890f6f6f6e70b2f2ac1330987dd56a4f94b3c
+      CUMETAL_SOURCE: /tmp/cuda-metal
+      CUMETAL_PREFIX: /tmp/cumetal-install
+      VIBEQC_BUILD: ${{ github.workspace }}/build-cumetal
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify Apple Silicon runner
+        run: |
+          test "$(uname -m)" = arm64
+          xcrun --find metal
+
+      - name: Install uv, LLVM, and build tools
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.10.7"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Build pinned CuMetal
+        run: |
+          brew install llvm z3 ninja
+          git clone --recurse-submodules https://github.com/Lulzx/cuda-metal.git "$CUMETAL_SOURCE"
+          git -C "$CUMETAL_SOURCE" checkout "$CUMETAL_COMMIT"
+          git -C "$CUMETAL_SOURCE" submodule update --init --recursive
+          cmake -S "$CUMETAL_SOURCE" -B "$CUMETAL_SOURCE/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$CUMETAL_PREFIX" \
+            -DCUMETAL_BUILD_TESTS=OFF \
+            -DCUMETAL_ENABLE_BINARY_SHIM=OFF \
+            -DLLVM_DIR="$(brew --prefix llvm)/lib/cmake/llvm"
+          cmake --build "$CUMETAL_SOURCE/build" --parallel 3
+          cmake --install "$CUMETAL_SOURCE/build"
+          CUMETAL_ROOT="$CUMETAL_PREFIX" "$CUMETAL_PREFIX/bin/cumetal" doctor
+
+      - name: Generate a CMake CUDA toolkit backed by CuMetal
+        run: |
+          CUMETAL_BUILD_DIR="$CUMETAL_SOURCE/build" \
+            bash "$CUMETAL_SOURCE/scripts/build_llama_cpp_cumetal.sh" --toolkit-only
+          FAKE_CUDA="$CUMETAL_SOURCE/build/cumetal-cuda-toolkit"
+          # VibeQC requires CUDA Toolkit >= 12.9. CuMetal's compatibility shim
+          # reports 12.2 by default even though this lane is not using NVIDIA
+          # toolkit implementation details; make the compatibility identity
+          # satisfy VibeQC's configured minimum.
+          for file in \
+            "$FAKE_CUDA/version.json" \
+            "$FAKE_CUDA/version.txt" \
+            "$FAKE_CUDA/bin/nvcc" \
+            "$FAKE_CUDA/lib/cmake/CUDAToolkit/CUDAToolkitConfig.cmake" \
+            "$FAKE_CUDA/lib/cmake/CUDAToolkit/CUDAToolkitConfigVersion.cmake"; do
+            if [[ -f "$file" ]]; then
+              sed -i '' 's/12\.2/12.9/g' "$file"
+            fi
+          done
+          # CuMetal implements these APIs in libcumetal.dylib. Ensure CMake's
+          # FindCUDAToolkit can resolve the library names VibeQC links.
+          for libdir in lib lib64; do
+            mkdir -p "$FAKE_CUDA/$libdir"
+            for lib in cudart cublas cublasLt cusolver; do
+              ln -sf "$CUMETAL_SOURCE/build/libcumetal.dylib" \
+                "$FAKE_CUDA/$libdir/lib${lib}.dylib"
+            done
+          done
+          "$FAKE_CUDA/bin/nvcc" --version
+
+      - name: Configure VibeQC with CUDA enabled
+        run: |
+          FAKE_CUDA="$CUMETAL_SOURCE/build/cumetal-cuda-toolkit"
+          PATH="$FAKE_CUDA/bin:$PATH" cmake -S . -B "$VIBEQC_BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++" \
+            -DCMAKE_CUDA_COMPILER="$FAKE_CUDA/bin/nvcc" \
+            -DCMAKE_CUDA_COMPILER_LIBRARY_ROOT="$FAKE_CUDA" \
+            -DCUDAToolkit_ROOT="$FAKE_CUDA" \
+            -DCMAKE_CUDA_ARCHITECTURES=80 \
+            -DVIBEQC_CUDA_ARCHITECTURES=80 \
+            -DVIBEQC_CUDA_COMPILE_ARCHITECTURES=80 \
+            -DVIBEQC_BUILD_TESTS=ON \
+            -DVIBEQC_COMPILER_CACHE=off
+
+      - name: Build the CUDA backend and native tests
+        run: cmake --build "$VIBEQC_BUILD" --parallel 3
+
+      - name: Run native tests against the CUDA build
+        env:
+          CUMETAL_ROOT: /tmp/cumetal-install
+          DYLD_LIBRARY_PATH: /tmp/cuda-metal/build
+        run: ctest --test-dir "$VIBEQC_BUILD" --output-on-failure
+
+      - name: Install Python test dependencies
+        run: |
+          uv venv --python 3.11
+          uv pip install --python .venv/bin/python --editable '.[test]'
+
+      - name: Run existing CUDA Python tests on the Apple GPU
+        env:
+          CUMETAL_ROOT: /tmp/cumetal-install
+          DYLD_LIBRARY_PATH: /tmp/cuda-metal/build
+          VIBEQC_LIBRARY: ${{ github.workspace }}/build-cumetal/libvibeqc.dylib
+          CUMETAL_TRACE_GPU: "1"
+        run: |
+          set -o pipefail
+          .venv/bin/python -m pytest \
+            tests/python/test_batch.py \
+            tests/python/test_calculator.py \
+            -q -k cuda \
+            --junitxml=/tmp/vibeqc-cuda-tests.xml \
+            2>&1 | tee /tmp/vibeqc-cuda-tests.log
+          .venv/bin/python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse('/tmp/vibeqc-cuda-tests.xml').getroot()
+          cases = root.findall('.//testcase')
+          skipped = [case for case in cases if case.find('skipped') is not None]
+          if not cases:
+              raise SystemExit('no CUDA tests were collected')
+          if skipped:
+              names = ', '.join(case.attrib.get('name', '<unknown>') for case in skipped)
+              raise SystemExit(f'CUDA tests skipped instead of executing: {names}')
+          print(f'Executed {len(cases)} existing CUDA tests with zero skips')
+          PY
+          grep -q 'device=apple_gpu' /tmp/vibeqc-cuda-tests.log
+          grep -q 'launch_success=true' /tmp/vibeqc-cuda-tests.log
