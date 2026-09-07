@@ -6467,6 +6467,49 @@ def test_autotune_static_model_records_operations_and_live_values():
     assert fock_model.recurrence_state_count == 56
 
 
+@pytest.mark.parametrize("name", ["ppps", "dpps", "dddd"])
+def test_value_only_native_helpers_use_the_pruned_coulomb_table_stride(name):
+    """A Fock-only manifest must index each emitted state through its IR table."""
+    import re
+
+    spec = FUSED_SHELL_SPEC_BY_NAME[name]
+    integral = build_integral_ir(spec, consumers=(KernelConsumer.FOCK,))
+    plan = build_fused_shell_plan(spec, integral=integral)
+    source = emit_shell_class_fused_cuda(spec, plan)
+    side = integral.maximum_coulomb_order + 1
+    table = re.search(
+        rf"generated_{spec.name}_coulomb_indices\[(\d+)\] = \{{(.*?)\}};",
+        source,
+        re.DOTALL,
+    )
+    assert table is not None
+    values = [int(value) for value in re.findall(r"-?\d+", table.group(2))]
+    assert int(table.group(1)) == len(values) == side**3
+    assert f"(x_order * {side}U + y_order) * {side}U + z_order" in source
+    # The common geometry helper still evaluates the derivative Boys order;
+    # shrinking its scratch arrays with the lookup stride would overwrite it.
+    geometry_side = spec.maximum_force_coulomb_order + 1
+    assert f"double boys[{geometry_side}];" in source
+    assert f"double coordinate_powers[3][{geometry_side}];" in source
+    for index, (x, y, z) in enumerate(plan.coulomb_states):
+        assert values[(x * side + y) * side + z] == index
+
+
+def test_fock_static_model_handles_transformed_component_graphs():
+    """Nonbinary Fock candidates must retain a usable model after normalization."""
+    trials = supported_schedule_trials(PSPS_SPEC, KernelConsumer.FOCK)
+    transformed = [
+        trial for trial in trials if trial.schedule.algebra_form != AlgebraForm.BINARY
+    ]
+    assert transformed
+    for trial in transformed:
+        model = trial.static_model
+        assert model.scope == "balanced_component_sample_envelope"
+        assert model.root_count == 1
+        assert model.arithmetic_operation_count > 0
+        assert model.algebra_form == trial.schedule.algebra_form
+
+
 def test_packed_autotune_searches_real_algebra_placement_variants():
     """Tie schedule IDs, payloads, source lowering, and static models together."""
 

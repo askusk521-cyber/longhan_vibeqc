@@ -5636,6 +5636,11 @@ __device__ __constant__ unsigned char generated_dppp_f_axes[10][3] = {{
     component_gradient_setup = _generic_component_gradient_setup(spec)
     task_component_setup = _generic_task_component_setup(spec)
     component_names = _emitted_component_names(spec)
+    # The dense state-index table belongs to the requested mathematical IR.
+    # Value-only manifests prune the derivative layer even though the common
+    # helper declarations retain force-sized scratch storage. Indexing that
+    # smaller table with the force stride silently reads unrelated states.
+    index_side = plan.kernel.integral.maximum_coulomb_order + 1
     side = maximum_order + 1
     minimum_blocks_per_sm = plan.schedule.minimum_blocks_per_sm or (
         2
@@ -6000,7 +6005,7 @@ __device__ __constant__ unsigned short generated_dppp_coulomb_states[
 {_format_cuda_array(packed_states)}
 }};
 
-__device__ __constant__ {coulomb_index_type} generated_dppp_coulomb_indices[{side**3}] = {{
+__device__ __constant__ {coulomb_index_type} generated_dppp_coulomb_indices[{index_side**3}] = {{
 {_format_cuda_array(plan.coulomb_indices)}
 }};
 
@@ -6027,7 +6032,7 @@ __device__ __forceinline__ unsigned generated_dppp_state_index(unsigned state) {
   const unsigned z_order =
       (state >> {2 * state_axis_bits}U) & {state_mask}U;
   return static_cast<unsigned>(generated_dppp_coulomb_indices[
-      (x_order * {side}U + y_order) * {side}U + z_order]);
+      (x_order * {index_side}U + y_order) * {index_side}U + z_order]);
 }}
 
 __device__ __forceinline__ unsigned generated_dppp_wick_multiplicity(
