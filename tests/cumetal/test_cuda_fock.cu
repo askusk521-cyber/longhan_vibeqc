@@ -10,9 +10,9 @@
 // production kernel. The arithmetic below mirrors rhf_fock_bucket_kernel so the
 // macOS job can still exercise the same FP64 CUDA semantics without changing
 // production linkage solely for a compatibility test.
-extern "C" __global__ void vibeqc_cumetal_rhf_fock_kernel(
-    std::size_t batch_size, std::size_t n, const double* hcore, const double* eri,
-    const double* density, double* fock) {
+extern "C" __global__ void vibeqc_cumetal_rhf_fock_kernel(std::size_t batch_size, std::size_t n,
+                                                          const double* hcore, const double* eri,
+                                                          const double* density, double* fock) {
   const std::size_t matrix_size = n * n;
   const std::size_t eri_size = matrix_size * matrix_size;
   const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -92,20 +92,19 @@ int main() {
   double* device_eri = nullptr;
   double* device_density = nullptr;
   double* device_fock = nullptr;
-  bool ok = check_cuda(cudaSetDevice(0), "cudaSetDevice(0)") &&
-            check_cuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
-                       "cudaStreamCreateWithFlags") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_hcore),
-                                  matrix_size * sizeof(double)),
-                       "cudaMalloc(hcore)") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_eri), eri_size * sizeof(double)),
-                       "cudaMalloc(eri)") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_density),
-                                  matrix_size * sizeof(double)),
-                       "cudaMalloc(density)") &&
-            check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_fock),
-                                  matrix_size * sizeof(double)),
-                       "cudaMalloc(fock)");
+  bool ok =
+      check_cuda(cudaSetDevice(0), "cudaSetDevice(0)") &&
+      check_cuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+                 "cudaStreamCreateWithFlags") &&
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_hcore), matrix_size * sizeof(double)),
+                 "cudaMalloc(hcore)") &&
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_eri), eri_size * sizeof(double)),
+                 "cudaMalloc(eri)") &&
+      check_cuda(
+          cudaMalloc(reinterpret_cast<void**>(&device_density), matrix_size * sizeof(double)),
+          "cudaMalloc(density)") &&
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&device_fock), matrix_size * sizeof(double)),
+                 "cudaMalloc(fock)");
   if (!ok) return 1;
 
   ok = check_cuda(cudaMemcpyAsync(device_hcore, hcore.data(), matrix_size * sizeof(double),
@@ -119,8 +118,7 @@ int main() {
                   "cudaMemcpyAsync(density)");
   if (!ok) return 2;
 
-  const unsigned blocks =
-      static_cast<unsigned>((batch_size * matrix_size + threads - 1) / threads);
+  const unsigned blocks = static_cast<unsigned>((batch_size * matrix_size + threads - 1) / threads);
   vibeqc_cumetal_rhf_fock_kernel<<<blocks, threads, 0, stream>>>(
       batch_size, n, device_hcore, device_eri, device_density, device_fock);
   ok = check_cuda(cudaGetLastError(), "vibeqc_cumetal_rhf_fock_kernel launch") &&
