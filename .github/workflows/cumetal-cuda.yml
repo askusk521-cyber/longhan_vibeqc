@@ -51,6 +51,8 @@ jobs:
           git -C "$CUMETAL_SOURCE" submodule update --init --recursive
           CUMETAL_SOURCE="$CUMETAL_SOURCE" \
             .venv/bin/python .github/scripts/patch_cumetal_for_vibeqc.py
+          CUMETAL_SOURCE="$CUMETAL_SOURCE" \
+            .venv/bin/python .github/scripts/patch_cumetal_graph_for_vibeqc.py
           cmake -S "$CUMETAL_SOURCE" -B "$CUMETAL_SOURCE/build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$CUMETAL_PREFIX" \
