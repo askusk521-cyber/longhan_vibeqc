@@ -38,6 +38,11 @@ jobs:
           python-version: "3.11"
           enable-cache: true
 
+      - name: Prepare Python codegen environment
+        run: |
+          uv venv --python 3.11
+          uv pip install --python .venv/bin/python numpy
+
       - name: Build pinned CuMetal
         run: |
           brew install llvm z3 ninja
@@ -95,6 +100,7 @@ jobs:
             -DCMAKE_CUDA_COMPILER_LIBRARY_ROOT="$FAKE_CUDA" \
             -DCUDAToolkit_ROOT="$FAKE_CUDA" \
             -DCMAKE_CUDA_ARCHITECTURES=80 \
+            -DPython3_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python" \
             -DVIBEQC_CUDA_ARCHITECTURES=80 \
             -DVIBEQC_CUDA_COMPILE_ARCHITECTURES=80 \
             -DVIBEQC_BUILD_TESTS=ON \
@@ -110,9 +116,7 @@ jobs:
         run: ctest --test-dir "$VIBEQC_BUILD" --output-on-failure
 
       - name: Install Python test dependencies
-        run: |
-          uv venv --python 3.11
-          uv pip install --python .venv/bin/python --editable '.[test]'
+        run: uv pip install --python .venv/bin/python --editable '.[test]'
 
       - name: Run existing CUDA Python tests on the Apple GPU
         env:
