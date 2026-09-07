@@ -150,12 +150,14 @@ jobs:
           cumetal version
           cumetal doctor
       - name: Compile the production CUDA Fock kernel through CuMetal
-        run: >-
-          cumetalc tests/cumetal/test_cuda_fock.cu
-          -I"${GITHUB_WORKSPACE}"
-          -I"${GITHUB_WORKSPACE}/include"
-          -I"${GITHUB_WORKSPACE}/src"
-          -o /tmp/vibeqc-cumetal-fock
+        run: |
+          CUMETAL_ROOT="$(brew --prefix cumetal)" \
+            cumetalc tests/cumetal/test_cuda_fock.cu \
+            -I"$(brew --prefix cumetal)/include" \
+            -I"${GITHUB_WORKSPACE}" \
+            -I"${GITHUB_WORKSPACE}/include" \
+            -I"${GITHUB_WORKSPACE}/src" \
+            -o /tmp/vibeqc-cumetal-fock
       - name: Run the CUDA Fock smoke test on the Apple GPU
         run: |
           set -o pipefail
