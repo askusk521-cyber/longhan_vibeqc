@@ -15,6 +15,7 @@ jobs:
   cuda-tests:
     name: CUDA runtime tests (CuMetal / Apple GPU)
     runs-on: macos-15
+    timeout-minutes: 60
     env:
       CUMETAL_COMMIT: 041890f6f6f6e70b2f2ac1330987dd56a4f94b3c
       CUMETAL_SOURCE: /tmp/cuda-metal
@@ -126,26 +127,5 @@ jobs:
           DYLD_LIBRARY_PATH: /tmp/cuda-metal/build
           VIBEQC_LIBRARY: ${{ github.workspace }}/build-cumetal/libvibeqc.dylib
           CUMETAL_TRACE_GPU: "1"
-        run: |
-          set -o pipefail
-          .venv/bin/python -m pytest \
-            tests/python/test_batch.py \
-            tests/python/test_calculator.py \
-            -q -k cuda \
-            --junitxml=/tmp/vibeqc-cuda-tests.xml \
-            2>&1 | tee /tmp/vibeqc-cuda-tests.log
-          .venv/bin/python - <<'PY'
-          import xml.etree.ElementTree as ET
-
-          root = ET.parse('/tmp/vibeqc-cuda-tests.xml').getroot()
-          cases = root.findall('.//testcase')
-          skipped = [case for case in cases if case.find('skipped') is not None]
-          if not cases:
-              raise SystemExit('no CUDA tests were collected')
-          if skipped:
-              names = ', '.join(case.attrib.get('name', '<unknown>') for case in skipped)
-              raise SystemExit(f'CUDA tests skipped instead of executing: {names}')
-          print(f'Executed {len(cases)} existing CUDA tests with zero skips')
-          PY
-          grep -q 'device=apple_gpu' /tmp/vibeqc-cuda-tests.log
-          grep -q 'launch_success=true' /tmp/vibeqc-cuda-tests.log
+          CUMETAL_CUDA_TEST_TIMEOUT_SECONDS: "300"
+        run: .venv/bin/python .github/scripts/run_cumetal_cuda_pytests.py
