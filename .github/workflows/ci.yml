@@ -146,7 +146,7 @@ jobs:
           xcrun --find metal
       - name: Install CuMetal
         run: |
-          brew install lulzx/tap/cumetal
+          brew install --HEAD lulzx/tap/cumetal
           cumetal version
           cumetal doctor
       - name: Compile the production CUDA Fock kernel through CuMetal
