@@ -100,7 +100,9 @@ def main() -> None:
     combined_output: list[str] = []
 
     for index, nodeid in enumerate(nodeids):
-        print(f"\n::group::CUDA pytest {index + 1}/{len(nodeids)}: {nodeid}", flush=True)
+        print(
+            f"\n::group::CUDA pytest {index + 1}/{len(nodeids)}: {nodeid}", flush=True
+        )
         junit = Path(f"/tmp/vibeqc-cuda-test-{index}.xml")
         command = [
             sys.executable,
