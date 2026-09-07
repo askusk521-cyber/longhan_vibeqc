@@ -1,9 +1,9 @@
-"""Run existing CUDA pytest cases one-by-one with hard timeouts.
+"""Run CuMetal-backed CUDA pytest cases with bounded CI latency.
 
-CuMetal can expose provider/runtime deadlocks that leave one pytest process
-alive indefinitely.  Keep every existing CUDA test visible in CI, kill only
-the hung subprocess, continue collecting the remaining results, and fail the
-lane with a complete summary.
+Pull-request mode executes a representative set of existing CUDA integration
+tests and fails fast on the first error or timeout. Full mode (nightly/manual)
+runs every existing CUDA test from the selected files and keeps collecting
+results after failures so provider gaps remain diagnosable.
 """
 
 from __future__ import annotations
@@ -17,10 +17,17 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 TEST_FILES = ("tests/python/test_batch.py", "tests/python/test_calculator.py")
-TIMEOUT_SECONDS = int(os.environ.get("CUMETAL_CUDA_TEST_TIMEOUT_SECONDS", "300"))
+GATE_NODEIDS = (
+    "tests/python/test_batch.py::test_device_resident_cuda_rhf_matches_reference_when_device_is_available",
+    "tests/python/test_batch.py::test_cuda_direct_jk_batch_reuses_stable_pair_tasks",
+    "tests/python/test_batch.py::test_cuda_uhf_ragged_batch_warm_start_and_failure_isolation",
+    "tests/python/test_batch.py::test_cuda_real_spherical_batch_reuses_fixed_topology_plan",
+)
+MODE = os.environ.get("CUMETAL_CUDA_TEST_MODE", "gate").strip().lower()
+TIMEOUT_SECONDS = int(os.environ.get("CUMETAL_CUDA_TEST_TIMEOUT_SECONDS", "90"))
 
 
-def collect_nodeids() -> list[str]:
+def collect_full_nodeids() -> list[str]:
     command = [
         sys.executable,
         "-m",
@@ -44,6 +51,14 @@ def collect_nodeids() -> list[str]:
     if not nodeids:
         raise SystemExit("no CUDA tests were collected")
     return nodeids
+
+
+def selected_nodeids() -> list[str]:
+    if MODE == "gate":
+        return list(GATE_NODEIDS)
+    if MODE == "full":
+        return collect_full_nodeids()
+    raise SystemExit(f"unsupported CUMETAL_CUDA_TEST_MODE={MODE!r}")
 
 
 def stream_process(command: list[str]) -> tuple[int | None, str, bool]:
@@ -94,8 +109,12 @@ def junit_status(path: Path) -> tuple[int, int]:
 
 
 def main() -> None:
-    nodeids = collect_nodeids()
-    print(f"Collected {len(nodeids)} existing CUDA tests", flush=True)
+    nodeids = selected_nodeids()
+    print(
+        f"Running CuMetal CUDA mode={MODE}: {len(nodeids)} existing CUDA tests "
+        f"with {TIMEOUT_SECONDS}s/test timeout",
+        flush=True,
+    )
     failures: list[str] = []
     combined_output: list[str] = []
 
@@ -116,15 +135,20 @@ def main() -> None:
         return_code, output, timed_out = stream_process(command)
         combined_output.append(output)
         cases, skipped = junit_status(junit)
+        failure: str | None = None
         if timed_out:
-            failures.append(f"TIMEOUT: {nodeid}")
+            failure = f"TIMEOUT: {nodeid}"
         elif return_code != 0:
-            failures.append(f"FAILED: {nodeid} (exit {return_code})")
+            failure = f"FAILED: {nodeid} (exit {return_code})"
         elif cases != 1:
-            failures.append(f"INVALID RESULT: {nodeid} produced {cases} testcase(s)")
+            failure = f"INVALID RESULT: {nodeid} produced {cases} testcase(s)"
         elif skipped:
-            failures.append(f"SKIPPED: {nodeid}")
+            failure = f"SKIPPED: {nodeid}"
+        if failure is not None:
+            failures.append(failure)
         print("::endgroup::", flush=True)
+        if failure is not None and MODE == "gate":
+            break
 
     provenance = "".join(combined_output)
     if "device=apple_gpu" not in provenance:
