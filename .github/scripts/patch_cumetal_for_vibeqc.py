@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 SOURCE = Path(os.environ["CUMETAL_SOURCE"])
 
 
@@ -18,7 +17,9 @@ def replace_once(path: Path, old: str, new: str, description: str) -> None:
     text = path.read_text(encoding="utf-8")
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"{description}: expected one patch anchor, found {count} in {path}")
+        raise SystemExit(
+            f"{description}: expected one patch anchor, found {count} in {path}"
+        )
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
@@ -112,7 +113,7 @@ replace_once(
 # CuMetal already implements double-precision symmetric eigensolve through
 # Apple Accelerate.  Add the newer generic/batched cuSOLVER entry points VibeQC
 # uses and implement them below as compatibility wrappers around that solver.
-solver_types_and_api = r'''
+solver_types_and_api = r"""
 typedef struct cusolverDnParams* cusolverDnParams_t;
 typedef struct syevjInfo* syevjInfo_t;
 
@@ -159,7 +160,7 @@ cusolverStatus_t cusolverDnXsyevBatched(
     void* workspace_device, size_t workspace_device_bytes, void* workspace_host,
     size_t workspace_host_bytes, int* dev_info, int batch_size);
 
-'''
+"""
 replace_once(
     cusolver_header,
     "typedef struct cusolverDnContext* cusolverDnHandle_t;\n\n",
@@ -168,7 +169,7 @@ replace_once(
 )
 
 cusolver_source = SOURCE / "runtime/rt/cusolver.cpp"
-compat_impl = r'''
+compat_impl = r"""
 
 // VibeQC compatibility surface: newer cuSOLVER APIs mapped to CuMetal's
 // existing Accelerate-backed double-precision symmetric eigensolver.
@@ -351,7 +352,7 @@ cusolverStatus_t cusolverDnDsyevjBatched(
 }
 
 }  // extern "C"
-'''
+"""
 # INT_MAX is used by the generic wrappers.
 replace_once(
     cusolver_source,
