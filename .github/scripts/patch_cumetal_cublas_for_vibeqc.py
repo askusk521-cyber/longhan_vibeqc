@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 source = Path(os.environ["CUMETAL_SOURCE"])
 header = source / "runtime/api/cublas_v2.h"
 implementation = source / "runtime/rt/cublas.cpp"
@@ -40,7 +39,7 @@ replace_once(
     "cublasContext workspace state",
 )
 
-workspace_impl = r'''
+workspace_impl = r"""
 
 cublasStatus_t cublasSetWorkspace(cublasHandle_t handle, void* workspace,
                                   size_t workspace_size) {
@@ -57,7 +56,7 @@ cublasStatus_t cublasSetWorkspace(cublasHandle_t handle, void* workspace,
     handle->workspace_size = workspace_size;
     return CUBLAS_STATUS_SUCCESS;
 }
-'''
+"""
 replace_once(
     implementation,
     "cublasStatus_t cublasGetStream(cublasHandle_t handle, cudaStream_t* stream_id) {\n"
@@ -75,7 +74,6 @@ replace_once(
     "    std::lock_guard<std::mutex> lock(handle->mutex);\n"
     "    *stream_id = handle->stream;\n"
     "    return CUBLAS_STATUS_SUCCESS;\n"
-    "}\n"
-    + workspace_impl,
+    "}\n" + workspace_impl,
     "cublasSetWorkspace implementation",
 )
