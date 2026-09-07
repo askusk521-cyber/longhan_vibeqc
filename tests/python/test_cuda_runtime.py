@@ -50,13 +50,9 @@ def test_cuda_minimal_uhf_matches_cpu_reference():
         energy_tolerance=1.0e-10,
         density_tolerance=1.0e-8,
     )
-    reference = Calculator(device="cpu", **options).singlepoint(
-        atoms, multiplicity=2
-    )
+    reference = Calculator(device="cpu", **options).singlepoint(atoms, multiplicity=2)
     try:
-        result = Calculator(device="cuda", **options).singlepoint(
-            atoms, multiplicity=2
-        )
+        result = Calculator(device="cuda", **options).singlepoint(atoms, multiplicity=2)
     except RuntimeError as error:
         pytest.skip(f"CUDA device unavailable: {error}")
 
