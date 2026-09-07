@@ -48,8 +48,8 @@ int main() {
 
   vibeqc::scf::CudaFockBucketHandle* handle = nullptr;
   std::string detail;
-  vibeqc_status status = vibeqc::scf::create_cuda_fock_bucket(
-      0, batch_size, n, hcore, eri, &handle, detail);
+  vibeqc_status status =
+      vibeqc::scf::create_cuda_fock_bucket(0, batch_size, n, hcore, eri, &handle, detail);
   if (status != VIBEQC_STATUS_SUCCESS) {
     std::fprintf(stderr, "FAIL: create_cuda_fock_bucket: status=%d detail=%s\n",
                  static_cast<int>(status), detail.c_str());
