@@ -49,6 +49,43 @@ jobs:
           git clone --recurse-submodules https://github.com/Lulzx/cuda-metal.git "$CUMETAL_SOURCE"
           git -C "$CUMETAL_SOURCE" checkout "$CUMETAL_COMMIT"
           git -C "$CUMETAL_SOURCE" submodule update --init --recursive
+          # CuMetal 0.5.0 is missing two standard cudaDeviceProp fields used by
+          # VibeQC's launch-policy initialization. Consume two reserved ABI
+          # slots so the struct size stays fixed, and populate conservative
+          # Ampere-compatible values in the compatibility runtime.
+          CUMETAL_SOURCE="$CUMETAL_SOURCE" .venv/bin/python - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["CUMETAL_SOURCE"])
+          header = source / "runtime/api/cuda_runtime.h"
+          text = header.read_text()
+          field_anchor = "    int maxThreadsPerMultiProcessor; // Max threads per SM\n"
+          fields = (
+              field_anchor
+              + "    int maxBlocksPerMultiProcessor;  // Max resident blocks per SM\n"
+              + "    int regsPerMultiprocessor;       // Register file size per SM\n"
+          )
+          if field_anchor not in text:
+              raise SystemExit("CuMetal cudaDeviceProp patch anchor not found")
+          text = text.replace(field_anchor, fields, 1)
+          if "    int cumetalReserved[55];" not in text:
+              raise SystemExit("CuMetal cudaDeviceProp reserved-space anchor not found")
+          text = text.replace("    int cumetalReserved[55];", "    int cumetalReserved[53];", 1)
+          header.write_text(text)
+
+          runtime = source / "runtime/rt/cuda_runtime.cpp"
+          text = runtime.read_text()
+          value_anchor = "    prop->maxThreadsPerMultiProcessor = 2048; // Conservative estimate for M-series\n"
+          values = (
+              value_anchor
+              + "    prop->maxBlocksPerMultiProcessor = 32; // CUDA architectural resident-block ceiling\n"
+              + "    prop->regsPerMultiprocessor = 65536; // Match the synthetic sm_80 register budget\n"
+          )
+          if value_anchor not in text:
+              raise SystemExit("CuMetal cudaGetDeviceProperties patch anchor not found")
+          runtime.write_text(text.replace(value_anchor, values, 1))
+          PY
           cmake -S "$CUMETAL_SOURCE" -B "$CUMETAL_SOURCE/build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$CUMETAL_PREFIX" \
