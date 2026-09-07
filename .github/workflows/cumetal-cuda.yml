@@ -152,20 +152,48 @@ jobs:
       - name: Show ccache statistics
         run: ccache --show-stats
 
+      # CuMetal's fake-nvcc CMake path currently links a normal CUDA executable
+      # but does not embed the metallib needed by its runtime registration. Use
+      # CuMetal's source-first compiler for the execution image while retaining
+      # the same source file, CMake target and CTest registration used by nvcc.
+      - name: Prepare CuMetal execution image for the normal CTest
+        run: |
+          CUMETAL_ROOT="$CUMETAL_PREFIX" \
+            "$CUMETAL_PREFIX/bin/cumetalc" tests/native/test_cuda_runtime.cu \
+            -I"$CUMETAL_PREFIX/include" \
+            -I"${GITHUB_WORKSPACE}" \
+            -I"${GITHUB_WORKSPACE}/include" \
+            -I"${GITHUB_WORKSPACE}/src" \
+            -o "$VIBEQC_BUILD/vibeqc_cuda_runtime_tests.cumetal"
+          mv "$VIBEQC_BUILD/vibeqc_cuda_runtime_tests" \
+             "$VIBEQC_BUILD/vibeqc_cuda_runtime_tests.cmake"
+          mv "$VIBEQC_BUILD/vibeqc_cuda_runtime_tests.cumetal" \
+             "$VIBEQC_BUILD/vibeqc_cuda_runtime_tests"
+
       - name: Run CUDA runtime CTest on the Apple GPU
         timeout-minutes: 2
         run: |
           set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
           CUMETAL_ROOT="$CUMETAL_PREFIX" \
           DYLD_LIBRARY_PATH="$CUMETAL_SOURCE/build${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
           CUMETAL_TRACE_GPU=1 \
             ctest --test-dir "$VIBEQC_BUILD" -V \
               -R '^vibeqc_cuda_runtime_tests$' \
-              --output-junit /tmp/vibeqc-cuda-runtime-junit.xml \
+              --output-junit "$GITHUB_WORKSPACE/test-results/vibeqc-cuda-runtime-junit.xml" \
               2>&1 | tee /tmp/vibeqc-cuda-runtime.log
           grep -q 'device=apple_gpu' /tmp/vibeqc-cuda-runtime.log
           grep -q 'launch_success=true' /tmp/vibeqc-cuda-runtime.log
           grep -q 'PASS: CUDA runtime contracts' /tmp/vibeqc-cuda-runtime.log
+
+      - name: Preserve CUDA test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-results-cuda-runtime
+          path: test-results/vibeqc-cuda-runtime-junit.xml
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Install Python test dependencies
         if: github.event_name != 'pull_request'
@@ -182,3 +210,37 @@ jobs:
           CUMETAL_CUDA_TEST_MODE: full
           CUMETAL_CUDA_TEST_TIMEOUT_SECONDS: "300"
         run: .venv/bin/python .github/scripts/run_cumetal_cuda_pytests.py
+
+  upload-test-results:
+    name: Upload CUDA test results
+    needs: cuda-tests
+    if: ${{ !cancelled() && (needs.cuda-tests.result == 'success' || needs.cuda-tests.result == 'failure') }}
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download CUDA test results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: test-results-cuda-runtime
+          path: test-results
+
+      - name: Upload CUDA test results to Codecov
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: test-results/vibeqc-cuda-runtime-junit.xml
+          flags: cuda-runtime
+          name: test-results/cuda-runtime
+          report_type: test_results
+          disable_search: true
+          fail_ci_if_error: false
+          use_oidc: true
+          version: v11.3.1
