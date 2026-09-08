@@ -11,7 +11,8 @@ expanded/shared/optimized equivalence are implemented. C remains separate.
   tests/python/test_cc_doubles.py tests/python/test_cc_doubles_references.py -q`:
   **41 passed in 21.19 s** before the additional provenance regression.
 - Final `python -m pytest tests/python/test_cc_doubles_references.py -q`:
-  **5 passed in 2.95 s** after the provenance repair (see b-final-test.log).
+  **5 passed in 2.95 s** after the provenance repair. The routine log has been
+  consolidated into this result; numerical records and provenance are retained.
 - `python -m tools.validate_ccsd --output build/cc-b-final`: all five independent
   records passed. The adjacent JSON files contain per-form/per-intermediate
   errors, actual source/fixture/upstream hashes and dirty status.
@@ -44,3 +45,7 @@ No T2 acceptance relies solely on two versions of the same inventory: tiny
 fermionic determinant projections and pinned external full-update residuals
 also pass. PySCF update denominators have both virtual level shifts and are
 reconstructed as D2*(update-t2). GPU/(T)/Lambda/gradients are outside #148.
+
+Portable final A/B/C reproduction commands, including reference regeneration,
+are in [the C archive](../rccsd-148-c/README.md#reproduction). Historical machine
+paths above identify the original experiment, not prerequisites for replay.
