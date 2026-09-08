@@ -1,5 +1,7 @@
 """Primitive JVP/VJP rules and adjoint dot-product checks for #151 slice A."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -10,6 +12,7 @@ from tools.vibeqc_tensor import (
     DotTestResult,
     Index,
     IndexSpace,
+    PackedLayout,
     Program,
     Symmetry,
     TensorSpec,
@@ -377,6 +380,55 @@ def test_packed_symmetric_tangent_spaces_fail_closed():
         jvp(program, {"x": value}, {"x": np.ones((2, 2))})
     with pytest.raises(ValueError, match="packed/symmetric cotangent"):
         vjp(program, {"x": value}, {"out": np.ones((2, 2))})
+
+
+def test_packed_layout_transposes_follow_the_weighted_metric():
+    occupied = IndexSpace("o", "occupied", 2)
+    virtual = IndexSpace("v", "virtual", 3)
+    indices = (
+        Index("i", occupied),
+        Index("j", occupied),
+        Index("a", virtual),
+        Index("b", virtual),
+    )
+    spatial = TensorSpec(
+        indices,
+        representation="restricted_spatial",
+        role="input",
+        symmetries=(Symmetry((1, 0, 3, 2)),),
+    )
+    spin = replace(
+        spatial,
+        representation="spin_orbital",
+        symmetries=(
+            Symmetry((1, 0, 2, 3), -1),
+            Symmetry((0, 1, 3, 2), -1),
+        ),
+    )
+    for layout in (PackedLayout(spatial), PackedLayout(spin)):
+        packed_x = RNG.normal(size=layout.size)
+        dense_w = RNG.normal(size=layout.spec.shape)
+        lhs = float(np.sum(dense_w * layout.unpack(packed_x)))
+        rhs = layout.inner_product(layout.unpack_transpose(dense_w), packed_x)
+        np.testing.assert_allclose(lhs, rhs, rtol=1e-11, atol=1e-11)
+
+        dense_y = layout.unpack(RNG.normal(size=layout.size))
+        packed_x2 = RNG.normal(size=layout.size)
+        lhs = layout.inner_product(layout.pack(dense_y), packed_x2)
+        rhs = float(np.sum(dense_y * layout.pack_transpose(packed_x2)))
+        np.testing.assert_allclose(lhs, rhs, rtol=1e-11, atol=1e-11)
+
+        # On the symmetric subspace unpack^T coincides with pack, but a general
+        # dense cotangent is not projected by ordinary representative selection.
+        raw_pack = dense_w.reshape(-1)[list(layout.representatives)]
+        assert not np.allclose(layout.unpack_transpose(dense_w), raw_pack)
+        replay = PackedLayout.from_payload(layout.to_payload())
+        np.testing.assert_allclose(
+            replay.unpack_transpose(dense_w), layout.unpack_transpose(dense_w)
+        )
+        np.testing.assert_allclose(
+            replay.pack_transpose(packed_x2), layout.pack_transpose(packed_x2)
+        )
 
 
 def test_nondifferentiable_inputs_and_outputs_are_rejected():

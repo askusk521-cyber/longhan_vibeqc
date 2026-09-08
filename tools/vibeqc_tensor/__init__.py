@@ -1,10 +1,18 @@
-"""Development TensorIR: typed equations, CPU execution, replay, and AD rules.
+"""Development TensorIR: typed equations, CPU execution, replay, and AD.
 
 Integral operators remain in vibeqc_codegen.  This package supplies primitive
-JVP/VJP rules for every TensorIR operation; it supplies no CCSD method, CUDA
-lowering, symmetry-aware packing adjoints, or bounded-recomputation planner.
+JVP/VJP rules, demand-driven derivative programs, packed-layout adjoints, and
+plans for the existing CUDA lowering path; it supplies no CCSD method or
+complete solver.
 """
 
+from .ad_program import (
+    GENERATION_VERSION,
+    JVPProgram,
+    VJPProgram,
+    linearize,
+    transpose_program,
+)
 from .autodiff import (
     AD_PRIMITIVES,
     AD_RULE_VERSION,
@@ -43,18 +51,21 @@ __all__ = [
     "AD_PRIMITIVES",
     "AD_RULES",
     "AD_RULE_VERSION",
+    "GENERATION_VERSION",
     "PASSES",
     "PRIMITIVES",
     "DotTestResult",
     "Execution",
     "Index",
     "IndexSpace",
+    "JVPProgram",
     "JVPResult",
     "Node",
     "PackedLayout",
     "Program",
     "Symmetry",
     "TensorSpec",
+    "VJPProgram",
     "VJPResult",
     "add",
     "broadcast",
@@ -67,6 +78,7 @@ __all__ = [
     "gather",
     "input_tensor",
     "jvp",
+    "linearize",
     "multiply",
     "optimize",
     "reduce_sum",
@@ -74,5 +86,6 @@ __all__ = [
     "rewrite",
     "slice_tensor",
     "transpose",
+    "transpose_program",
     "vjp",
 ]
