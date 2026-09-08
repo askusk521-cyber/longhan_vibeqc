@@ -171,7 +171,7 @@
     "status": "not-run"
   },
   "residuals": {},
-  "revision": "87cb296d817a7d992b0dd3a8c7e5ad68123110f4",
+  "revision": "4707632ca91c0faebca1ccef1aa068adf05fff3f",
   "schema": "vibeqc.validation",
   "schema_version": 1,
   "settings": {
@@ -218,8 +218,8 @@
     ],
     "graph_status": "ordinary-stream: graph capture is not enabled for TensorIR",
     "metrics": {
-      "device_ms": 54.41062545776367,
-      "endpoint_ms": 54.74239960312843,
+      "device_ms": 56.03798294067383,
+      "endpoint_ms": 56.39582499861717,
       "host_buffer_bytes": 140040,
       "input_ms": 0.0,
       "kernel_ms": 0.0,
@@ -725,16 +725,16 @@
       }
     },
     "profile_metrics": {
-      "device_ms": 0.5696640014648438,
-      "endpoint_ms": 0.7729232311248779,
+      "device_ms": 0.5615360140800476,
+      "endpoint_ms": 0.7703881710767746,
       "host_buffer_bytes": 140040,
-      "input_ms": 0.019007999449968338,
-      "kernel_ms": 0.01568000018596649,
-      "library_ms": 0.1540480013936758,
+      "input_ms": 0.018848000094294548,
+      "kernel_ms": 0.018112000077962875,
+      "library_ms": 0.14307199977338314,
       "observed_device_delta": 18874368,
-      "output_ms": 0.016863999888300896,
+      "output_ms": 0.016736000776290894,
       "owned_device_bytes": 4207616,
-      "packing_ms": 0.10393600119277835,
+      "packing_ms": 0.10374400019645691,
       "predicted_peak_bytes": 105010952,
       "prepare_device_delta": 18874368,
       "profiled": true,
@@ -744,7 +744,7 @@
     "reference": "CPU TensorIR interpreter plus directional finite differences",
     "scope": "generated JVP/VJP for a fixed scalar CC-like fragment",
     "seed": 151,
-    "slurm_job_id": "1043"
+    "slurm_job_id": "1044"
   },
   "solver_iterations": [],
   "solver_trace_reason": "not exposed by executor",

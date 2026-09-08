@@ -12,7 +12,7 @@ not a complete CCSD/MP2 method or solver.
   (`--partition=main --gres=gpu:5090:1`)
 - CUDA compiler: CUDA 12.9.1, target `sm_120`
 - Python 3.12.12, NumPy 2.3.4
-- Source revision: `87cb296d817a` (`dirty=False`)
+- Source revision: `4707632ca91c` (`dirty=False`)
 
 ## Reproduction
 
