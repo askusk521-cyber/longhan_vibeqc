@@ -188,11 +188,33 @@ def capabilities() -> dict:
     }
 
 
+def _input_groups(program: Program) -> dict[str, tuple[Node, ...]]:
+    """Group every live occurrence of a public feed, before optional CSE.
+
+    Program validates that same-name inputs have compatible logical types.
+    Distinct SSA nodes still read one parameter, so their reverse contributions
+    must be summed and all occurrences must seed derivative reachability.
+    """
+    groups: dict[str, list[Node]] = {}
+    for node in program.live_nodes:
+        if node.op == "input":
+            groups.setdefault(node.attrs["name"], []).append(node)
+    return {name: tuple(nodes) for name, nodes in groups.items()}
+
+
 def _input_nodes(program: Program) -> dict[str, Node]:
-    """Map public input/parameter names to their SSA definitions."""
-    return {
-        node.attrs["name"]: node for node in program.live_nodes if node.op == "input"
-    }
+    """Pick one representative for name/type validation, not accumulation."""
+    return {name: nodes[0] for name, nodes in _input_groups(program).items()}
+
+
+def _input_cotangent(nodes, bars) -> np.ndarray:
+    """Return an owned cotangent summed over all uses of one public feed."""
+    result = np.zeros(nodes[0].spec.shape, dtype=nodes[0].spec.dtype)
+    for node in nodes:
+        result += bars[node]
+    if not np.isfinite(result).all():
+        raise ValueError("non-finite VJP accumulation for a named input")
+    return result
 
 
 def _validate_vector(value, spec, label: str) -> np.ndarray:
@@ -671,9 +693,9 @@ def vjp(
     values = evaluate_nodes(program, feeds, max_bytes=max_bytes)
     bars = _vjp_arrays(program, values, cotangents)
     _check_budget(program, bars, max_bytes)
+    groups = _input_groups(program)
     input_cotangents = {
-        name: np.array(bars[node], dtype=node.spec.dtype, copy=True)
-        for name, node in sorted(selected.items())
+        name: _input_cotangent(groups[name], bars) for name in sorted(selected)
     }
     return VJPResult(
         input_cotangents,
@@ -731,9 +753,11 @@ def dot_test(
         _inner(cotangent, forward[program.outputs[name]])
         for name, cotangent in cotangents.items()
     )
-    inputs = _input_nodes(program)
+    inputs = _input_groups(program)
     rhs = sum(
-        _inner(reverse[inputs[name]], tangent) for name, tangent in tangents.items()
+        _inner(reverse[node], tangent)
+        for name, tangent in tangents.items()
+        for node in inputs[name]
     )
     absolute_error = abs(lhs - rhs)
     scale = max(abs(lhs), abs(rhs))

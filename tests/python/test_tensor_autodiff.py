@@ -27,6 +27,7 @@ from tools.vibeqc_tensor import (
     input_tensor,
     jvp,
     multiply,
+    optimize,
     reduce_sum,
     reshape,
     slice_tensor,
@@ -344,6 +345,27 @@ def test_vjp_accumulates_cotangents_from_the_same_output_node():
     cotangent = np.ones(5)
     result = vjp(program, {"x": value}, {"a": cotangent, "b": 2 * cotangent})
     np.testing.assert_allclose(result.input_cotangents["x"], 6 * value)
+
+
+@pytest.mark.parametrize("scalar", [False, True])
+def test_distinct_inputs_with_one_name_accumulate_before_and_after_cse(scalar):
+    indices = () if scalar else (_axis("i", 3),)
+    first = _parameter("x", indices)
+    second = _parameter("x", indices)
+    program = Program({"out": add(multiply(first, first), second)})
+    value = np.asarray(3.0) if scalar else np.array([1.0, 2.0, 3.0])
+    tangent = np.ones_like(value)
+    cotangent = np.full_like(value, 2.0)
+    # Both input nodes read x: d(x*x + x)/dx = 2*x + 1. CSE must not
+    # change this result, even though it can merge the input definitions.
+    for candidate in (program, Program.loads(program.dumps()), optimize(program)):
+        forward, reverse, _ = _check_case(
+            candidate, {"x": value}, {"x": tangent}, {"out": cotangent}
+        )
+        np.testing.assert_array_equal(forward.output_tangents["out"], 2 * value + 1)
+        np.testing.assert_array_equal(
+            reverse.input_cotangents["x"], (2 * value + 1) * cotangent
+        )
 
 
 def test_matrix_free_vjp_fits_a_budget_far_below_the_dense_jacobian():

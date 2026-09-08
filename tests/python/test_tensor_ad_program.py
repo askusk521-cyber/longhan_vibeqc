@@ -270,6 +270,96 @@ def test_generated_reverse_slice_gather_and_repeated_einsum_match_reference():
     )
 
 
+@pytest.mark.parametrize(
+    "equation,ranks",
+    [
+        ("ii->i", (2,)),
+        ("iii->i", (3,)),
+        ("ii,i->i", (2, 1)),
+        ("ijj->i", (3,)),
+        ("iij,j->ij", (3, 1)),
+    ],
+)
+def test_diagonal_vjp_maps_labels_retained_in_the_output(equation, ranks):
+    space = IndexSpace("o", "occupied", 3)
+    operands = [
+        _parameter(f"x{k}", tuple(Index(f"i{axis}", space) for axis in range(rank)))
+        for k, rank in enumerate(ranks)
+    ]
+    program = Program({"out": einsum(equation, *operands, coefficient="3/2")})
+    rng = np.random.default_rng(216)
+    feeds = {
+        f"x{k}": rng.normal(size=node.spec.shape) for k, node in enumerate(operands)
+    }
+    cotangent = rng.normal(size=program.outputs["out"].spec.shape)
+    generated, actual = _run_generated_vjp(program, feeds, {"out": cotangent})
+    if equation == "ii->i":
+        np.testing.assert_array_equal(actual["bar_x0"], 1.5 * np.diag(cotangent))
+    replay = Program.loads(generated.program.dumps())
+    replayed = execute(replay, {**feeds, "bar_out": cotangent}).outputs
+    for name, value in actual.items():
+        np.testing.assert_array_equal(replayed[name], value)
+
+
+def test_named_input_occurrences_seed_all_requested_reverse_paths():
+    first, second = _parameter("x", ()), _parameter("x", ())
+    program = Program(
+        {"out": add(multiply(first, first), second), "unused": multiply(second, second)}
+    )
+    feeds = {"x": np.asarray(3.0)}
+    for primal in (program, Program.loads(program.dumps()), optimize(program)):
+        generated = transpose_program(primal, ["out"], inputs=["x"])
+        for candidate in (
+            generated.program,
+            Program.loads(generated.program.dumps()),
+            optimize(generated.program),
+        ):
+            actual = execute(candidate, {**feeds, "bar_out": np.asarray(2.0)}).outputs
+            # The unused output has zero cotangent; both uses in out contribute.
+            np.testing.assert_array_equal(actual["bar_x"], np.asarray(14.0))
+
+
+@pytest.mark.parametrize("differentiate_matrix", [False, True])
+def test_inactive_einsum_operand_does_not_consume_projection_budget(
+    differentiate_matrix,
+):
+    space = IndexSpace("o", "occupied", 1001)
+    matrix = input_tensor(
+        "A",
+        TensorSpec(
+            (Index("i", space), Index("j", space)),
+            role="parameter",
+            differentiable=differentiate_matrix,
+        ),
+    )
+    scalar = _parameter("x", ())
+    program = Program({"out": einsum("ii,->", matrix, scalar)})
+    # A diagonal projection would exceed the default budget. The selected
+    # scalar derivative is just trace(A), whether A is differentiable or fixed.
+    generated = transpose_program(program, ["out"], inputs=["x"])
+    assert all(node.op != "constant" for node in generated.program.nodes)
+    result = execute(
+        generated.program, {"A": np.eye(1001), "bar_out": np.asarray(2.0)}
+    ).outputs
+    np.testing.assert_array_equal(result["bar_x"], np.asarray(2002.0))
+    if differentiate_matrix:
+        with pytest.raises(ValueError, match="element budget"):
+            transpose_program(program, ["out"], inputs=["A"])
+
+
+def test_unrequested_division_adjoint_is_never_constructed():
+    numerator, denominator = _parameter("x", ()), _parameter("y", ())
+    program = Program({"out": divide(numerator, denominator)})
+    generated = transpose_program(program, ["out"], inputs=["x"])
+    # The denominator derivative would need a square and product; they must
+    # be absent even from retained definitions, not merely dead at execution.
+    assert all(node.op != "multiply" for node in generated.program.nodes)
+    actual = execute(
+        generated.program, {"y": np.asarray(4.0), "bar_out": np.asarray(2.0)}
+    )
+    np.testing.assert_array_equal(actual.outputs["bar_x"], np.asarray(0.5))
+
+
 def test_reverse_generation_fails_closed_for_symmetric_boundaries_and_budgets():
     i = _axis("i", 4)
     x = _parameter("x", (i,))
@@ -302,7 +392,8 @@ def test_reverse_generation_fails_closed_for_symmetric_boundaries_and_budgets():
         )
 
 
-def test_packed_inputs_use_the_weighted_unpack_adjoint():
+@pytest.mark.parametrize("duplicate_input", [False, True])
+def test_packed_inputs_use_the_weighted_unpack_adjoint(duplicate_input):
     space = IndexSpace("o", "occupied", 2)
     indices = (Index("i", space), Index("j", space))
     symmetric_spec = TensorSpec(
@@ -319,8 +410,11 @@ def test_packed_inputs_use_the_weighted_unpack_adjoint():
     cotangent = np.asarray(RNG.normal())
 
     symmetric_input = input_tensor("x", symmetric_spec)
+    second = input_tensor("x", symmetric_spec) if duplicate_input else symmetric_input
     program = Program(
-        {"energy": reduce_sum(multiply(symmetric_input, symmetric_input), (0, 1))}
+        {"energy": reduce_sum(multiply(symmetric_input, second), (0, 1))},
+        # Dead definitions also need consistent packed input semantics.
+        definitions=(input_tensor("x", symmetric_spec),),
     )
     forward = linearize(program, ["x"], packed={"x": layout})
     generated_forward = execute(

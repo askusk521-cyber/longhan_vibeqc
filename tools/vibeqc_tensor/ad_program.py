@@ -30,6 +30,7 @@ from types import MappingProxyType
 
 import numpy as np
 
+from .autodiff import _input_groups, _input_nodes
 from .ir import (
     Node,
     add,
@@ -55,12 +56,6 @@ TANGENT_PREFIX = "d_"
 COTANGENT_PREFIX = "bar_"
 DEFAULT_MAX_ELEMENTS = 1_000_000
 ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-
-def _input_nodes(program: Program) -> dict[str, Node]:
-    return {
-        node.attrs["name"]: node for node in program.live_nodes if node.op == "input"
-    }
 
 
 def _select_names(mapping: Mapping, names, label: str) -> dict:
@@ -282,7 +277,10 @@ def _jvp_graph(node: Node, operand_tangents) -> Node | None:
     raise ValueError(f"no demand-driven JVP rule for primitive: {node.op}")
 
 
-def _vjp_einsum(node: Node, bar: Node, *, max_elements: int) -> list[Node]:
+def _vjp_einsum(
+    node: Node, bar: Node, active: tuple[bool, ...], *, max_elements: int
+) -> list[Node | None]:
+    """Build only requested operand adjoints, including diagonal embeddings."""
     labels = node.attrs["labels"]
     output = node.attrs["output"]
     coefficient = _coefficient(node.attrs["coefficient"])
@@ -292,6 +290,9 @@ def _vjp_einsum(node: Node, bar: Node, *, max_elements: int) -> list[Node]:
     next_label = max(all_labels, default=-1) + 1
     contributions = []
     for differentiated, operand_labels in enumerate(labels):
+        if not active[differentiated]:
+            contributions.append(None)
+            continue
         operand = node.inputs[differentiated]
         occurrences = {}
         for axis, label in enumerate(operand_labels):
@@ -325,14 +326,17 @@ def _vjp_einsum(node: Node, bar: Node, *, max_elements: int) -> list[Node]:
                     )
                 )
                 identity_labels.append((fresh[left_axis], fresh[right_axis]))
-        present = set(output)
+        # A diagonal label can survive in the primal output. Its cotangent
+        # axis must follow the same renaming as the other operand axes.
+        bar_labels = tuple(first.get(label, label) for label in output)
+        present = set(bar_labels)
         for other_labels in adjusted.values():
             present.update(other_labels)
         for pair in identity_labels:
             present.update(pair)
         missing = [label for label in fresh if label not in present]
         missing_axes = [axis for axis, label in enumerate(fresh) if label in missing]
-        equation_labels = [output]
+        equation_labels = [bar_labels]
         operands = [bar]
         for index in range(len(labels)):
             if index != differentiated:
@@ -403,20 +407,36 @@ def _slice_vjp_node(node: Node, bar: Node, *, max_elements: int) -> Node:
     return result
 
 
-def _vjp_graph(node: Node, bar: Node, *, max_elements: int) -> list[Node | None]:
-    """Generate one VJP contribution per operand, or None for exact zero."""
+def _vjp_graph(
+    node: Node, bar: Node, active: tuple[bool, ...], *, max_elements: int
+) -> list[Node | None]:
+    """Build active operand adjoints; prune before allocating any constants.
+
+    Filtering afterward can exceed the element budget for an unrequested
+    diagonal/scatter adjoint even when the requested derivative is scalar.
+    """
+    if not any(active):
+        return [None] * len(node.inputs)
     if node.op == "add":
-        return [_scale(bar, coefficient) for coefficient in node.attrs["coefficients"]]
+        return [
+            _scale(bar, coefficient) if needed else None
+            for coefficient, needed in zip(node.attrs["coefficients"], active)
+        ]
     if node.op == "multiply":
-        return [multiply(bar, node.inputs[1]), multiply(bar, node.inputs[0])]
+        return [
+            multiply(bar, node.inputs[1]) if active[0] else None,
+            multiply(bar, node.inputs[0]) if active[1] else None,
+        ]
     if node.op == "divide":
         numerator, denominator = node.inputs
         return [
-            divide(bar, denominator),
-            _scale(divide(multiply(bar, numerator), _square(denominator)), (-1, 1)),
+            divide(bar, denominator) if active[0] else None,
+            _scale(divide(multiply(bar, numerator), _square(denominator)), (-1, 1))
+            if active[1]
+            else None,
         ]
     if node.op == "einsum":
-        return _vjp_einsum(node, bar, max_elements=max_elements)
+        return _vjp_einsum(node, bar, active, max_elements=max_elements)
     if node.op == "transpose":
         inverse = tuple(int(axis) for axis in np.argsort(node.attrs["axes"]))
         return [transpose(bar, inverse)]
@@ -672,7 +692,14 @@ def _expand_packed_inputs(program: Program, packed: Mapping) -> tuple[Program, d
                 f"packed layout for {name} does not match the primal input spec"
             )
         _packed_input, dense, nodes = _unpack_dag(original, layout)
-        replacements[original] = dense
+        # All SSA occurrences read the same packed feed. Replace retained
+        # dead definitions too, or Program would see dense and packed specs
+        # for the same public name after rebuilding.
+        replacements.update(
+            (node, dense)
+            for node in program.nodes
+            if node.op == "input" and node.attrs["name"] == name
+        )
         extra_definitions.extend(nodes)
         layouts[name] = layout
     provenance = {
@@ -838,9 +865,9 @@ def transpose_program(
                 "packed/symmetric cotangent inputs need a boundary transpose "
                 "map; slice B currently generates dense general cotangents only"
             )
-    relevant = _ancestors(selected_outputs.values()) & _descendants_of(
-        program, selected_inputs.values()
-    )
+    groups = _input_groups(program)
+    roots = (node for name in selected_inputs for node in groups[name])
+    relevant = _ancestors(selected_outputs.values()) & _descendants_of(program, roots)
     bars: dict[Node, Node | None] = {}
     for name, node in selected_outputs.items():
         generated = f"{COTANGENT_PREFIX}{name}"
@@ -859,7 +886,12 @@ def transpose_program(
         bar = bars.get(node)
         if bar is None:
             continue
-        contributions = _vjp_graph(node, bar, max_elements=max_elements)
+        contributions = _vjp_graph(
+            node,
+            bar,
+            tuple(operand in relevant for operand in node.inputs),
+            max_elements=max_elements,
+        )
         for operand, contribution in zip(node.inputs, contributions):
             if contribution is None:
                 continue
@@ -872,7 +904,7 @@ def transpose_program(
     derivative_outputs = {}
     output_map = {}
     for name, node in selected_inputs.items():
-        bar = bars.get(node)
+        bar = _combine(bars.get(operand) for operand in groups[name])
         if bar is None:
             bar = _zero_like(node)
             generated_nodes.append(bar)

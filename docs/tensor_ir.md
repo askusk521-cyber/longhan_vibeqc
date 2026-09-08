@@ -175,6 +175,13 @@ interpreter deliberately treats packed/symmetric parameters as dense general
 tensors only through an explicit packing boundary; callers must not replace
 the weighted adjoint with an unweighted Euclidean one.
 
+Distinct input nodes with the same public name read one feed: VJPs sum all
+their contributions, including before common-subexpression elimination. The
+generated reverse graph starts from every occurrence of each requested input
+and builds only active operand adjoints, so an unrequested diagonal projection
+cannot consume the generation element budget. Repeated einsum labels that
+survive in the output retain their cotangent axis in the diagonal embedding.
+
 `tools/vibeqc_tensor/ad_program.py` turns the same rules into demand-driven,
 backend-independent TensorIR `Program` DAGs:
 
