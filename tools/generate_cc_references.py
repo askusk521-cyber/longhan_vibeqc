@@ -20,7 +20,7 @@ from tools.vibeqc_validation.schema import canonical_hash, file_hash
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def generate():
+def generate(*, full=False):
     import pyscf
     import scipy
     from pyscf.cc import rccsd, rintermediates
@@ -66,7 +66,7 @@ def generate():
             shifts = []
             for shift in (0.0, 0.4):
                 cc = SimpleNamespace(level_shift=shift, cc2=False)
-                update, _ = rccsd.update_amps(cc, t1, t2, eris)
+                update, update2 = rccsd.update_amps(cc, t1, t2, eris)
                 denominator = (
                     eris.mo_energy[:o, None] - eris.mo_energy[None, o:] - shift
                 )
@@ -78,6 +78,13 @@ def generate():
                         "residual": (denominator * (update - t1)).tolist(),
                     }
                 )
+                if full:
+                    d2 = denominator[:, None, :, None] + denominator[None, :, None, :]
+                    shifts[-1].update(
+                        denominator2=d2.tolist(),
+                        updated_t2=update2.tolist(),
+                        residual2=(d2 * (update2 - t2)).tolist(),
+                    )
             inputs = {
                 "fock": f.tolist(),
                 "eri": g.tolist(),
@@ -94,6 +101,21 @@ def generate():
                     "updates": shifts,
                 }
             )
+            if full:
+                functions = {
+                    "Foo": "cc_Foo",
+                    "Fvv": "cc_Fvv",
+                    "Loo": "Loo",
+                    "Lvv": "Lvv",
+                    "Woooo": "cc_Woooo",
+                    "Wvvvv": "cc_Wvvvv",
+                    "Wvoov": "cc_Wvoov",
+                    "Wvovo": "cc_Wvovo",
+                }
+                cases[-1]["intermediates"] = {
+                    name: getattr(rintermediates, fn)(t1, t2, eris).tolist()
+                    for name, fn in functions.items()
+                }
         threads = threadpool_info()
     return {
         "schema": "vibeqc.rccsd.fixed-amplitude-reference",
@@ -114,8 +136,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compare", type=Path)
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="also record physical doubles and shared intermediates",
+    )
     args = parser.parse_args()
-    result = generate()
+    result = generate(full=args.full)
     if args.compare:
         previous = json.loads(args.compare.read_text())
         if result["cases_hash"] != previous["cases_hash"]:

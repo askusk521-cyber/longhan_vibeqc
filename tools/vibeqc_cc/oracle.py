@@ -51,6 +51,14 @@ class DeterminantOracle:
         self.bras = np.array(
             [[alpha[a, i] @ self.ket for a in range(nocc, n)] for i in range(nocc)]
         )
+        self.double_bras = np.array(
+            [
+                alpha[a, i] @ (operators[b, j] - alpha[b, j]) @ self.ket
+                for i, j, a, b in product(
+                    range(nocc), range(nocc), range(nocc, n), range(nocc, n)
+                )
+            ]
+        ).reshape(nocc, nocc, n - nocc, n - nocc, dim)
         # Recover h from the chosen full Fock and reference contraction. This
         # allows off-diagonal F and independent symmetric random ERIs.
         h = np.array(fock, copy=True)
@@ -78,8 +86,8 @@ class DeterminantOracle:
 
         return T
 
-    def evaluate(self, t1, t2):
-        """Return <Phi|Hbar_N|Phi> and each alpha single projection."""
+    def transformed(self, t1, t2):
+        """Apply Hbar_N to the reference, without assuming a residual formula."""
         T = self.cluster(t1, t2)
 
         def exponential(vector, sign):
@@ -92,8 +100,17 @@ class DeterminantOracle:
                 result += term
             return result
 
-        transformed = exponential(self.hnormal @ exponential(self.ket, 1), -1)
-        return float(transformed[self.ref]), self.bras @ transformed
+        return exponential(self.hnormal @ exponential(self.ket, 1), -1)
+
+    def evaluate(self, t1, t2):
+        """Return <Phi|Hbar_N|Phi> and each alpha single projection."""
+        vector = self.transformed(t1, t2)
+        return float(vector[self.ref]), self.bras @ vector
+
+    def evaluate_full(self, t1, t2):
+        """Also return the normalized opposite-spin doubles projections."""
+        vector = self.transformed(t1, t2)
+        return float(vector[self.ref]), self.bras @ vector, self.double_bras @ vector
 
 
 def random_case(nocc=2, nvir=2, seed=148):
@@ -117,7 +134,7 @@ def dense_feeds(f, g, t1, t2):
     o = t1.shape[0]
     slices = {"o": slice(0, o), "v": slice(o, None)}
     feeds = {"foo": f[:o, :o], "fov": f[:o, o:], "fvv": f[o:, o:], "t1": t1, "t2": t2}
-    for block in ("ovov", "ovvo", "oovv", "ovvv", "ovoo"):
+    for block in ("ovov", "ovvo", "oovv", "ovvv", "ovoo", "oooo", "vvvv"):
         feeds[block] = g[tuple(slices[k] for k in block)]
     return feeds
 
