@@ -6,7 +6,7 @@ import numpy as np
 
 from tools.vibeqc_posthf import MOBlock
 from tools.vibeqc_posthf.providers import ConventionalProvider
-from tools.vibeqc_tensor import execute
+from tools.vibeqc_tensor import Program, execute
 from tools.vibeqc_validation.schema import canonical_hash
 
 from .equations import BLOCKS, build_program
@@ -25,6 +25,19 @@ def evaluate(snapshot, provider, t1, t2, *, max_bytes=256 << 20):
     if provider.snapshot.identity != snapshot.identity:
         raise ValueError("provider and reference identities do not match")
     program = build_program(snapshot.nocc, snapshot.nmo - snapshot.nocc)
+    required = sum(n.spec.size * n.spec.itemsize for n in program.live_nodes) + sum(
+        n.spec.size * n.spec.itemsize for n in program.outputs.values()
+    )
+    if type(max_bytes) is not int or max_bytes < required:
+        raise ValueError(
+            f"RCCSD interpreter budget needs {required} bytes before integral conversion"
+        )
+    inputs = {n.attrs["name"]: n for n in program.live_nodes if n.op == "input"}
+    execute(
+        Program({k: inputs[k] for k in ("t1", "t2")}),
+        {"t1": t1, "t2": t2},
+        max_bytes=max_bytes,
+    )
     f = snapshot.coefficients.T @ snapshot.fock @ snapshot.coefficients
     o = snapshot.nocc
     feeds = {"foo": f[:o, :o], "fov": f[:o, o:], "fvv": f[o:, o:], "t1": t1, "t2": t2}

@@ -1,5 +1,8 @@
 # RCCSD energy and physical singles equations (CG11 A)
 
+This document preserves the A-slice contract. Complete residuals and the
+subsequently implemented CPU solver are documented in [RCCSD B/C](rccsd_bc.md).
+
 `tools.vibeqc_cc` is an internal, small-system FP64 CPU equation baseline.
 It implements fixed-amplitude correlation energy and the physical T1 residual.
 It does **not** solve CCSD, evaluate T2 residuals, or register a public method.
