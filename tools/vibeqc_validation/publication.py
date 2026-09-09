@@ -20,6 +20,33 @@ MANIFEST = "publication.json"
 ROLES = {"evidence", "summary", "samples", "input", "reproduction", "source-patch"}
 
 
+def _passing_error_record(row: dict) -> bool:
+    """Require the quantitative fields emitted by validation.block_error.
+
+    A numerical stage flag alone must not admit an edited record which lost
+    its tolerances. Finiteness is checked by the shared evidence validator.
+    """
+    required = {
+        "passed",
+        "atol",
+        "rtol",
+        "max_absolute_error",
+        "max_scaled_error",
+        "rms_error",
+        "shape",
+    }
+    if not required <= row.keys() or row["passed"] is not True:
+        return False
+    scalars = [row[k] for k in required - {"passed", "shape"}]
+    return (
+        all(type(value) in {int, float} and value >= 0 for value in scalars)
+        and row["atol"] + row["rtol"] > 0
+        and row["max_scaled_error"] <= 1
+        and isinstance(row["shape"], list)
+        and all(type(size) is int and size > 0 for size in row["shape"])
+    )
+
+
 def validate_publication(manifest: dict, files: dict[str, bytes]) -> None:
     """Verify a self-contained selected bundle and its scientific decision.
 
@@ -113,9 +140,7 @@ def validate_publication(manifest: dict, files: dict[str, bytes]) -> None:
         and (
             not evidence["block_errors"]
             or not all(
-                row.get("passed") is True
-                and 0 <= row.get("max_scaled_error", float("inf")) <= 1
-                for row in evidence["block_errors"].values()
+                _passing_error_record(row) for row in evidence["block_errors"].values()
             )
         )
     ):

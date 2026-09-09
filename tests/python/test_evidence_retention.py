@@ -210,7 +210,7 @@ def test_committed_publications_retain_valid_scientific_gates():
         validate_publication(manifest, files)
 
 
-@pytest.mark.parametrize("damage", ["numerical", "attachment"])
+@pytest.mark.parametrize("damage", ["numerical", "attachment", "missing-tolerance"])
 def test_publication_rejects_false_numerical_pass_or_lost_measurements(
     tmp_path, damage
 ):
@@ -219,6 +219,8 @@ def test_publication_rejects_false_numerical_pass_or_lost_measurements(
     evidence = json.loads(path.read_text())
     if damage == "numerical":
         evidence["block_errors"]["fixture"]["passed"] = False
+    elif damage == "missing-tolerance":
+        evidence["block_errors"]["fixture"].pop("atol")
     else:
         evidence["attachments"] = [
             {
