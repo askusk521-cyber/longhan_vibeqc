@@ -129,13 +129,18 @@ void verify_mode(bool unrestricted) {
   // mode on a live plan without changing arithmetic, then toggle only its
   // Fock-only switch; neither transition may reuse an incompatible Graph.
   unsetenv("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD");
+  // The isolated streaming route requires complete shell-class coverage.
+  // The earlier direct test deliberately restricts its AOT registry to DPPS.
+  unsetenv("VIBEQC_AOT_FOCK_SHELL_CLASSES");
   setenv("VIBEQC_BOUNDED_DIRECT_STREAMING", "force", 1);
   setenv("VIBEQC_BOUNDED_DIRECT_FOCK_CLASS_PROFILE", "1", 1);
   setenv("VIBEQC_BOUNDED_DIRECT_FOCK_ONLY_DIAGNOSTIC", "1", 1);
   const auto diagnostic = run_cached(warm_density);
   require(diagnostic.size() == 1 && diagnostic[0].fock_only_diagnostic &&
               diagnostic[0].status == VIBEQC_STATUS_NOT_CONVERGED,
-          "cached plan did not enter isolated Fock mode");
+          (std::string("cached plan did not enter isolated Fock mode: ") +
+           (diagnostic.empty() ? "empty result" : vibeqc_status_message(diagnostic[0].status)))
+              .c_str());
   unsetenv("VIBEQC_BOUNDED_DIRECT_FOCK_ONLY_DIAGNOSTIC");
   const auto restored = run_cached(warm_density);
   require(restored.size() == 1 && !restored[0].fock_only_diagnostic &&
