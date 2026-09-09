@@ -131,6 +131,45 @@ int vibeqc_posthf_rhf_density_v1(void* source, int backend, int device, unsigned
     scalars[3] = result.iterations;
   });
 }
+/** Run the existing UHF implementation and export alpha/beta AO densities.
+ * As with the RHF bridge, snapshot canonicalization remains a separately
+ * checked host operation and a failed SCF cannot yield reusable state.
+ */
+int vibeqc_posthf_uhf_density_v1(void* source, int backend, int device, unsigned max_iterations,
+                                 double tolerance, int df, double metric_threshold, double* density,
+                                 std::size_t elements, double* scalars, char* error,
+                                 std::size_t size) {
+  return guarded(error, size, [&] {
+    if (!source || !density || !scalars || (backend != 0 && backend != 1) || (df != 0 && df != 1))
+      throw std::invalid_argument("invalid UHF export request");
+    const auto& raw = *static_cast<RawSource*>(source);
+    if (elements != 2 * raw.nbf() * raw.nbf())
+      throw std::invalid_argument("UHF alpha/beta density output size mismatch");
+    vibeqc::scf::ScfOptions options;
+    options.max_iterations = max_iterations;
+    options.energy_tolerance = tolerance;
+    options.density_tolerance = tolerance;
+    options.screening_tolerance = 0;
+    options.density_fitting_relative_threshold = metric_threshold;
+    vibeqc::scf::ScfResult result;
+    if (df) {
+      result = backend
+                   ? vibeqc::scf::run_uhf_density_fitting_cuda(raw.orbital(), raw.auxiliary(),
+                                                               options, device)
+                   : vibeqc::scf::run_uhf_density_fitting(raw.orbital(), raw.auxiliary(), options);
+    } else {
+      result = backend ? vibeqc::scf::run_uhf_cuda(raw.orbital(), options, device)
+                       : vibeqc::scf::run_uhf(raw.orbital(), options);
+    }
+    if (!result.converged || result.density.size() != elements)
+      throw std::runtime_error("UHF failed or did not converge; no reference exported");
+    std::copy(result.density.begin(), result.density.end(), density);
+    scalars[0] = result.energy;
+    scalars[1] = result.energy_change;
+    scalars[2] = result.density_rms;
+    scalars[3] = result.iterations;
+  });
+}
 /** Opt-in small-system NUM01 diagnostic execution using the existing HF source.
  * Unlike a converged post-HF export, this preserves failed-solve scalar records.
  * RHF density has one spin-summed block; UHF has alpha then beta. It neither
