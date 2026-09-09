@@ -12,10 +12,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 from vibeqc.profiles import find_nvcc
-
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Program,
@@ -34,10 +33,10 @@ from tools.vibeqc_tensor import (
     transpose,
     transpose_program,
 )
-from tools.vibeqc_tensor.cuda_execute import PreparedCuda, compile_cuda
-from tools.vibeqc_tensor.cuda_plan import Reservations, TensorSchedule, plan_cuda
-from tools.vibeqc_tensor.examples import example_cases
-from tools.vibeqc_tensor.interpreter import execute
+from vibeqc_compiler.tensor.cuda_execute import PreparedCuda, compile_cuda
+from vibeqc_compiler.tensor.cuda_plan import Reservations, TensorSchedule, plan_cuda
+from vibeqc_compiler.tensor.examples import example_cases
+from vibeqc_compiler.tensor.interpreter import execute
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("VIBEQC_TENSOR_CUDA_TEST") != "1",
@@ -67,8 +66,7 @@ def cache(tmp_path_factory):
 def test_two_tensor_providers_share_one_global_budget(compiler, cache):
     """A retained neighbor forces an executable recomputation alternative."""
     from vibeqc.resources import ResourceBudget, ResourceSession, plan_resources
-
-    from tools.vibeqc_tensor.resources import tensor_resource_choices
+    from vibeqc_compiler.tensor.resources import tensor_resource_choices
 
     index = Index("i", IndexSpace("axis", "batch", 8192))
     x = input_tensor("x", TensorSpec((index,), role="input"))
@@ -129,8 +127,7 @@ def test_actual_cuda_allocation_failure_is_typed_and_exhausted_plan_is_recorded(
         ResourceSession,
         plan_resources,
     )
-
-    from tools.vibeqc_tensor.resources import tensor_resource_choices
+    from vibeqc_compiler.tensor.resources import tensor_resource_choices
 
     program = Program({"scalar": constant(3)})
     choices = tensor_resource_choices(
@@ -161,8 +158,7 @@ def test_actual_cuda_allocation_failure_is_typed_and_exhausted_plan_is_recorded(
 )
 def test_direct_hf_and_tensor_share_one_executable_resource_plan(compiler, cache):
     from vibeqc import Calculator, ResourceBudget, ResourceSession, plan_resources
-
-    from tools.vibeqc_tensor.resources import tensor_resource_choices
+    from vibeqc_compiler.tensor.resources import tensor_resource_choices
 
     atoms = [(1, (0, 0, -0.7)), (1, (0, 0, 0.7))]
     calculator = Calculator(device="cuda")
@@ -419,7 +415,7 @@ def test_nonfinite_intermediate_and_minimum_budget(compiler, cache):
 
 
 def test_shape_buckets_budget_and_concurrent_system_independence(compiler, cache):
-    from tools.vibeqc_tensor.cuda_batch import PreparedTensorBatch
+    from vibeqc_compiler.tensor.cuda_batch import PreparedTensorBatch
 
     plans, feeds = [], []
     for size in (3, 5, 3):

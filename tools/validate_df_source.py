@@ -5,6 +5,14 @@ normalized libcint M/A tensors and NumPy eigendecomposition define its oracle;
 the probe links the exact production native library under test.
 """
 
+# Source-tree CLI bootstrap for transitive compiler clients.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import copy
 import json

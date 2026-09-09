@@ -1,0 +1,4 @@
+include src/tensor/cuda_runtime.cuh
+include src/dft/cuda_grid.cu
+include src/dft/xc_runtime.cuh
+recursive-include external/libxc-7.0.0 *

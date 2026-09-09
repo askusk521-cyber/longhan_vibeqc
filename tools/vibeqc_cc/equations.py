@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     PackedLayout,
@@ -13,6 +13,7 @@ from tools.vibeqc_tensor import (
     einsum,
     input_tensor,
 )
+
 from tools.vibeqc_validation.schema import canonical_hash
 
 from .inventory import TERMS

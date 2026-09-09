@@ -1,3 +1,4 @@
+# ruff: noqa: PLC0414
 """Owned, immutable canonical-RHF snapshots for internal correlated methods.
 
 Arrays are backed by immutable bytes, not only NumPy's reversible write flag.
@@ -13,19 +14,7 @@ from hashlib import sha256
 
 import numpy as np
 from vibeqc.profiles import canonical_hash
-
-
-def immutable(value, *, shape=None):
-    """Copy finite real FP64 values into irreversibly read-only storage."""
-    raw = np.asarray(value)
-    if np.iscomplexobj(raw):
-        raise ValueError("complex references are unsupported")
-    array = np.asarray(raw, dtype=np.float64, order="C")
-    if shape is not None and array.shape != shape:
-        raise ValueError(f"expected shape {shape}, got {array.shape}")
-    if not np.isfinite(array).all():
-        raise ValueError("reference arrays must be finite")
-    return np.frombuffer(array.tobytes(), dtype=np.float64).reshape(array.shape)
+from vibeqc_compiler.common.arrays import immutable as immutable
 
 
 @dataclass(frozen=True, eq=False)

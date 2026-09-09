@@ -3,13 +3,20 @@
 from dataclasses import replace
 
 import pytest
+from vibeqc_compiler.integral.cache import integral_cache_key
+from vibeqc_compiler.integral.cuda import CudaEmitter
+from vibeqc_compiler.integral.df_values import (
+    build_df_component_kernel,
+    build_df_value_ir,
+)
+from vibeqc_compiler.integral.opencl_lowering import (
+    ScalarKernel,
+    emit_opencl,
+    source_hash,
+)
+from vibeqc_compiler.integral.runtime_backend import ExecutionShape, RuntimeCapabilities
+from vibeqc_compiler.integral.scalar_c import ScalarCEmitter
 
-from tools.vibeqc_codegen.cache import integral_cache_key
-from tools.vibeqc_codegen.cuda import CudaEmitter
-from tools.vibeqc_codegen.df_values import build_df_component_kernel, build_df_value_ir
-from tools.vibeqc_codegen.opencl_lowering import ScalarKernel, emit_opencl, source_hash
-from tools.vibeqc_codegen.runtime_backend import ExecutionShape, RuntimeCapabilities
-from tools.vibeqc_codegen.scalar_c import ScalarCEmitter
 from tools.vibeqc_validation.schema import canonical_hash
 
 

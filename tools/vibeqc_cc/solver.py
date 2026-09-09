@@ -9,11 +9,11 @@ from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
+from vibeqc_compiler.tensor import Program, execute
 
 from tools.vibeqc_posthf import MOBlock, ReferenceSnapshot
 from tools.vibeqc_posthf.providers import ConventionalProvider
 from tools.vibeqc_posthf.reference import immutable
-from tools.vibeqc_tensor import Program, execute
 from tools.vibeqc_validation.schema import canonical_hash
 
 from .doubles import build_ccsd_program

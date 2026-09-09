@@ -5,6 +5,8 @@ from itertools import pairwise
 
 import numpy as np
 import pytest
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import execute
 
 from tools.vibeqc_cc.gpu_state import (
     AmplitudeSnapshot,
@@ -15,9 +17,7 @@ from tools.vibeqc_cc.gpu_state import (
 )
 from tools.vibeqc_cc.oracle import dense_feeds, random_case
 from tools.vibeqc_cc.solver import SolverOptions
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
 from tools.vibeqc_posthf.fixtures import fixture_snapshot, load_fixture
-from tools.vibeqc_tensor import execute
 
 
 @pytest.mark.parametrize("shape", [(1, 3), (2, 3)])

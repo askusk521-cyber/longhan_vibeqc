@@ -4,17 +4,17 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.ir import (
+from vibeqc_compiler.integral.ir import (
     DerivativeSpec,
     NuclearCoordinates,
     TranslationInvariant,
 )
-from tools.vibeqc_codegen.shell_class import build_shell_class_component_kernel
-from tools.vibeqc_codegen.weighted_eri import (
+from vibeqc_compiler.integral.shell_class import build_shell_class_component_kernel
+from vibeqc_compiler.integral.weighted_eri import (
     build_weighted_eri_ir,
     build_weighted_eri_kernel,
 )
+
 from tools.vibeqc_validation.weighted_eri import primitive_variables
 
 EXPONENTS = (0.6, 0.8, 1.1, 0.9)

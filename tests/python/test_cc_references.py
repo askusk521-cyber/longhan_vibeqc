@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from vibeqc_compiler.tensor import execute
 
 from tools.vibeqc_cc import build_program, evaluate
 from tools.vibeqc_cc.oracle import DeterminantOracle, dense_feeds, random_case
@@ -17,7 +18,6 @@ from tools.vibeqc_posthf.fixtures import (
 )
 from tools.vibeqc_posthf.providers import ConventionalProvider
 from tools.vibeqc_posthf.sources import NativeSource
-from tools.vibeqc_tensor import execute
 from tools.vibeqc_validation.schema import canonical_hash
 
 ROOT = Path(__file__).resolve().parents[1]

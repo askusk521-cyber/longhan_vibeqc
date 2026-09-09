@@ -9,13 +9,12 @@ from itertools import product
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.one_electron_values import (
+from vibeqc_compiler.integral.one_electron_values import (
     build_one_electron_component_kernel,
     build_one_electron_value_ir,
     evaluate_one_electron_primitive,
 )
-from tools.vibeqc_codegen.shell_spec import cartesian_components
+from vibeqc_compiler.integral.shell_spec import cartesian_components
 
 
 @cache
@@ -138,7 +137,7 @@ def emitted_host(tmp_path_factory):
     This is explicitly a source-lowering test. CUDA compilation, device
     resources and numerical evidence remain separate manual GPU tiers.
     """
-    from tools.vibeqc_codegen.one_electron_cuda import emit_one_electron_values_cuda
+    from vibeqc_compiler.integral.one_electron_cuda import emit_one_electron_values_cuda
 
     compiler = shutil.which("c++")
     if compiler is None:
@@ -214,13 +213,15 @@ def test_emitted_arithmetic_all_pairs_and_normalized_contractions(emitted_host):
 
 
 def test_one_electron_inventory_retains_operator_and_output_contracts():
-    from tools.vibeqc_codegen.one_electron_cuda import one_electron_program_inventory
+    from vibeqc_compiler.integral.one_electron_cuda import (
+        one_electron_program_inventory,
+    )
 
     inventory = one_electron_program_inventory()
     assert len(inventory["programs"]) == 48
     assert inventory["precision"] == "fp64"
     assert inventory["schedules"] == ["thread", "shell_warp"]
-    from tools.vibeqc_codegen.capabilities import query_integral_capability
+    from vibeqc_compiler.integral.capabilities import query_integral_capability
 
     request = build_one_electron_value_ir("kinetic", (3, 3))
     assert query_integral_capability(

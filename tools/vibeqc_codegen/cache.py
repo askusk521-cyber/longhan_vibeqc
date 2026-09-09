@@ -1,50 +1,20 @@
-"""Deterministic cache identity for optional NVRTC long-tail kernels."""
+"""Compatibility forwarding only; see docs/compiler_architecture.md.
 
-from __future__ import annotations
+Remove after downstream callers have migrated for one release and the legacy
+import compatibility tests are the only repository users. No duplicate IR,
+class definitions or cache implementation belongs here.
+"""
 
-import hashlib
-import json
-from dataclasses import asdict, dataclass
+import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+from importlib import import_module
 
-@dataclass(frozen=True, slots=True)
-class NvrtcCacheSpec:
-    """Every input that can change generated PTX or device compatibility."""
+_target = import_module("vibeqc_compiler.integral.cache")
 
-    generator_abi: str
-    shell_class: tuple[int, int, int, int]
-    derivative_centers: tuple[int, ...]
-    precision_policy: str
-    screening_policy: str
-    source_digest: str
-    compute_capability: str
-    nvrtc_version: str
-    driver_version: str
-
-
-def nvrtc_cache_key(specification: NvrtcCacheSpec) -> str:
-    """Return a stable content-addressed key for one compiled kernel."""
-
-    payload = json.dumps(
-        asdict(specification), sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def integral_cache_key(integral) -> str:
-    """Hash versioned scientific intent through the existing content-addressing scheme.
-
-    This identity includes physical bindings, external charges, tensor strides,
-    weight source/signs, and budgets. It describes intent, not compiled support.
-    The legacy NVRTC key and production ABI remain unchanged because their
-    symbols, layouts, and generated sources are byte-identical.
-    """
-    from .ir_serialization import integral_to_payload
-
-    payload = json.dumps(
-        integral_to_payload(integral),
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+if __name__ == "__main__":
+    if hasattr(_target, "main"):
+        raise SystemExit(_target.main())
+else:
+    sys.modules[__name__] = _target

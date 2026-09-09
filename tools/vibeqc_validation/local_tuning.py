@@ -13,14 +13,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-
-from tools.vibeqc_codegen.autotune import schedule_payload
-from tools.vibeqc_codegen.benchmark import _CUDA_PRELUDE
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_lowering import emit_shell_class_fused_cuda
-from tools.vibeqc_codegen.fused_schedule import build_fused_shell_plan
-from tools.vibeqc_codegen.ir import KernelConsumer
-from tools.vibeqc_codegen.shell_spec import FUSED_SHELL_SPEC_BY_NAME
+from vibeqc_compiler.integral.autotune import schedule_payload
+from vibeqc_compiler.integral.benchmark import _CUDA_PRELUDE
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_lowering import emit_shell_class_fused_cuda
+from vibeqc_compiler.integral.fused_schedule import build_fused_shell_plan
+from vibeqc_compiler.integral.ir import KernelConsumer
+from vibeqc_compiler.integral.shell_spec import FUSED_SHELL_SPEC_BY_NAME
 
 from .f_shell import cuobjdump_resources
 from .f_shell_cuda import emit_numerical_driver

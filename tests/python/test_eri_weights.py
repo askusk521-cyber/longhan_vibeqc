@@ -5,8 +5,7 @@ import math
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.eri_weights import (
+from vibeqc_compiler.integral.eri_weights import (
     canonical_eri_indices,
     eri_weight_orbit,
     fold_dense_eri_weight,

@@ -6,6 +6,14 @@ quantum-chemistry program participates in generated tensor execution.
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -20,18 +28,18 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from vibeqc.profiles import find_nvcc
-
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor.cuda_execute import (
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor.cuda_execute import (
     PreparedCuda,
     compile_cuda,
     tensor_source_identity,
 )
-from tools.vibeqc_tensor.cuda_fixtures import cc_fixtures
-from tools.vibeqc_tensor.cuda_plan import Reservations, TensorSchedule, plan_cuda
-from tools.vibeqc_tensor.cuda_tune import tune_cuda
-from tools.vibeqc_tensor.interpreter import execute
+from vibeqc_compiler.tensor.cuda_fixtures import cc_fixtures
+from vibeqc_compiler.tensor.cuda_plan import Reservations, TensorSchedule, plan_cuda
+from vibeqc_compiler.tensor.cuda_tune import tune_cuda
+from vibeqc_compiler.tensor.interpreter import execute
+
 from tools.vibeqc_validation.schema import (
     GATES,
     block_error,

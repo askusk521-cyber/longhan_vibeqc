@@ -17,7 +17,7 @@ architecture manifest; generated production CUDA remains a build artifact.
 
 ## Current pipeline
 
-`tools/vibeqc_codegen/ir.py` is now strictly mathematical, while
+`python/vibeqc_compiler/integral/ir.py` is now strictly mathematical, while
 `cuda_target.py` and `cuda_schedule.py` own NVIDIA execution policy:
 
 - `IntegralIR` describes two-, three-, or four-shell operators, explicit
@@ -527,7 +527,7 @@ schedule.
 
 ## Architecture autotuning
 
-`tools/vibeqc_codegen/autotune.py` emits every CUDA-supported schedule variant
+`python/vibeqc_compiler/integral/autotune.py` emits every CUDA-supported schedule variant
 with unique symbols, compiles the translation units in parallel, links them
 into one executable, and runs all variants in one GPU allocation. A candidate
 is rejected for:
@@ -541,7 +541,7 @@ Passing variants are ranked by measured kernel time. The winner can be written
 to a schema-v2, architecture-specific production manifest:
 
 ```bash
-python -m tools.vibeqc_codegen.autotune \
+python -m vibeqc_compiler.integral.autotune \
   --nvcc /group/software/cuda-12.9.1/bin/nvcc \
   --architecture sm_120 \
   --shell-class dpds \
@@ -555,7 +555,7 @@ repeating `--shell-class`, or by supplying a list file. The list-file form
 accepts one class per line, comma-separated names, and `#` comments:
 
 ```bash
-python -m tools.vibeqc_codegen.autotune \
+python -m vibeqc_compiler.integral.autotune \
   --nvcc /group/software/cuda-12.9.1/bin/nvcc \
   --architecture sm_120 \
   --shell-class-file benchmarks/issue52-hotspots.txt \
@@ -582,7 +582,7 @@ this searches the component-lane variants for three Fock classes and
 atomically promotes all three winners together:
 
 ```bash
-python -m tools.vibeqc_codegen.autotune \
+python -m vibeqc_compiler.integral.autotune \
   --nvcc /group/software/cuda-12.9.1/bin/nvcc \
   --architecture sm_120 \
   --shell-class dpps --shell-class ddds --shell-class dppp \
@@ -871,7 +871,7 @@ To screen a bounded set of classes
 that is automatically discovered from the consumer-specific manifest gap:
 
 ```bash
-python -m tools.vibeqc_codegen.batch_benchmark \
+python -m vibeqc_compiler.integral.batch_benchmark \
   --discover --consumer force --limit 12 \
   --partition main --gres gpu:5090:1
 ```
@@ -945,7 +945,7 @@ Run Python gates:
 
 ```bash
 python -m pytest tests/python/test_codegen.py -q
-python -m ruff check tools/vibeqc_codegen tests/python/test_codegen.py
+python -m ruff check python/vibeqc_compiler/integral tests/python/test_codegen.py
 ```
 
 Run the explicit CUDA gate:

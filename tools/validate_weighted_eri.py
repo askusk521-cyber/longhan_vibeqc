@@ -7,6 +7,14 @@ records, including public spherical weights and mixed output-tile indices.
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -21,23 +29,24 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tools.generate_validation_references import pyscf_molecule, quartet_data
-from tools.vibeqc_codegen.blocks import (
+from vibeqc_compiler.integral.blocks import (
     BlockRequest,
     ShellTile,
     TensorLayout,
     WeightTile,
 )
-from tools.vibeqc_codegen.eri_weights import (
+from vibeqc_compiler.integral.eri_weights import (
     fold_dense_eri_weight,
     fold_normalized_pair_weight,
 )
-from tools.vibeqc_codegen.shell_signature import BasisConvention, CenterBinding
-from tools.vibeqc_codegen.weighted_eri import build_weighted_eri_ir
-from tools.vibeqc_codegen.weighted_eri_inputs import (
+from vibeqc_compiler.integral.shell_signature import BasisConvention, CenterBinding
+from vibeqc_compiler.integral.weighted_eri import build_weighted_eri_ir
+from vibeqc_compiler.integral.weighted_eri_inputs import (
     prepare_weighted_eri_stream,
     weighted_eri_response,
 )
+
+from tools.generate_validation_references import pyscf_molecule, quartet_data
 from tools.vibeqc_validation.f_shell_numerics import (
     _normalized_primitives,
     numerical_error,

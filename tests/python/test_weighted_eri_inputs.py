@@ -4,21 +4,20 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.blocks import (
+from vibeqc_compiler.integral.blocks import (
     BlockRequest,
     ShellTile,
     TensorLayout,
     WeightTile,
 )
-from tools.vibeqc_codegen.capabilities import query_integral_capability
-from tools.vibeqc_codegen.ir import ContractionOutput
-from tools.vibeqc_codegen.shell_signature import BasisConvention, CenterBinding
-from tools.vibeqc_codegen.weighted_eri import (
+from vibeqc_compiler.integral.capabilities import query_integral_capability
+from vibeqc_compiler.integral.ir import ContractionOutput
+from vibeqc_compiler.integral.shell_signature import BasisConvention, CenterBinding
+from vibeqc_compiler.integral.weighted_eri import (
     build_weighted_eri_ir,
     build_weighted_eri_kernel,
 )
-from tools.vibeqc_codegen.weighted_eri_inputs import (
+from vibeqc_compiler.integral.weighted_eri_inputs import (
     PRIMITIVE_RECORD,
     prepare_weighted_eri_stream,
     weighted_eri_response,

@@ -1,5 +1,13 @@
 """Generate S/T/V CUDA primitive helpers and their scientific IR inventory."""
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import hashlib
 import json
@@ -9,15 +17,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tools.generate_df_kernels import write_if_changed
-from tools.vibeqc_codegen.one_electron_cuda import (
+from vibeqc_compiler.integral.one_electron_cuda import (
     emit_one_electron_values_cuda,
     one_electron_program_inventory,
 )
-from tools.vibeqc_codegen.one_electron_derivatives_cuda import (
+from vibeqc_compiler.integral.one_electron_derivatives_cuda import (
     emit_one_electron_derivatives_cuda,
     one_electron_derivative_inventory,
 )
+
+from tools.generate_df_kernels import write_if_changed
 
 
 def main():

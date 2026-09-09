@@ -7,14 +7,14 @@ from hashlib import sha256
 
 import numpy as np
 from vibeqc.profiles import canonical_hash
+from vibeqc_compiler.dft import ExplicitGrid, MolecularGrid
+from vibeqc_compiler.dft.features import density_features, spin_densities
+from vibeqc_compiler.dft.grid import GridTile, checked_int
+from vibeqc_compiler.xc.potential import assemble_potential
+from vibeqc_compiler.xc.program import build_program, pack_grid_features
+from vibeqc_compiler.xc.spec import UnsupportedXC
 
-from tools.vibeqc_dft import ExplicitGrid, MolecularGrid
-from tools.vibeqc_dft.features import density_features, spin_densities
-from tools.vibeqc_dft.grid import GridTile, checked_int
 from tools.vibeqc_posthf.reference import immutable
-from tools.vibeqc_xc.potential import assemble_potential
-from tools.vibeqc_xc.program import build_program, pack_grid_features
-from tools.vibeqc_xc.spec import UnsupportedXC
 
 
 def _tiles(grid, tile_points):

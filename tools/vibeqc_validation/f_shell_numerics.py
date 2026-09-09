@@ -19,8 +19,7 @@ from math import exp, pi, prod, sqrt
 from pathlib import Path
 
 import numpy as np
-
-from tools.vibeqc_codegen.shell_spec import (
+from vibeqc_compiler.integral.shell_spec import (
     FUSED_SHELL_SPEC_BY_NAME,
     cartesian_components,
 )
@@ -405,12 +404,11 @@ def numerical_matrix(
     subset. Existing GPU visibility is passed through without modification.
     """
     import pyscf
-
-    from tools.vibeqc_codegen.cuda_adapter import (
+    from vibeqc_compiler.integral.cuda_adapter import (
         CudaBenchmarkExecutor,
         CudaCompilerAdapter,
     )
-    from tools.vibeqc_codegen.cuda_target import cuda_target_info
+    from vibeqc_compiler.integral.cuda_target import cuda_target_info
 
     from .f_shell import ROOT, source_audit
     from .f_shell_cuda import emit_numerical_driver

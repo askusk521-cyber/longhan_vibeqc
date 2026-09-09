@@ -232,15 +232,15 @@ def test_stale_metric_geometry_is_rejected(source_factory):
 
 
 def test_valid_but_unsupported_raw_operator_has_explicit_status(source_factory):
-    from tools.vibeqc_codegen.blocks import (
+    from vibeqc_compiler.integral.blocks import (
         BlockRequest,
         BlockStatus,
         RawBlock,
         ShellTile,
         TensorLayout,
     )
-    from tools.vibeqc_codegen.ir import IntegralIR, OperatorSpec
-    from tools.vibeqc_codegen.shell_signature import (
+    from vibeqc_compiler.integral.ir import IntegralIR, OperatorSpec
+    from vibeqc_compiler.integral.shell_signature import (
         BasisShell,
         CenterBinding,
         ShellSignature,

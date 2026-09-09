@@ -1,6 +1,6 @@
 # Atom-centered grids and spatial AO jets (DFT01)
 
-`tools.vibeqc_dft` is the internal source-checkout grid/AO/density interface.
+`vibeqc_compiler.dft` is the compiler-side grid/AO/density interface installed beside the runtime.
 It provides CPU quadrature, native CPU/CUDA AO derivatives and spin density
 features for later XC/SCF consumers. It registers no DFT method, XC functional,
 nuclear gradient or Hessian. Use `PYTHONPATH=.:python` and a built native
@@ -97,7 +97,7 @@ Fixtures also check the Laplacian contraction using second AO derivatives.
 ## Prepared execution and budgets
 
 ```python
-from tools.vibeqc_dft import GridSpec, PreparedGrid
+from vibeqc_compiler.dft import GridSpec, PreparedGrid
 
 with PreparedGrid(atoms, basis="sto-3g", spec=GridSpec(),
                   tile_points=251, budget_bytes=256 << 20) as grid:

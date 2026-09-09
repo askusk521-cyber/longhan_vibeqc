@@ -5,14 +5,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import execute
+from vibeqc_compiler.tensor.cuda_plan import TensorSchedule, plan_cuda
 
 from tools.vibeqc_cc.cuda import PreparedRCCSDResidual, rccsd_program
 from tools.vibeqc_cc.doubles import build_ccsd_program
 from tools.vibeqc_cc.oracle import dense_feeds, random_case
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import execute
-from tools.vibeqc_tensor.cuda_plan import TensorSchedule, plan_cuda
 
 
 @pytest.mark.parametrize("shape", [(1, 3), (2, 3)])

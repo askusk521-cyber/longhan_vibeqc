@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
+from vibeqc_compiler.tensor import Program, add, execute
 
 from tools.vibeqc_cc.doubles import build_ccsd_program
 from tools.vibeqc_cc.oracle import DeterminantOracle, dense_feeds, random_case
-from tools.vibeqc_tensor import Program, add, execute
 
 
 @pytest.mark.parametrize(

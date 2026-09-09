@@ -5,9 +5,8 @@ import os
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.opencl_runtime import OpenCLError, OpenCLRuntime, Resource
-from tools.vibeqc_codegen.runtime_backend import (
+from vibeqc_compiler.integral.opencl_runtime import OpenCLError, OpenCLRuntime, Resource
+from vibeqc_compiler.integral.runtime_backend import (
     ExecutionShape,
     LibraryRequest,
     UnsupportedBackendFeature,

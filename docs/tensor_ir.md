@@ -1,6 +1,6 @@
 # TensorIR: typed equations and a CPU reference interpreter
 
-`tools/vibeqc_tensor/` implements the CG08 foundation in issue #145. It describes
+`python/vibeqc_compiler/tensor/` implements the CG08 foundation in issue #145. It describes
 real tensor equations, validates them before execution, and replays them with
 NumPy on CPU. It includes independent loop references for a matrix product, a
 spin-orbital MP2-like energy fragment, one virtual Fock contribution to a CC-like
@@ -74,7 +74,7 @@ Run this from the repository root:
 
 ```python
 import numpy as np
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.tensor import (
     Index, IndexSpace, Program, TensorSpec, einsum, execute, input_tensor,
 )
 
@@ -167,7 +167,7 @@ and metric.
 
 ## Derivative programs (#151)
 
-`tools/vibeqc_tensor/autodiff.py` provides a CPU reference for JVP (`jvp`) and
+`python/vibeqc_compiler/tensor/autodiff.py` provides a CPU reference for JVP (`jvp`) and
 matrix-free VJP (`vjp`) with an adjoint dot test (`dot_test`). It covers every
 primitive, preserves exact rational coefficients, accumulates multiple
 consumers, and rejects unsupported or non-differentiable requests. The
@@ -182,7 +182,7 @@ and builds only active operand adjoints, so an unrequested diagonal projection
 cannot consume the generation element budget. Repeated einsum labels that
 survive in the output retain their cotangent axis in the diagonal embedding.
 
-`tools/vibeqc_tensor/ad_program.py` turns the same rules into demand-driven,
+`python/vibeqc_compiler/tensor/ad_program.py` turns the same rules into demand-driven,
 backend-independent TensorIR `Program` DAGs:
 
 - `linearize(program, tangent_inputs, outputs=..., packed=...)` generates

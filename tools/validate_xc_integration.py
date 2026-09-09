@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import os
 import platform
@@ -14,17 +22,17 @@ sys.path[:0] = [str(ROOT), str(ROOT / "python")]
 
 import numpy as np
 from vibeqc.profiles import atomic_json, canonical_hash, file_hash
+from vibeqc_compiler.dft import NativeAO
+from vibeqc_compiler.dft.fixtures import basis_arguments
+from vibeqc_compiler.xc import FixedDensityXC, functional
+from vibeqc_compiler.xc.integration_fixtures import CASES, load_integration_fixture
 
-from tools.vibeqc_dft import NativeAO
-from tools.vibeqc_dft.fixtures import basis_arguments
 from tools.vibeqc_validation.schema import (
     block_error,
     new_evidence,
     outcome,
     validate_evidence,
 )
-from tools.vibeqc_xc import FixedDensityXC, functional
-from tools.vibeqc_xc.integration_fixtures import CASES, load_integration_fixture
 
 
 def run(output):
@@ -127,10 +135,10 @@ def run(output):
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
     paths = [
-        "tools/vibeqc_xc/integration.py",
-        "tools/vibeqc_xc/potential.py",
+        "python/vibeqc_compiler/xc/integration.py",
+        "python/vibeqc_compiler/xc/potential.py",
         "tools/validate_xc_integration.py",
-        "tools/vibeqc_xc/integration_fixtures.py",
+        "python/vibeqc_compiler/xc/integration_fixtures.py",
         "tests/python/test_xc_integration.py",
     ]
     report["source_files"] = {path: file_hash(ROOT / path) for path in paths}

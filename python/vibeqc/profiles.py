@@ -1,3 +1,4 @@
+# ruff: noqa: PLC0414
 """Validated, atomic user-local CUDA profile storage and compatibility checks.
 
 A profile contains a complete native library built with the existing AOT
@@ -9,7 +10,6 @@ has been checked, leaving a previous profile usable after interrupted tuning.
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import json
 import os
 import platform
@@ -18,6 +18,12 @@ import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
+
+from vibeqc_compiler.common.provenance import atomic_json as atomic_json
+from vibeqc_compiler.common.provenance import canonical_hash as canonical_hash
+from vibeqc_compiler.common.provenance import file_hash as file_hash
+from vibeqc_compiler.common.provenance import find_nvcc as find_nvcc
+from vibeqc_compiler.common.provenance import toolchain_identity as toolchain_identity
 
 PROFILE_SCHEMA = 1
 POLICY = {"precision": "fp64", "spin": ["rhf", "uhf"], "consumers": ["fock", "force"]}
@@ -68,24 +74,6 @@ class DeviceDescriptor(ctypes.Structure):
     ]
 
 
-def canonical_hash(value) -> str:
-    """Hash portable JSON with no non-finite numbers or path-dependent encoding."""
-    return hashlib.sha256(
-        json.dumps(
-            value, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode()
-    ).hexdigest()
-
-
-def file_hash(path: Path) -> str:
-    """Stream binary hashes without retaining a complete CUDA library in RAM."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def cache_root() -> Path:
     """Honor XDG_CACHE_HOME and an explicit VIBEQC_PROFILE_CACHE override."""
     if configured := os.environ.get("VIBEQC_PROFILE_CACHE"):
@@ -94,33 +82,6 @@ def cache_root() -> Path:
         Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
         / "vibeqc/profiles"
     )
-
-
-def find_nvcc() -> Path | None:
-    """Find a requested toolkit without guessing a different compiler version."""
-    candidates = [os.environ.get("VIBEQC_NVCC")]
-    if cuda := os.environ.get("CUDA_PATH"):
-        candidates.append(str(Path(cuda) / "bin/nvcc"))
-    candidates.append(shutil.which("nvcc"))
-    for candidate in candidates:
-        if candidate and (resolved := shutil.which(candidate)):
-            return Path(resolved).resolve()
-    return None
-
-
-def toolchain_identity(nvcc: Path) -> dict:
-    """Record the exact compiler/assembler versions that generated the binary."""
-    result = {}
-    for name in ("nvcc", "ptxas"):
-        output = subprocess.run(
-            [str(nvcc.with_name(name)), "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        result[name] = (output.stdout + output.stderr).strip()
-    return result
 
 
 def probe_device(library: ctypes.CDLL, device_id: int = 0) -> dict:
@@ -288,21 +249,6 @@ def verify_library(directory: Path, probe: dict, device_id: int = 0) -> ctypes.C
             "cached native library has incompatible source/ABI/toolkit identity"
         )
     return selected
-
-
-def atomic_json(path: Path, payload: dict) -> None:
-    """Publish a complete file with same-filesystem replacement and fsync."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
 
 
 def install_bundle(

@@ -27,6 +27,7 @@ where = ["python"]
 
 [tool.setuptools.package-data]
 vibeqc = ["data/*.json"]
+"vibeqc_compiler.integral" = ["*.json"]
 
 [tool.coverage.run]
 branch = true

@@ -7,6 +7,14 @@ is not an SCF endpoint and cannot promote public DFT or a production schedule.
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import hashlib
 import platform
@@ -20,21 +28,21 @@ sys.path[:0] = [str(ROOT), str(ROOT / "python")]
 
 import numpy as np
 from vibeqc.profiles import atomic_json, canonical_hash
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.xc import build_program, functional
+from vibeqc_compiler.xc.capabilities import query_capability
+from vibeqc_compiler.xc.cuda import CudaXC, compile_cuda
+from vibeqc_compiler.xc.cuda_emit import XCSchedule, emit_cuda
+from vibeqc_compiler.xc.fixtures import load_fixture
+from vibeqc_compiler.xc.spec import CATALOG
 
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
 from tools.vibeqc_validation.schema import (
     block_error,
     new_evidence,
     outcome,
     validate_evidence,
 )
-from tools.vibeqc_xc import build_program, functional
-from tools.vibeqc_xc.capabilities import query_capability
-from tools.vibeqc_xc.cuda import CudaXC, compile_cuda
-from tools.vibeqc_xc.cuda_emit import XCSchedule, emit_cuda
-from tools.vibeqc_xc.fixtures import load_fixture
-from tools.vibeqc_xc.spec import CATALOG
 
 
 def run(args, name, spin, variant, device):

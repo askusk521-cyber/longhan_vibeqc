@@ -166,7 +166,9 @@ def run_endpoint(
     )
     basis, _ = inspected_basis(case, calculator, systems[0])
     manifest = json.loads(
-        (ROOT / "tools/vibeqc_codegen/production_shell_classes.json").read_text()
+        (
+            ROOT / "python/vibeqc_compiler/integral/production_shell_classes.json"
+        ).read_text()
     )
     kernels = manifest["architectures"]["sm_120"]["kernels"]
     force = tuple(k["shell_class"] for k in kernels if "force" in k["consumers"])

@@ -1,5 +1,13 @@
 """Replay RCCSD A equations and register per-block CG01 numerical evidence."""
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import platform
@@ -7,11 +15,11 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+from vibeqc_compiler.tensor import Program, execute, optimize
 
 from tools.vibeqc_cc import amplitude_layouts, build_program
 from tools.vibeqc_cc.inventory import TERMS
 from tools.vibeqc_cc.oracle import dense_feeds, homogeneous_groups, random_case
-from tools.vibeqc_tensor import Program, execute, optimize
 from tools.vibeqc_validation.schema import (
     block_error,
     canonical_hash,
@@ -75,7 +83,7 @@ def run(output, references):
         )
     source_paths = [
         *sorted((ROOT / "tools/vibeqc_cc").glob("*.py")),
-        *sorted((ROOT / "tools/vibeqc_tensor").glob("*.py")),
+        *sorted((ROOT / "python/vibeqc_compiler/tensor").glob("*.py")),
         ROOT / "tools/validate_cc.py",
         ROOT / "tools/generate_cc_references.py",
     ]

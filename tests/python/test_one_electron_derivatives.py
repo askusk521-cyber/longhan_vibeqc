@@ -9,14 +9,13 @@ from itertools import product
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.one_electron_derivatives import (
+from vibeqc_compiler.integral.one_electron_derivatives import (
     build_one_electron_derivative_ir,
     build_one_electron_derivative_kernel,
     evaluate_one_electron_derivative_primitive,
 )
-from tools.vibeqc_codegen.one_electron_values import evaluate_one_electron_primitive
-from tools.vibeqc_codegen.shell_spec import cartesian_components
+from vibeqc_compiler.integral.one_electron_values import evaluate_one_electron_primitive
+from vibeqc_compiler.integral.shell_spec import cartesian_components
 
 
 @cache
@@ -138,9 +137,10 @@ def test_derivative_contract_keeps_external_center_and_rejects_unsupported_shell
 def test_emitted_derivatives_normalized_raw_and_spherical_blocks(tmp_path):
     """Exercise emitted CSE/geometry/Boys boundaries against independent blocks."""
     pytest.importorskip("pyscf")
-    from tools.vibeqc_codegen.one_electron_derivatives_cuda import (
+    from vibeqc_compiler.integral.one_electron_derivatives_cuda import (
         emit_one_electron_derivatives_cuda,
     )
+
     from tools.vibeqc_validation.one_electron_derivatives import (
         one_electron_derivative_matrix,
     )

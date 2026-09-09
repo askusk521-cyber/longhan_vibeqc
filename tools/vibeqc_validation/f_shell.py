@@ -16,22 +16,25 @@ from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tools.vibeqc_codegen.autotune import schedule_payload
-from tools.vibeqc_codegen.batch_benchmark import parse_ptxas_resources
-from tools.vibeqc_codegen.benchmark import emit_shell_class_resource_cuda
-from tools.vibeqc_codegen.capabilities import build_capability_report
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_codegen.fused_schedule import build_fused_shell_plan
-from tools.vibeqc_codegen.ir import KernelConsumer
-from tools.vibeqc_codegen.ir_serialization import integral_to_payload
-from tools.vibeqc_codegen.production import shell_class_index
-from tools.vibeqc_codegen.shell_spec import FUSED_SHELL_SPEC_BY_NAME, FUSED_SHELL_SPECS
+from vibeqc_compiler.integral.autotune import schedule_payload
+from vibeqc_compiler.integral.batch_benchmark import parse_ptxas_resources
+from vibeqc_compiler.integral.benchmark import emit_shell_class_resource_cuda
+from vibeqc_compiler.integral.capabilities import build_capability_report
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.integral.fused_schedule import build_fused_shell_plan
+from vibeqc_compiler.integral.ir import KernelConsumer
+from vibeqc_compiler.integral.ir_serialization import integral_to_payload
+from vibeqc_compiler.integral.production import shell_class_index
+from vibeqc_compiler.integral.shell_spec import (
+    FUSED_SHELL_SPEC_BY_NAME,
+    FUSED_SHELL_SPECS,
+)
 
 from .schema import canonical_hash, file_hash, outcome
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "tools/vibeqc_codegen/production_shell_classes.json"
+MANIFEST = ROOT / "python/vibeqc_compiler/integral/production_shell_classes.json"
 F_SHELL_CLASSES = tuple(spec.name for spec in FUSED_SHELL_SPECS if 3 in spec.angular)
 SMOKE_CLASSES = ("fsss", "fsps", "fpps", "fdfd", "ffff")
 CONSUMERS = (KernelConsumer.FOCK, KernelConsumer.FORCE)

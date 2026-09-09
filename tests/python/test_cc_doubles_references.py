@@ -4,11 +4,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from vibeqc_compiler.tensor import execute
 
 from tools.validate_cc import load_references
 from tools.vibeqc_cc.doubles import build_ccsd_program
 from tools.vibeqc_cc.oracle import dense_feeds
-from tools.vibeqc_tensor import execute
 
 DATA = Path(__file__).resolve().parents[1] / "reference_data/cc/rccsd-b.json"
 
@@ -52,6 +52,8 @@ def test_full_evidence_fixes_oracle_and_execution_identity(tmp_path):
         assert settings["reference_file_sha256"] == file_hash(DATA)
         assert settings["reference_cases_hash"] == load_references(DATA)["cases_hash"]
         assert settings["upstream"]["version"] == "2.14.0"
-        assert "tools/vibeqc_tensor/interpreter.py" in settings["source_files"]
-        assert "tools/vibeqc_tensor/optimize.py" in settings["source_files"]
+        assert (
+            "python/vibeqc_compiler/tensor/interpreter.py" in settings["source_files"]
+        )
+        assert "python/vibeqc_compiler/tensor/optimize.py" in settings["source_files"]
         assert isinstance(settings["dirty"], bool)

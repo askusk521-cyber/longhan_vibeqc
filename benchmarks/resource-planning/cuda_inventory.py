@@ -4,6 +4,14 @@ Run inside a Slurm GPU allocation. This checks scoped owned capacities and
 scientific results; it does not interpret device free memory as owned usage.
 """
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import ctypes
 import json
@@ -23,10 +31,9 @@ from vibeqc import (
 )
 from vibeqc.autotune import source_identity
 from vibeqc.profiles import file_hash, find_nvcc
-
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Program,
@@ -35,7 +42,7 @@ from tools.vibeqc_tensor import (
     input_tensor,
     reduce_sum,
 )
-from tools.vibeqc_tensor.resources import tensor_resource_choices
+from vibeqc_compiler.tensor.resources import tensor_resource_choices
 
 H2 = [(1, (0, 0, -0.7)), (1, (0, 0, 0.7))]
 WATER = [(8, (0, 0, 0)), (1, (1.43, 0, 1.11)), (1, (-1.43, 0, 1.11))]

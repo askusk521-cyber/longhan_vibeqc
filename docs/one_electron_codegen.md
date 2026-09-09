@@ -30,7 +30,7 @@ through the existing analytic/handwritten implementation.
 
 ## Scientific and execution boundaries
 
-`tools/vibeqc_codegen/one_electron_values.py` builds traceable, pruned Hermite
+`python/vibeqc_compiler/integral/one_electron_values.py` builds traceable, pruned Hermite
 DAGs from `IntegralIR`. It includes Gaussian decay and radial prefactors.
 Kinetic raising can reach internal ket powers of five without widening the
 public f-shell dimensions. Attraction carries an independent nuclear center

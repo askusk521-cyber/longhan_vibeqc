@@ -1,12 +1,20 @@
 """Emit the shared arbitrary-weight primitive used by the native psss candidate."""
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.vibeqc_codegen.weighted_eri_cuda import emit_psss_weighted_header
+from vibeqc_compiler.integral.weighted_eri_cuda import emit_psss_weighted_header
 
 
 def main():
