@@ -39,8 +39,8 @@ DF derivative reuses the generated external-weight service and its full
 spectrally truncated metric response, accepting signed coefficients. It
 requires symmetric densities; all raw providers accept nonsymmetric inputs.
 
-Validation includes 14 CPU native suites, through-f CUDA direct comparisons,
-s/p derivatives, independent DF device layouts and source/result failure
+Validation includes 15 CPU native suites, through-f CUDA direct comparisons
+and signed d/f responses, independent DF device layouts and source/result failure
 cases. The composition suite checks every exact/DF/absent pair, both spins,
 signed derivatives, resident/source-backed DF storage, distinct batch items,
 and SCF/replay/changed-geometry endpoints. Exact run logs and build provenance
@@ -61,8 +61,15 @@ native unit J and absent K to the executable semilocal XC integrator; LDA and
 PBE retain independent fixed-density fixture and energy-variation checks.
 See [the public contract](fock_build.md) for ownership and output semantics.
 
-Remaining: matched endpoint overhead evidence. The sections below preserve the
-baseline audit; they describe the coupling before these implementation changes.
+The [production evidence](../benchmarks/results/fock-strategies/README.md)
+compares 40 complete endpoints per backend against the audit baseline. Energies
+and raw matrices are unchanged; maximum force differences are below 1e-14.
+Complete endpoint median ratios are 1.0077 on CPU and 1.0028 on CUDA. The
+retained raw/provider and alignment experiments explain and resolve a CPU DF
+code-layout regression without changing its arithmetic.
+
+The sections below preserve the baseline audit; they describe the coupling
+before these implementation changes.
 
 ## Existing mathematical contract
 
@@ -124,7 +131,7 @@ Fock-only iteration mode, not a general raw independent J/K provider interface.
 The diagnostic mode is not an interchangeable production provider and cannot
 be substituted for an independently validated raw consumer.
 
-## Remaining acceptance work
+## Acceptance work identified by the baseline audit
 
 1. Provide typed independent provider execution and coefficient-aware
    assembly, retaining the established fused path for standard HF requests.

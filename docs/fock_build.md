@@ -213,7 +213,7 @@ Source-backed DF plans regenerate bounded tiles; resident/host-streamed DF
 plans use the same typed binding. CPU ragged fleets accept explicit resolved independent requests
 and retain per-item failure isolation and warm-state ownership.
 
-## Validation and remaining issue scope
+## Validation and scope
 
 `vibeqc_fock_build_tests` uses independent pinned two-AO J/K values, distinct
 alpha/beta densities, nonsymmetric densities, and non-unit coefficients. It
@@ -240,9 +240,13 @@ for both public representations and both independently prepared batch items.
 failure, identity, source lifetime, SCF/replay/force consistency and semilocal XC
 composition. `vibeqc_fock_api_tests` exercises the public C lifecycle after
 context/system destruction and is also run with CUDA under the scheduler.
-Final end-to-end overhead evidence remains before completing #202.
-Performance conclusions require matched, synchronized endpoint measurements
-on explicitly identified hardware. No complete DFT SCF method is advertised.
+The [retained production comparison](../benchmarks/results/fock-strategies/README.md)
+contains matched, synchronized CPU/CUDA endpoints, raw samples, quantitative
+errors and hardware/build provenance. Complete endpoint medians changed by
++0.77% on CPU and +0.28% on CUDA; all energies and raw J/K matrices are
+unchanged, with complete force differences below 1e-14 Hartree/bohr.
+This is an architecture non-regression study, not a speedup promotion.
+No complete DFT SCF method is advertised.
 
 `tools/benchmark_fock_strategies.py` runs one worker per revision/backend
 against production Release builds with `VIBEQC_CUDA_FAST_COMPILE=OFF`. It
@@ -256,7 +260,7 @@ compared through complete fused HF endpoints instead.
 
 ```bash
 srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
-  --time=00:15:00 python tools/benchmark_fock_strategies.py \
+  --time=00:35:00 python tools/benchmark_fock_strategies.py \
   --baseline /path/to/3da5841-worktree --head "$PWD" \
   --build-relative .artifacts/overhead-cuda-build \
   --output .artifacts/fock-strategy-overhead
@@ -265,3 +269,8 @@ srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
 The runner never publishes its artifact directory or changes a production
 selector. Accepted evidence is selected through the repository evidence policy
 after accuracy and overhead review.
+Optional `--case`, `--spin`, `--approximation` and `--endpoint` filters repeat
+a selected endpoint with its normal setup/warmup. The retained CPU bundle
+includes an alternating-order focused reproducer and the code-layout diagnosis
+that led to the local DF function alignment hint. Python plan identities use
+native-normalized controls and device indices, including accepted NumPy scalars.
