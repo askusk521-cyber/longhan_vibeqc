@@ -71,6 +71,9 @@ def test_independent_fixed_density_energy_variation_and_response(spin, j, k):
         assert plus.identity != minus.identity
         with pytest.raises(ValueError):
             result.fock.setflags(write=True)
+        copied = result.diagnostics
+        copied["resolved"]["coulomb"]["coefficient"] = 93.0
+        assert result.diagnostics == diag
         # The native source owns its scientific data independently of NativeAO.
         basis.close()
         np.testing.assert_allclose(plan.evaluate(d).fock, result.fock, atol=1e-11)
@@ -203,6 +206,7 @@ def test_public_scf_force_variation_replay_and_legacy_equivalence(spin, j, k):
         full = plan.solve(initial_density=first.density, **controls)
         assert full.initial_density_used and not first.initial_density_used
         assert full.fock_builds >= full.iterations
+        assert full.diagnostics == plan.diagnostics
         assert full.energy == pytest.approx(first.energy, abs=1e-10)
         assert plan.evaluate(full.density).energy == pytest.approx(
             full.energy, abs=1e-10
@@ -305,3 +309,29 @@ def test_canonical_semantics_and_execution_identity():
             ):
                 assert cpu.identity == gpu.identity
                 assert cpu.execution_identity != gpu.execution_identity
+
+
+@pytest.mark.skipif(DEVICE != "cuda", reason="CUDA execution-variant diagnostics")
+def test_one_electron_execution_variant_identity_is_frozen(monkeypatch):
+    with NativeAO(ATOMS) as basis:
+        monkeypatch.setenv("VIBEQC_ONE_ELECTRON_VALUES", "reference")
+        with FockPlan(basis, device="cuda") as original:
+            before = original.diagnostics
+            monkeypatch.setenv("VIBEQC_ONE_ELECTRON_VALUES", "generated")
+            monkeypatch.setenv("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", "shell_warp")
+            with FockPlan(basis, device="cuda") as generated:
+                assert original.identity == generated.identity
+                assert original.execution_identity != generated.execution_identity
+                assert original.diagnostics == before
+                assert (
+                    generated.diagnostics["one_electron_value_backend"]
+                    == "cuda-generated"
+                )
+                assert (
+                    generated.diagnostics["one_electron_value_mapping"] == "shell-warp"
+                )
+                np.testing.assert_allclose(
+                    original.evaluate(np.eye(2)).fock,
+                    generated.evaluate(np.eye(2)).fock,
+                    atol=2e-11,
+                )

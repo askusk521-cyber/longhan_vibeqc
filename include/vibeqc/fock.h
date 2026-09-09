@@ -153,6 +153,8 @@ typedef struct vibeqc_fock_diagnostic {
   double screening_tolerance, metric_relative_threshold;
   int32_t df_streamed;
   char direct_schedule[96], df_value_backend[48], df_value_mapping[32], df_response_mapping[32];
+  char one_electron_value_backend[32], one_electron_value_mapping[32];
+  char one_electron_response_mapping[32];
 } vibeqc_fock_diagnostic;
 VIBEQC_API vibeqc_status vibeqc_fock_plan_diagnostic(const vibeqc_fock_plan* plan,
                                                      vibeqc_fock_diagnostic* diagnostic);

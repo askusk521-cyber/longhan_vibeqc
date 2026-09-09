@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes as ct
 import math
 import threading
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 
@@ -181,6 +182,9 @@ class _Diagnostic(ct.Structure):
         ("df_value_backend", ct.c_char * 48),
         ("df_value_mapping", ct.c_char * 32),
         ("df_response_mapping", ct.c_char * 32),
+        ("one_electron_value_backend", ct.c_char * 32),
+        ("one_electron_value_mapping", ct.c_char * 32),
+        ("one_electron_response_mapping", ct.c_char * 32),
     ]
 
 
@@ -305,8 +309,19 @@ def _pointer(array):
     return array.ctypes.data_as(_DOUBLE) if array is not None else None
 
 
+class _DiagnosticResult:
+    """Keep a detached execution record available after native plan closure."""
+
+    _diagnostic: dict
+
+    @property
+    def diagnostics(self):
+        """Requested/resolved semantics and source provenance, copied on access."""
+        return deepcopy(self._diagnostic)
+
+
 @dataclass(frozen=True, eq=False)
-class FockEvaluation:
+class FockEvaluation(_DiagnosticResult):
     """Fixed-density energies in Hartree, Fock matrices, and optional dE2/dR.
 
     ``gradient`` contains only the two-electron geometric response. It is
@@ -322,6 +337,7 @@ class FockEvaluation:
     exchange: np.ndarray | None
     gradient: np.ndarray | None
     identity: str
+    _diagnostic: dict = field(repr=False)
 
     @property
     def energy(self):
@@ -331,7 +347,7 @@ class FockEvaluation:
 
 
 @dataclass(frozen=True, eq=False)
-class FockScfResult:
+class FockScfResult(_DiagnosticResult):
     """Converged declared J/K energy (Hartree), density and optional forces.
 
     Forces are complete negative geometric derivatives in Hartree/Bohr,
@@ -348,6 +364,7 @@ class FockScfResult:
     initial_density_used: bool
     fock_builds: int
     identity: str
+    _diagnostic: dict = field(repr=False)
 
 
 class FockPlan:
@@ -536,6 +553,9 @@ class FockPlan:
                         "df_value_backend",
                         "df_value_mapping",
                         "df_response_mapping",
+                        "one_electron_value_backend",
+                        "one_electron_value_mapping",
+                        "one_electron_response_mapping",
                     )
                 },
                 "basis_identity": self.basis.identity,
@@ -615,6 +635,7 @@ class FockPlan:
                 immutable(k) if k is not None else None,
                 immutable(gradient) if gradient is not None else None,
                 identity,
+                self.diagnostics,
             )
 
     def solve(
@@ -715,6 +736,7 @@ class FockPlan:
                 bool(out.initial_density_used),
                 out.fock_builds,
                 identity,
+                self.diagnostics,
             )
 
     def close(self):

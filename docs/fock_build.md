@@ -52,6 +52,8 @@ specification, native source hash, backend/device, source mappings and buffer
 policy. Result identity includes both identities and the evaluated density;
 SCF identity also includes seed, convergence controls and output selection.
 These identities do not use or extend the legacy HF checkpoint format.
+Both result classes retain detached `diagnostics` after plan closure; the
+property returns a copy so caller edits cannot change recorded provenance.
 
 `diagnostics` distinguishes the resolver's preferred standard-HF schedule from
 the actual independent plan's source schedule. On CUDA, the public plan uses
@@ -238,3 +240,25 @@ context/system destruction and is also run with CUDA under the scheduler.
 Final end-to-end overhead evidence remains before completing #202.
 Performance conclusions require matched, synchronized endpoint measurements
 on explicitly identified hardware. No complete DFT SCF method is advertised.
+
+`tools/benchmark_fock_strategies.py` runs one worker per revision/backend
+against production Release builds with `VIBEQC_CUDA_FAST_COMPILE=OFF`. It
+records fixed-density direct CPU and DF CPU/CUDA matrices, complete RHF/UHF
+SCF/forces, warm replay, changed geometry and four-item batch timings, with
+all raw samples and matched-approximation numerical gates. The standalone
+`benchmarks/fock_dispatch_probe.cpp` compiles against either revision and
+compares the old contraction entry with the new provider boundary. Baseline
+CUDA has no independent direct raw API, so its standard direct route is
+compared through complete fused HF endpoints instead.
+
+```bash
+srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
+  --time=00:15:00 python tools/benchmark_fock_strategies.py \
+  --baseline /path/to/3da5841-worktree --head "$PWD" \
+  --build-relative .artifacts/overhead-cuda-build \
+  --output .artifacts/fock-strategy-overhead
+```
+
+The runner never publishes its artifact directory or changes a production
+selector. Accepted evidence is selected through the repository evidence policy
+after accuracy and overhead review.
