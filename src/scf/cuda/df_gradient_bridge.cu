@@ -207,7 +207,7 @@ vibeqc_status execute_cuda_df_gradient(int device, const core::System& orbital,
   } catch (const CudaFailure& error) {
     detail = std::string("generated DF CUDA failure: ") + cudaGetErrorString(error.status);
     return error.status == cudaErrorMemoryAllocation ? VIBEQC_STATUS_OUT_OF_MEMORY
-                                                     : VIBEQC_STATUS_NUMERICAL_FAILURE;
+                                                     : VIBEQC_STATUS_CUDA_ERROR;
   } catch (const std::bad_alloc&) {
     detail = "generated DF gradient exceeded its allocation budget";
     return VIBEQC_STATUS_OUT_OF_MEMORY;

@@ -11,8 +11,12 @@ if [[ -n "${CUDA_HOME:-}" ]]; then
   export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 fi
 PYTHON=${PYTHON:-python}
-archive143=${ARCHIVE143:-benchmarks/results/df-derivatives-rtx5090/integration}
-mkdir -p -- "$archive143"
+# Fail if a run directory already exists; archived evidence is never overwritten.
+archive143=${OUTPUT_DIR:-${TMPDIR:-/tmp}/vibeqc-df-${SLURM_JOB_ID}-validation}
+mkdir -p -- "$(dirname -- "$archive143")"
+mkdir -- "$archive143"
+printf 'OUTPUT_DIR=%s\n' "$archive143"
+"$PYTHON" benchmarks/df_run_provenance.py "$archive143"
 
 export VIBEQC_ONE_ELECTRON_DERIVATIVES=generated VIBEQC_DF_DERIVATIVES=generated
 ctest --test-dir build-cuda --output-on-failure

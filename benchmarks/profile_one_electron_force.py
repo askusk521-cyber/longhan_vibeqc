@@ -62,6 +62,8 @@ def main() -> None:
         if not args.fitted:
             parser.error("--df-response requires --fitted")
         os.environ["VIBEQC_DF_DERIVATIVES"] = args.df_response
+    else:
+        os.environ.pop("VIBEQC_DF_DERIVATIVES", None)
 
     if args.mode == "scalar":
         os.environ[_SCALAR_ENVIRONMENT] = "1"

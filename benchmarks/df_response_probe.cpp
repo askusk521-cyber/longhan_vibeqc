@@ -36,6 +36,8 @@ int main(int argc, char** argv) {
         (mode != "generated_source" && mode != "generated_resident" && mode != "reference_source" &&
          mode != "reference_resident"))
       throw std::invalid_argument("unsupported probe case, mode, spin or repeats");
+    if (generated && !budget)
+      throw std::invalid_argument("generated response requires a positive byte budget");
     core::System orbital;
     orbital.atoms = {{1, {0.0, 0.0, -0.7}}, {1, {0.1, 0.2, 0.7}}};
     orbital.shells = name == "sp8" ? std::vector<core::Shell>{{0, 0, {{1.2, 1.0}}},

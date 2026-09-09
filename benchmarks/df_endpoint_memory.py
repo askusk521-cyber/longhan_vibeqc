@@ -118,12 +118,13 @@ def main():
             max(np.max(np.abs(item.forces)) for item in changed.items)
         ),
     }
+    # A failed resource gate must retain the measured evidence for diagnosis.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     if payload["process_peak_host_bytes"] > 2 << 30:
         raise RuntimeError(
             "observed process host high-water exceeded the 2 GiB benchmark limit"
         )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(
         json.dumps(
             {

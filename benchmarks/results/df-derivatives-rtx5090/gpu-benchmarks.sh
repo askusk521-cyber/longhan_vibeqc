@@ -11,7 +11,12 @@ if [[ -n "${CUDA_HOME:-}" ]]; then
   export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 fi
 PYTHON=${PYTHON:-python}
-archive143=benchmarks/results/df-derivatives-rtx5090
+# Fail if a run directory already exists; archived evidence is never overwritten.
+archive143=${OUTPUT_DIR:-${TMPDIR:-/tmp}/vibeqc-df-${SLURM_JOB_ID}-benchmarks}
+mkdir -p -- "$(dirname -- "$archive143")"
+mkdir -- "$archive143"
+printf 'OUTPUT_DIR=%s\n' "$archive143"
+"$PYTHON" benchmarks/df_run_provenance.py "$archive143"
 
 for budget143 in 0 1048576 4194304; do
  "$PYTHON" benchmarks/one_electron_values_gate.py --df-derivatives --fitted --case sp8 --batch 3 --df-budget "$budget143" --observe-resources --output "$archive143/endpoint-sp8-b3-$budget143.json"

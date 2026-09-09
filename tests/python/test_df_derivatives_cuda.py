@@ -209,9 +209,11 @@ def test_complete_hf_replay_two_budgets_and_force_components(
 def test_generated_df_hf_matches_pyscf_and_two_energy_difference_steps(
     monkeypatch, method, charge, multiplicity
 ):
+    assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
+    # This tier is explicitly enabled in an allocated GPU job. Missing oracle
+    # dependencies must fail the requested numerical gate instead of skipping it.
     from pyscf import gto, scf
 
-    assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
     atoms = [("H", (0, 0, -0.7)), ("H", (0.1, 0.2, 0.7))]
     mol = gto.M(
         atom=atoms,

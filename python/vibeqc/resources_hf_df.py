@@ -35,7 +35,8 @@ def cuda_df_candidates(
         key = orbital["nbf"], state["nalpha"], state["nbeta"], orbital["primitives"]
         buckets.setdefault(key, []).append(item)
     groups = [buckets[key] for key in sorted(buckets)]
-    generated_response = os.environ.get("VIBEQC_DF_DERIVATIVES") == "generated"
+    # Native selected() accepts "1" as an alias for the named candidate.
+    generated_response = os.environ.get("VIBEQC_DF_DERIVATIVES") in ("1", "generated")
     rows = []
     for group in groups:
         first = group[0]

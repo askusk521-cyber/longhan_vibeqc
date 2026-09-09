@@ -33,7 +33,7 @@ def test_physical_value_dag_derivatives_match_libcint(angular):
     count = len(angular)
     fixture = make_df_derivative_fixture(angular, primitive_lengths=(1,) * count)
     family = "coulomb_metric" if count == 2 else "three_center_eri"
-    choices = list(product(*(cartesian_components(l) for l in angular)))
+    choices = list(product(*(cartesian_components(momentum) for momentum in angular)))
     middle = len(choices) // 2
     kernel = build_df_derivative_kernel(
         build_df_derivative_ir(family, angular), choices[middle]
@@ -57,7 +57,7 @@ def test_physical_value_dag_derivatives_match_libcint(angular):
 def test_independent_center_finite_differences_and_auxiliary_motion(angular):
     count = len(angular)
     family = "coulomb_metric" if count == 2 else "three_center_eri"
-    components = tuple(cartesian_components(l)[-1] for l in angular)
+    components = tuple(cartesian_components(momentum)[-1] for momentum in angular)
     kernel = build_df_derivative_kernel(
         build_df_derivative_ir(family, angular), components
     )

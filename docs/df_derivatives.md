@@ -80,6 +80,12 @@ spin-density `(0,1/2)` contributions. The adapter retains only a bounded
 auxiliary block of raw AO matrices and response weights. Its strided callback
 maps weight k to `offset+k*stride`, avoiding a complete transpose into dense
 A-weight storage. Callback uploads finish before these host buffers are reused.
+Partial auxiliary blocks deliberately reread Q slices and recompute exchange
+responses. Retaining all such responses can exceed the same hard budget;
+secondary blocking or an explicitly charged optional cache remains future
+performance work. The generated adapter applies the metric reverse map once
+per HF response. The previous coordinate-wise oracle still repeats the metric
+eigendecomposition; reusing it is a separate reference-path optimization.
 
 The metric weight is the self-adjoint spectral Frechet response of the
 truncated pseudoinverse applied to `bar_(M+)`. In an eigenbasis its divided
@@ -161,7 +167,12 @@ source and binary hashes, logs and XML reports are recorded under
 
 Reproduction scripts resolve their checkout relative to their own location.
 Set `PYTHON` and optionally `CUDA_HOME`, `NSYS`, `CXX`, and `VIBEQC_LIBRARY` for
-the local environment. Run every hardware script through a finite allocation:
+the local environment. Each hardware script creates a fresh directory under
+`/tmp`, named by Slurm job and script, and writes that run's source/binary
+provenance there. Set `OUTPUT_DIR` to choose a different new directory;
+existing directories are rejected so historical records cannot be overwritten.
+The profile runner also regenerates its summary from that run's trace databases.
+Run every hardware script through a finite allocation:
 
 ```bash
 srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \

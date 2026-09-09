@@ -91,23 +91,39 @@ def build_df_derivative_kernel(integral, components):
             }
         )
 
-    @cache
-    def clone(identifier):
+    # High-angular-momentum values contain deep addition chains. Preserve the
+    # recursive clone's dependency order with an explicit stack so Python 3.11
+    # and coverage tracing do not exhaust the interpreter recursion limit.
+    cloned = {}
+    pending = [(kernel.value.identifier, False)]
+    while pending:
+        identifier, ready = pending.pop()
+        if identifier in cloned:
+            continue
         node = kernel.graph.nodes[identifier]
+        if node.arguments and not ready:
+            pending.append((identifier, True))
+            pending.extend((child, False) for child in reversed(node.arguments))
+            continue
         if node.operation == "variable":
-            return replacements.get(node.payload, g.variable(node.payload))
-        if node.operation == "constant":
-            return g.clone_constant(node)
-        return g._intern(
-            Node(
-                node.operation,
-                tuple(clone(a).identifier for a in node.arguments),
-                node.payload,
+            cloned[identifier] = replacements.get(
+                node.payload, g.variable(node.payload)
             )
-        )
+        elif node.operation == "constant":
+            cloned[identifier] = g.clone_constant(node)
+        else:
+            cloned[identifier] = g._intern(
+                Node(
+                    node.operation,
+                    tuple(cloned[a].identifier for a in node.arguments),
+                    node.payload,
+                )
+            )
 
     value = (
-        (2 * math.pi**2.5) / (p * q * (p + q).pow(0.5)) * clone(kernel.value.identifier)
+        (2 * math.pi**2.5)
+        / (p * q * (p + q).pow(0.5))
+        * cloned[kernel.value.identifier]
     )
     if count == 3:
         decay_argument = (
