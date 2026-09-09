@@ -168,6 +168,9 @@ vibeqc_status execute_cuda_df_gradient(int device, const core::System& orbital,
     const auto* r = arena.upload(positions);
     auto* output = static_cast<double*>(arena.allocate(result.size() * sizeof(double)));
     arena.stats.host_bytes += result.capacity() * sizeof(double);
+    // Validate retained capacities as well as the geometric preflight bound;
+    // vector growth policies must never permit a successful over-budget call.
+    if (arena.stats.host_bytes > maximum_bytes) throw std::bad_alloc();
     check(cudaMemsetAsync(output, 0, result.size() * sizeof(double), arena.stream));
     const auto available = (maximum_bytes - arena.stats.device_bytes) / sizeof(double);
     const auto requested = maximum_tile_elements ? maximum_tile_elements : 65536U;

@@ -32,3 +32,21 @@ for mode143 in reference_resident reference_source generated_resident generated_
   "$probe143/probe" sdf18 "$mode143" "$budget143" "$cap143" rhf 5 > "$archive143/component-sdf18-rhf-$mode143-$budget143.json"
  done
 done
+# Keep all measured records together so the evidence does not overwhelm code
+# review file inventories. Keys retain each original per-command filename.
+"$PYTHON" - "$archive143" <<'PY'
+import json
+import pathlib
+import sys
+
+archive = pathlib.Path(sys.argv[1])
+files = sorted(archive.glob("component-*.json"))
+if len(files) != 24:
+    raise RuntimeError("expected all 24 component records")
+payload = {"schema": "vibeqc.df_response_components", "records": {
+    path.name: json.loads(path.read_text()) for path in files
+}}
+(archive / "components.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+for path in files:
+    path.unlink()
+PY
