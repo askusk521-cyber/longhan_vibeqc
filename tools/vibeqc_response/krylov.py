@@ -596,8 +596,8 @@ class KrylovRecycleSpace:
         n = result.solution.size
         capacity = min(self.max_vectors, n, self.max_bytes // (n * 8))
         replacement = []
-        # Retain the old space first, matching the existing reuse policy. Stop
-        # as soon as capacity is reached; no full candidate matrix is created.
+        # Retain old directions first and stop as soon as capacity is reached;
+        # no full candidate matrix is created.
         candidates = (*self._vectors, result.solution, *result.basis.T)
         for candidate in candidates:
             if len(replacement) == capacity:
