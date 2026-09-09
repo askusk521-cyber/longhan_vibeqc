@@ -1053,6 +1053,51 @@ int main() {
       require_matrix_close(tiled_beta_k, expected_beta_k, 3.0e-11,
                            "AO-pair tiled CUDA beta RI-K differs from the CPU oracle");
 
+      // Independent selection must survive replay across resident, streamed and
+      // AO-pair tiled plans without returning a previous call's unrequested matrix.
+      for (bool j : {false, true})
+        for (bool k : {false, true}) {
+          const vibeqc::scf::JkTermSelection terms{j, k};
+          for (auto* selected_plan : {cuda_plan.get(), tiled_plan.get()}) {
+            std::vector<double> selected_j{123.0}, selected_ka{456.0}, selected_kb{789.0};
+            require(vibeqc::scf::execute_cuda_density_fitting_rhf_jk(
+                        selected_plan, batch_rhf_density, selected_j, selected_ka, cuda_detail,
+                        terms) == VIBEQC_STATUS_SUCCESS,
+                    cuda_detail.c_str());
+            require_matrix_close(selected_j, j ? expected_rhf_j : std::vector<double>{}, 3e-11,
+                                 "selected CUDA RHF J");
+            require_matrix_close(selected_ka, k ? expected_rhf_k : std::vector<double>{}, 3e-11,
+                                 "selected CUDA RHF K");
+            require(vibeqc::scf::execute_cuda_density_fitting_uhf_jk(
+                        selected_plan, batch_alpha_density, batch_beta_density, selected_j,
+                        selected_ka, selected_kb, cuda_detail, terms) == VIBEQC_STATUS_SUCCESS,
+                    cuda_detail.c_str());
+            require_matrix_close(selected_j, j ? expected_uhf_j : std::vector<double>{}, 3e-11,
+                                 "selected CUDA UHF J");
+            require_matrix_close(selected_ka, k ? expected_alpha_k : std::vector<double>{}, 3e-11,
+                                 "selected CUDA UHF alpha K");
+            require_matrix_close(selected_kb, k ? expected_beta_k : std::vector<double>{}, 3e-11,
+                                 "selected CUDA UHF beta K");
+            require(vibeqc::scf::execute_cuda_density_fitting_rhf_jk_item(
+                        selected_plan, 0, rhf_density, selected_j, selected_ka, cuda_detail,
+                        terms) == VIBEQC_STATUS_SUCCESS,
+                    cuda_detail.c_str());
+            require_matrix_close(selected_j, j ? rhf_jk.coulomb : std::vector<double>{}, 3e-11,
+                                 "selected CUDA RHF item J");
+            require_matrix_close(selected_ka, k ? rhf_jk.exchange : std::vector<double>{}, 3e-11,
+                                 "selected CUDA RHF item K");
+          }
+          std::vector<double> selected_j, selected_k;
+          require(vibeqc::scf::execute_cuda_density_fitting_rhf_jk_item(
+                      resident_plan.get(), 0, rhf_density, selected_j, selected_k, cuda_detail,
+                      terms) == VIBEQC_STATUS_SUCCESS,
+                  cuda_detail.c_str());
+          require_matrix_close(selected_j, j ? rhf_jk.coulomb : std::vector<double>{}, 3e-11,
+                               "selected resident CUDA J");
+          require_matrix_close(selected_k, k ? rhf_jk.exchange : std::vector<double>{}, 3e-11,
+                               "selected resident CUDA K");
+        }
+
       // Source-backed budget replay regenerates transformed tiles directly on
       // the device instead of retaining the raw three-center tensor on host.
       vibeqc::scf::CudaDensityFittingIntegralSource* source = nullptr;

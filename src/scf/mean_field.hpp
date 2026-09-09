@@ -20,6 +20,23 @@ struct CudaDensityFittingJkPlan;
 void validate_hf_warm_density(const core::System& source, vibeqc_method method,
                               const std::vector<double>& density);
 
+/** Execute the existing CPU SCF solver with an explicitly resolved independent
+ * J/K model. Iterations, final energy and analytic forces share one provider
+ * binding. A null auxiliary pointer uses the orbital basis for requested DF
+ * terms. This does not add XC or advertise a complete DFT method.
+ */
+ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* auxiliary,
+                                const ScfOptions& options,
+                                const std::vector<double>* initial_density = nullptr);
+
+/** Method-neutral single-item dispatch. CPU independent providers and existing
+ * CUDA fused HF schedules share this boundary; callers supply semantics through
+ * options.resolved_fock_build instead of branching on a combined DF enum.
+ */
+ScfResult run_fock_strategy(const core::System& system, const core::System* auxiliary,
+                            const ScfOptions& options, int device_id,
+                            const std::vector<double>* initial_density = nullptr);
+
 /** Run closed-shell RHF and assemble its variational analytic gradient. */
 ScfResult run_rhf(const core::System& system, const ScfOptions& options,
                   const std::vector<double>* initial_density = nullptr);

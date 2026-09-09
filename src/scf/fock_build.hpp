@@ -12,8 +12,9 @@ enum class FockSpin { Restricted, Unrestricted };
 enum class FockOperator { FullRange, ShortRange, LongRange };
 enum class FockApproximation { Exact, DensityFitted };
 enum class FockBackend { Cpu, Cuda };
-enum class FockSchedule { CpuReference, CudaFused, LegacyDensityFitting };
+enum class FockSchedule { CpuReference, CudaFused, LegacyDensityFitting, CpuIndependent };
 enum class FockPrecision { Float64 };
+enum class FockMatrixLayout { RowMajor, ColumnMajor };
 
 struct FockTermSpec {
   bool present{true};
@@ -22,6 +23,20 @@ struct FockTermSpec {
   double omega{};
   FockApproximation approximation{FockApproximation::Exact};
   bool operator==(const FockTermSpec&) const = default;
+};
+
+/** Raw-output selection, independent of the coefficients used by assembly.
+ * A requested term with coefficient zero still produces its raw matrix.
+ */
+struct JkTermSelection {
+  bool coulomb{true};
+  bool exchange{true};
+};
+
+/** Signed Fock coefficients. Quadratic energies carry another factor 1/2. */
+struct JkCoefficients {
+  double coulomb{1.0};
+  double exchange{-0.5};
 };
 
 /** Mathematical request. RHF density includes double occupation; UHF has two
@@ -75,6 +90,8 @@ FockBuildSpec make_hf_fock_spec(FockSpin spin,
 ResolvedFockBuild resolve_fock_build(FockBuildSpec spec, FockBackend backend,
                                      double screening_tolerance = 1.0e-12,
                                      double metric_relative_threshold = 1.0e-10);
+/** Reject forged/noncanonical execution state before calling any provider. */
+void validate_resolved_fock_build(const ResolvedFockBuild& strategy);
 
 /** Guard for legacy HF solver entry points, including the force route.
  * Requires the standard complete HF coefficients and first derivatives.
@@ -105,6 +122,9 @@ DirectJkMatrices build_exact_direct_jk(const ResolvedFockBuild& strategy, std::s
                                        std::span<const double> beta = {});
 FockMatrices assemble_fock(const ResolvedFockBuild& strategy, std::span<const double> hcore,
                            const DirectJkMatrices& jk);
+/** Two-electron energy at fixed density, with the same weights as Fock assembly. */
+double contract_fock_energy(const ResolvedFockBuild& strategy, const DirectJkMatrices& jk,
+                            std::span<const double> density, std::span<const double> beta = {});
 /** Fixed-density two-electron energy derivative, excluding one-electron, Pulay,
  * and nuclear-repulsion terms. API forces are the negative of the total gradient.
  */

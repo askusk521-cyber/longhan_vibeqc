@@ -128,7 +128,8 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled(
 
 vibeqc_status execute_cuda_density_fitting_rhf_jk(CudaDensityFittingJkPlan*,
                                                   const std::vector<double>&, std::vector<double>&,
-                                                  std::vector<double>&, std::string& detail) {
+                                                  std::vector<double>&, std::string& detail,
+                                                  JkTermSelection) {
   return unavailable(nullptr, detail);
 }
 
@@ -136,14 +137,14 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk(CudaDensityFittingJkPlan*,
                                                   const std::vector<double>&,
                                                   const std::vector<double>&, std::vector<double>&,
                                                   std::vector<double>&, std::vector<double>&,
-                                                  std::string& detail) {
+                                                  std::string& detail, JkTermSelection) {
   return unavailable(nullptr, detail);
 }
 
 vibeqc_status execute_cuda_density_fitting_rhf_jk_item(CudaDensityFittingJkPlan*, std::size_t,
                                                        const std::vector<double>&,
                                                        std::vector<double>&, std::vector<double>&,
-                                                       std::string& detail) {
+                                                       std::string& detail, JkTermSelection) {
   return unavailable(nullptr, detail);
 }
 
@@ -151,18 +152,21 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk_item(CudaDensityFittingJkPlan*
                                                        const std::vector<double>&,
                                                        const std::vector<double>&,
                                                        std::vector<double>&, std::vector<double>&,
-                                                       std::vector<double>&, std::string& detail) {
+                                                       std::vector<double>&, std::string& detail,
+                                                       JkTermSelection) {
   return unavailable(nullptr, detail);
 }
 
 vibeqc_status execute_cuda_density_fitting_rhf_jk_device(CudaDensityFittingJkPlan*, const double*,
-                                                         double*, double*, std::string& detail) {
+                                                         double*, double*, std::string& detail,
+                                                         JkTermSelection, FockMatrixLayout) {
   return unavailable(nullptr, detail);
 }
 
 vibeqc_status execute_cuda_density_fitting_uhf_jk_device(CudaDensityFittingJkPlan*, const double*,
                                                          const double*, double*, double*, double*,
-                                                         std::string& detail) {
+                                                         std::string& detail, JkTermSelection,
+                                                         FockMatrixLayout) {
   return unavailable(nullptr, detail);
 }
 

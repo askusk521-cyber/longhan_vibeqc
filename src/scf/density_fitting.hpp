@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "integrals/s_integrals.hpp"
+#include "scf/fock_build.hpp"
 
 namespace vibeqc::scf {
 
@@ -83,10 +84,12 @@ struct DensityFittingRhfJk {
  *
  * `density` uses VibeQC's existing closed-shell convention and includes the
  * factor of two for doubly occupied orbitals. The caller therefore assembles
- * the two-electron Fock contribution as J - 0.5 K.
+ * the standard HF contribution as J - 0.5 K. Unselected raw outputs are empty
+ * and their contractions are skipped, including exchange scratch allocation.
  */
 [[nodiscard]] DensityFittingRhfJk build_density_fitting_rhf_jk(
-    const DensityFittingThreeCenter& three_center, const std::vector<double>& density);
+    const DensityFittingThreeCenter& three_center, const std::vector<double>& density,
+    JkTermSelection terms = {});
 
 /** Shared Coulomb and matching-spin exchange matrices for UHF. */
 struct DensityFittingUhfJk {
@@ -126,10 +129,11 @@ struct DensityFittingUhfGradient {
  * The density uses the same closed-shell, doubly occupied convention as
  * `build_density_fitting_rhf_jk`.  `relative_threshold` is applied to every
  * metric before forming its pseudoinverse, matching the value contraction.
+ * Coefficients are signed Fock weights; zero skips that response contraction.
  */
 [[nodiscard]] DensityFittingRhfGradient build_density_fitting_rhf_gradient(
     const integrals::DensityFittingIntegralData& integrals, const std::vector<double>& density,
-    double relative_threshold = 1.0e-10);
+    double relative_threshold = 1.0e-10, JkCoefficients coefficients = {});
 
 /**
  * Build the UHF DF two-electron analytic gradient from raw integral data.
@@ -140,7 +144,7 @@ struct DensityFittingUhfGradient {
 [[nodiscard]] DensityFittingUhfGradient build_density_fitting_uhf_gradient(
     const integrals::DensityFittingIntegralData& integrals,
     const std::vector<double>& alpha_density, const std::vector<double>& beta_density,
-    double relative_threshold = 1.0e-10);
+    double relative_threshold = 1.0e-10, JkCoefficients coefficients = {1.0, -1.0});
 
 /**
  * Construct the thresholded Moore--Penrose inverse of a Coulomb metric.
@@ -199,7 +203,7 @@ struct DensityFittingUhfGradient {
  */
 [[nodiscard]] DensityFittingUhfJk build_density_fitting_uhf_jk(
     const DensityFittingThreeCenter& three_center, const std::vector<double>& alpha_density,
-    const std::vector<double>& beta_density);
+    const std::vector<double>& beta_density, JkTermSelection terms = {});
 
 /** Deterministic memory-bounded tile policy for future RI-J/K contractions. */
 struct DensityFittingTilePlan {

@@ -1,9 +1,10 @@
 # Shared Fock construction contract
 
-The internal C++ boundary in `src/scf/fock_build.hpp` is the first HF-direct
-slice of issue #202. It separates a method's mathematical J/K request from
-its resolved execution strategy. The public C/Python descriptors and their
-legacy density-fitting defaults remain unchanged.
+The internal C++ boundaries in `src/scf/fock_build.hpp` and
+`src/scf/fock_provider.hpp` separate a mathematical J/K request from its
+resolved execution strategy and prepared integral sources. CPU providers can
+be selected independently; the public C/Python method descriptors retain their
+legacy density-fitting defaults while the rest of #202 is integrated.
 
 ## Densities, operators, and coefficients
 
@@ -22,14 +23,14 @@ silently symmetrizing them. ERIs use chemists' `(ij|kl)` ordering:
 - Unrestricted densities have unit occupation:
   `F_alpha = H + J[D_alpha+D_beta] - K[D_alpha]`, and similarly for beta.
 
-`build_exact_direct_jk` returns unscaled J/K matrices.
+`build_exact_direct_jk` and `CpuFockPlanView::build` return unscaled J/K matrices.
 `assemble_fock` applies the requested coefficients exactly once. An absent
 term has no raw output allocation. Presence and a zero coefficient are
 different requests: a present zero-coefficient term still requests its raw
 matrix.
 
-For a fixed density, `contract_exact_direct_energy_derivative` uses the same
-resolved terms and coefficients on derivative ERIs:
+`contract_fock_energy` and `CpuFockPlanView::energy_derivative` use the same
+resolved terms and coefficients for energy and fixed-density derivatives:
 
 ```text
 RHF: dE_2e = 0.5 D : (c_J dJ + c_K dK)
@@ -50,17 +51,21 @@ operator executable.
 | Consumer | Executable scope |
 | --- | --- |
 | Exact CPU raw J/K | Full range, RHF/UHF density conventions, independently present J/K, arbitrary finite coefficients, values and first derivatives |
-| Existing CPU HF solver | Complete standard RHF/UHF pair and first derivatives |
+| CPU DF raw J/K | Full range, both spin conventions, independently present J/K and finite coefficients |
+| Shared CPU SCF solver | All exact/DF pairings, independent terms and coefficients, matching first derivatives |
 | CUDA fused direct HF | Complete standard RHF/UHF pair and first derivatives; existing fused kernels, device storage, streams, and graphs |
-| Legacy CPU/CUDA DF adapter | Existing standard HF DF pair, using existing DF implementations |
-| SR/LR, mixed exact/DF terms, independent CUDA J-only/K-only | Rejected; follow-up integrations required |
+| CUDA DF raw services | Independently selected J/K, resident/streamed/tiled/batch/item/device-pointer execution |
+| CUDA DF SCF adapter | Existing standard HF DF pair, using existing DF implementations |
+| SR/LR and nonstandard resolved CUDA SCF strategies | Rejected; follow-up integrations required |
 
 The CPU reference consumes already materialized four-center integral and
 derivative tensors. This refactor does not make that algorithm bounded or
 on-demand. CUDA keeps its existing persistent, quartet, and bounded execution
 paths; independent mathematical terms do not require separate GPU launches.
 
-`FockProviderCapabilities` reports these implementation limits. It does not
+`FockProviderCapabilities` reports limits of complete resolved strategies; the
+CUDA DF raw-service extension alone does not claim generalized CUDA forces or
+SCF dispatch. The query does not
 replace the existing system/basis preflight or probe whether a CUDA device is
 available. Existing basis limits and backend initialization still apply.
 
@@ -71,6 +76,15 @@ it in `ScfOptions::resolved_fock_build`. CPU iteration, final-density rebuilds,
 and analytic two-electron forces consume the same immutable resolved value.
 CUDA direct bucket compatibility also includes this value.
 
+`CpuFockProviderView` borrows a prepared exact or fitted integral owner.
+`CpuFockPlanView` binds one source to J and one to K, verifies both providers
+before executing either, and invokes a shared source once for a complete pair.
+The views never own or mutate a geometry cache. Their immutable owners must
+outlive them; changing geometry or the AO/auxiliary representation requires new
+bindings. DF value and response cutoffs must agree with the resolved request.
+The quadratic response retains the full Frechet derivative of the truncated
+metric inverse, including retained/discarded-space mixing.
+
 The mathematical request (`spec`) is distinct from backend/schedule fields.
 Screening, precision, and the DF metric cutoff are explicit resolved fields;
 an unused exact-provider metric cutoff is canonicalized away. Zero screening
@@ -80,19 +94,26 @@ enclosing existing prepared plans and their compatibility checks.
 
 The old DF selector still first chooses the DF approximation, then selects
 its backend. `AUTO` does not authorize changing exact into DF or DF into exact.
-The legacy DF adapter is preserved for compatibility; its presence is not a
-claim that independent/mixed DF providers have been migrated.
+`run_fock_strategy` centralizes single-item dispatch. Legacy CPU entry points
+delegate to the common CPU solver, while existing standard CUDA HF schedules
+remain fused. CPU ragged fleets accept explicit resolved independent requests
+and retain per-item failure isolation and warm-state ownership.
 
 ## Validation and remaining issue scope
 
 `vibeqc_fock_build_tests` uses independent pinned two-AO J/K values, distinct
 alpha/beta densities, nonsymmetric densities, and non-unit coefficients. It
 checks absent terms, derivatives, preflight failures, and resolved identities.
-The existing RHF/UHF, batch, density-fitting, Cartesian, and spherical suites
-exercise the real consumers.
+`vibeqc_fock_provider_tests` adds all exact/DF pairings, independently absent
+terms, a separate dense DF oracle, central differences through a truncated
+metric, molecular SCF/force comparisons, warm replay, changed geometry and
+ragged failure isolation. CUDA DF tests cover independent host and resident
+device outputs against the same-approximation CPU services. The existing
+RHF/UHF, batch, density-fitting, Cartesian, and spherical suites exercise the
+standard method endpoints.
 
-This slice does not complete #202: independent DF selection, broader
-derivative/provider invalidation, and a real DFT consumer remain subsequent
-integration work. A fixed-density raw-J/K fixture does not count as a DFT SCF
-consumer. Performance conclusions require matched, synchronized endpoint
-measurements on explicitly identified hardware.
+This slice does not complete #202: production independent CUDA direct bindings,
+general CUDA derivative dispatch, public independent choices and diagnostics,
+an available XC consumer and final invalidation/overhead evidence remain.
+Performance conclusions require matched, synchronized endpoint measurements
+on explicitly identified hardware. No complete DFT SCF method is advertised.

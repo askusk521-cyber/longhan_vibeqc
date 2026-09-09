@@ -1073,10 +1073,11 @@ vibeqc_status build_exchange(CudaDensityFittingJkPlan& plan, const double* densi
 }
 
 vibeqc_status prepare_outputs(std::size_t elements, std::vector<double>& first,
-                              std::vector<double>& second, std::string& detail) {
+                              std::vector<double>& second, std::string& detail,
+                              JkTermSelection terms) {
   try {
-    first.assign(elements, 0.0);
-    second.assign(elements, 0.0);
+    first.assign(terms.coulomb ? elements : 0, 0.0);
+    second.assign(terms.exchange ? elements : 0, 0.0);
   } catch (const std::bad_alloc&) {
     detail = "host allocation for CUDA DF J/K output failed";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
@@ -2142,14 +2143,15 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk(CudaDensityFittingJkPlan* plan
                                                   const std::vector<double>& density,
                                                   std::vector<double>& coulomb,
                                                   std::vector<double>& exchange,
-                                                  std::string& detail) {
+                                                  std::string& detail, JkTermSelection terms) {
   detail.clear();
   if (!validate_execution_input(plan, density, detail)) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t elements = plan->batch_size * plan->matrix_elements;
-  vibeqc_status status = prepare_outputs(elements, coulomb, exchange, detail);
+  vibeqc_status status = prepare_outputs(elements, coulomb, exchange, detail, terms);
   if (status != VIBEQC_STATUS_SUCCESS) return status;
+  if (!terms.coulomb && !terms.exchange) return VIBEQC_STATUS_SUCCESS;
   cudaError_t cuda_error = cudaSetDevice(plan->device_id);
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "select CUDA DF device", detail);
@@ -2160,14 +2162,17 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk(CudaDensityFittingJkPlan* plan
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "upload RHF CUDA DF density", detail);
   }
-  status = build_coulomb(*plan, plan->primary_density, detail);
-  if (status == VIBEQC_STATUS_SUCCESS) {
+  status =
+      terms.coulomb ? build_coulomb(*plan, plan->primary_density, detail) : VIBEQC_STATUS_SUCCESS;
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
     status = build_exchange(*plan, plan->primary_density, plan->alpha_exchange, detail);
   }
   if (status != VIBEQC_STATUS_SUCCESS) return status;
-  cuda_error =
-      cudaMemcpyAsync(coulomb.data(), plan->coulomb, bytes, cudaMemcpyDeviceToHost, plan->stream);
-  if (cuda_error == cudaSuccess) {
+  if (terms.coulomb) {
+    cuda_error =
+        cudaMemcpyAsync(coulomb.data(), plan->coulomb, bytes, cudaMemcpyDeviceToHost, plan->stream);
+  }
+  if (terms.exchange && cuda_error == cudaSuccess) {
     cuda_error = cudaMemcpyAsync(exchange.data(), plan->alpha_exchange, bytes,
                                  cudaMemcpyDeviceToHost, plan->stream);
   }
@@ -2178,24 +2183,28 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk(CudaDensityFittingJkPlan* plan
                                    : cuda_failure(cuda_error, "finish RHF CUDA DF J/K", detail);
 }
 
-vibeqc_status execute_cuda_density_fitting_uhf_jk(
-    CudaDensityFittingJkPlan* plan, const std::vector<double>& alpha_density,
-    const std::vector<double>& beta_density, std::vector<double>& coulomb,
-    std::vector<double>& alpha_exchange, std::vector<double>& beta_exchange, std::string& detail) {
+vibeqc_status execute_cuda_density_fitting_uhf_jk(CudaDensityFittingJkPlan* plan,
+                                                  const std::vector<double>& alpha_density,
+                                                  const std::vector<double>& beta_density,
+                                                  std::vector<double>& coulomb,
+                                                  std::vector<double>& alpha_exchange,
+                                                  std::vector<double>& beta_exchange,
+                                                  std::string& detail, JkTermSelection terms) {
   detail.clear();
   if (!validate_execution_input(plan, alpha_density, detail) ||
       !validate_execution_input(plan, beta_density, detail)) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t elements = plan->batch_size * plan->matrix_elements;
-  vibeqc_status status = prepare_outputs(elements, coulomb, alpha_exchange, detail);
+  vibeqc_status status = prepare_outputs(elements, coulomb, alpha_exchange, detail, terms);
   if (status != VIBEQC_STATUS_SUCCESS) return status;
   try {
-    beta_exchange.assign(elements, 0.0);
+    beta_exchange.assign(terms.exchange ? elements : 0, 0.0);
   } catch (const std::bad_alloc&) {
     detail = "host allocation for CUDA DF beta exchange output failed";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
+  if (!terms.coulomb && !terms.exchange) return VIBEQC_STATUS_SUCCESS;
   cudaError_t cuda_error = cudaSetDevice(plan->device_id);
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "select CUDA DF device", detail);
@@ -2210,27 +2219,32 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk(
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "upload UHF CUDA DF densities", detail);
   }
-  sum_spin_density_kernel<<<blocks_for(elements), kThreads, 0, plan->stream>>>(
-      elements, plan->primary_density, plan->secondary_density, plan->total_density);
-  cuda_error = cudaPeekAtLastError();
-  if (cuda_error != cudaSuccess) {
-    return cuda_failure(cuda_error, "sum UHF CUDA DF density", detail);
+  if (terms.coulomb) {
+    sum_spin_density_kernel<<<blocks_for(elements), kThreads, 0, plan->stream>>>(
+        elements, plan->primary_density, plan->secondary_density, plan->total_density);
+    cuda_error = cudaPeekAtLastError();
+    if (cuda_error != cudaSuccess) {
+      return cuda_failure(cuda_error, "sum UHF CUDA DF density", detail);
+    }
   }
-  status = build_coulomb(*plan, plan->total_density, detail);
-  if (status == VIBEQC_STATUS_SUCCESS) {
+  status =
+      terms.coulomb ? build_coulomb(*plan, plan->total_density, detail) : VIBEQC_STATUS_SUCCESS;
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
     status = build_exchange(*plan, plan->primary_density, plan->alpha_exchange, detail);
   }
-  if (status == VIBEQC_STATUS_SUCCESS) {
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
     status = build_exchange(*plan, plan->secondary_density, plan->beta_exchange, detail);
   }
   if (status != VIBEQC_STATUS_SUCCESS) return status;
-  cuda_error =
-      cudaMemcpyAsync(coulomb.data(), plan->coulomb, bytes, cudaMemcpyDeviceToHost, plan->stream);
-  if (cuda_error == cudaSuccess) {
+  if (terms.coulomb) {
+    cuda_error =
+        cudaMemcpyAsync(coulomb.data(), plan->coulomb, bytes, cudaMemcpyDeviceToHost, plan->stream);
+  }
+  if (terms.exchange && cuda_error == cudaSuccess) {
     cuda_error = cudaMemcpyAsync(alpha_exchange.data(), plan->alpha_exchange, bytes,
                                  cudaMemcpyDeviceToHost, plan->stream);
   }
-  if (cuda_error == cudaSuccess) {
+  if (terms.exchange && cuda_error == cudaSuccess) {
     cuda_error = cudaMemcpyAsync(beta_exchange.data(), plan->beta_exchange, bytes,
                                  cudaMemcpyDeviceToHost, plan->stream);
   }
@@ -2241,9 +2255,12 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk(
                                    : cuda_failure(cuda_error, "finish UHF CUDA DF J/K", detail);
 }
 
-vibeqc_status execute_cuda_density_fitting_rhf_jk_item(
-    CudaDensityFittingJkPlan* plan, std::size_t system, const std::vector<double>& density,
-    std::vector<double>& coulomb, std::vector<double>& exchange, std::string& detail) {
+vibeqc_status execute_cuda_density_fitting_rhf_jk_item(CudaDensityFittingJkPlan* plan,
+                                                       std::size_t system,
+                                                       const std::vector<double>& density,
+                                                       std::vector<double>& coulomb,
+                                                       std::vector<double>& exchange,
+                                                       std::string& detail, JkTermSelection terms) {
   detail.clear();
   coulomb.clear();
   exchange.clear();
@@ -2252,8 +2269,9 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk_item(
     detail = "CUDA DF RHF item density dimensions or values are invalid";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  if (!terms.coulomb && !terms.exchange) return VIBEQC_STATUS_SUCCESS;
   if (plan->batch_size == 1U) {
-    return execute_cuda_density_fitting_rhf_jk(plan, density, coulomb, exchange, detail);
+    return execute_cuda_density_fitting_rhf_jk(plan, density, coulomb, exchange, detail, terms);
   }
   const std::size_t batch_elements = plan->batch_size * plan->matrix_elements;
   const std::size_t item_bytes = plan->matrix_elements * sizeof(double);
@@ -2270,23 +2288,26 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk_item(
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "upload bounded RHF CUDA DF item", detail);
   }
-  vibeqc_status status = build_coulomb(*plan, plan->primary_density, detail);
-  if (status == VIBEQC_STATUS_SUCCESS) {
+  vibeqc_status status =
+      terms.coulomb ? build_coulomb(*plan, plan->primary_density, detail) : VIBEQC_STATUS_SUCCESS;
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
     status = build_exchange(*plan, plan->primary_density, plan->alpha_exchange, detail);
   }
   if (status != VIBEQC_STATUS_SUCCESS) return status;
   try {
-    coulomb.resize(plan->matrix_elements);
-    exchange.resize(plan->matrix_elements);
+    coulomb.resize(terms.coulomb ? plan->matrix_elements : 0);
+    exchange.resize(terms.exchange ? plan->matrix_elements : 0);
   } catch (const std::bad_alloc&) {
     detail = "host allocation for bounded RHF CUDA DF item failed";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
   const std::size_t offset_bytes = system * item_bytes;
-  cuda_error = cudaMemcpyAsync(coulomb.data(),
-                               reinterpret_cast<const unsigned char*>(plan->coulomb) + offset_bytes,
-                               item_bytes, cudaMemcpyDeviceToHost, plan->stream);
-  if (cuda_error == cudaSuccess) {
+  if (terms.coulomb) {
+    cuda_error = cudaMemcpyAsync(
+        coulomb.data(), reinterpret_cast<const unsigned char*>(plan->coulomb) + offset_bytes,
+        item_bytes, cudaMemcpyDeviceToHost, plan->stream);
+  }
+  if (terms.exchange && cuda_error == cudaSuccess) {
     cuda_error =
         cudaMemcpyAsync(exchange.data(),
                         reinterpret_cast<const unsigned char*>(plan->alpha_exchange) + offset_bytes,
@@ -2301,7 +2322,8 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk_item(
 vibeqc_status execute_cuda_density_fitting_uhf_jk_item(
     CudaDensityFittingJkPlan* plan, std::size_t system, const std::vector<double>& alpha_density,
     const std::vector<double>& beta_density, std::vector<double>& coulomb,
-    std::vector<double>& alpha_exchange, std::vector<double>& beta_exchange, std::string& detail) {
+    std::vector<double>& alpha_exchange, std::vector<double>& beta_exchange, std::string& detail,
+    JkTermSelection terms) {
   detail.clear();
   coulomb.clear();
   alpha_exchange.clear();
@@ -2313,9 +2335,10 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk_item(
     detail = "CUDA DF UHF item density dimensions or values are invalid";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  if (!terms.coulomb && !terms.exchange) return VIBEQC_STATUS_SUCCESS;
   if (plan->batch_size == 1U) {
     return execute_cuda_density_fitting_uhf_jk(plan, alpha_density, beta_density, coulomb,
-                                               alpha_exchange, beta_exchange, detail);
+                                               alpha_exchange, beta_exchange, detail, terms);
   }
   const std::size_t batch_elements = plan->batch_size * plan->matrix_elements;
   const std::size_t item_bytes = plan->matrix_elements * sizeof(double);
@@ -2341,39 +2364,44 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk_item(
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "upload bounded UHF CUDA DF item", detail);
   }
-  sum_spin_density_kernel<<<blocks_for(batch_elements), kThreads, 0, plan->stream>>>(
-      batch_elements, plan->primary_density, plan->secondary_density, plan->total_density);
-  cuda_error = cudaPeekAtLastError();
-  if (cuda_error != cudaSuccess) {
-    return cuda_failure(cuda_error, "sum bounded UHF CUDA DF item density", detail);
+  if (terms.coulomb) {
+    sum_spin_density_kernel<<<blocks_for(batch_elements), kThreads, 0, plan->stream>>>(
+        batch_elements, plan->primary_density, plan->secondary_density, plan->total_density);
+    cuda_error = cudaPeekAtLastError();
+    if (cuda_error != cudaSuccess) {
+      return cuda_failure(cuda_error, "sum bounded UHF CUDA DF item density", detail);
+    }
   }
-  vibeqc_status status = build_coulomb(*plan, plan->total_density, detail);
-  if (status == VIBEQC_STATUS_SUCCESS) {
+  vibeqc_status status =
+      terms.coulomb ? build_coulomb(*plan, plan->total_density, detail) : VIBEQC_STATUS_SUCCESS;
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
     status = build_exchange(*plan, plan->primary_density, plan->alpha_exchange, detail);
   }
-  if (status == VIBEQC_STATUS_SUCCESS) {
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
     status = build_exchange(*plan, plan->secondary_density, plan->beta_exchange, detail);
   }
   if (status != VIBEQC_STATUS_SUCCESS) return status;
   try {
-    coulomb.resize(plan->matrix_elements);
-    alpha_exchange.resize(plan->matrix_elements);
-    beta_exchange.resize(plan->matrix_elements);
+    coulomb.resize(terms.coulomb ? plan->matrix_elements : 0);
+    alpha_exchange.resize(terms.exchange ? plan->matrix_elements : 0);
+    beta_exchange.resize(terms.exchange ? plan->matrix_elements : 0);
   } catch (const std::bad_alloc&) {
     detail = "host allocation for bounded UHF CUDA DF item failed";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
   const std::size_t offset_bytes = system * item_bytes;
-  cuda_error = cudaMemcpyAsync(coulomb.data(),
-                               reinterpret_cast<const unsigned char*>(plan->coulomb) + offset_bytes,
-                               item_bytes, cudaMemcpyDeviceToHost, plan->stream);
-  if (cuda_error == cudaSuccess) {
+  if (terms.coulomb) {
+    cuda_error = cudaMemcpyAsync(
+        coulomb.data(), reinterpret_cast<const unsigned char*>(plan->coulomb) + offset_bytes,
+        item_bytes, cudaMemcpyDeviceToHost, plan->stream);
+  }
+  if (terms.exchange && cuda_error == cudaSuccess) {
     cuda_error =
         cudaMemcpyAsync(alpha_exchange.data(),
                         reinterpret_cast<const unsigned char*>(plan->alpha_exchange) + offset_bytes,
                         item_bytes, cudaMemcpyDeviceToHost, plan->stream);
   }
-  if (cuda_error == cudaSuccess) {
+  if (terms.exchange && cuda_error == cudaSuccess) {
     cuda_error =
         cudaMemcpyAsync(beta_exchange.data(),
                         reinterpret_cast<const unsigned char*>(plan->beta_exchange) + offset_bytes,
@@ -2387,27 +2415,35 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk_item(
 
 vibeqc_status execute_cuda_density_fitting_rhf_jk_device(CudaDensityFittingJkPlan* plan,
                                                          const double* density, double* coulomb,
-                                                         double* exchange, std::string& detail) {
+                                                         double* exchange, std::string& detail,
+                                                         JkTermSelection terms,
+                                                         FockMatrixLayout density_layout) {
   detail.clear();
-  if (plan == nullptr || density == nullptr || coulomb == nullptr || exchange == nullptr) {
+  if ((density_layout != FockMatrixLayout::RowMajor &&
+       density_layout != FockMatrixLayout::ColumnMajor) ||
+      plan == nullptr || density == nullptr || (terms.coulomb && coulomb == nullptr) ||
+      (terms.exchange && exchange == nullptr)) {
     detail = "CUDA DF device RHF J/K pointers are invalid";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  if (!terms.coulomb && !terms.exchange) return VIBEQC_STATUS_SUCCESS;
   cudaError_t cuda_error = cudaSetDevice(plan->device_id);
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "select CUDA DF device", detail);
   }
-  vibeqc_status status = build_coulomb(*plan, density, detail);
-  if (status == VIBEQC_STATUS_SUCCESS) {
-    status = build_exchange(*plan, density, plan->alpha_exchange, detail, true);
+  vibeqc_status status =
+      terms.coulomb ? build_coulomb(*plan, density, detail) : VIBEQC_STATUS_SUCCESS;
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
+    status = build_exchange(*plan, density, plan->alpha_exchange, detail,
+                            density_layout == FockMatrixLayout::ColumnMajor);
   }
   if (status != VIBEQC_STATUS_SUCCESS) return status;
   const std::size_t bytes = plan->batch_size * plan->matrix_elements * sizeof(double);
-  if (coulomb != plan->coulomb) {
+  if (terms.coulomb && coulomb != plan->coulomb) {
     cuda_error =
         cudaMemcpyAsync(coulomb, plan->coulomb, bytes, cudaMemcpyDeviceToDevice, plan->stream);
   }
-  if (cuda_error == cudaSuccess && exchange != plan->alpha_exchange) {
+  if (terms.exchange && cuda_error == cudaSuccess && exchange != plan->alpha_exchange) {
     cuda_error = cudaMemcpyAsync(exchange, plan->alpha_exchange, bytes, cudaMemcpyDeviceToDevice,
                                  plan->stream);
   }
@@ -2418,42 +2454,52 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk_device(CudaDensityFittingJkPla
 
 vibeqc_status execute_cuda_density_fitting_uhf_jk_device(
     CudaDensityFittingJkPlan* plan, const double* alpha_density, const double* beta_density,
-    double* coulomb, double* alpha_exchange, double* beta_exchange, std::string& detail) {
+    double* coulomb, double* alpha_exchange, double* beta_exchange, std::string& detail,
+    JkTermSelection terms, FockMatrixLayout density_layout) {
   detail.clear();
-  if (plan == nullptr || alpha_density == nullptr || beta_density == nullptr ||
-      coulomb == nullptr || alpha_exchange == nullptr || beta_exchange == nullptr) {
+  if ((density_layout != FockMatrixLayout::RowMajor &&
+       density_layout != FockMatrixLayout::ColumnMajor) ||
+      plan == nullptr || alpha_density == nullptr || beta_density == nullptr ||
+      (terms.coulomb && coulomb == nullptr) ||
+      (terms.exchange && (alpha_exchange == nullptr || beta_exchange == nullptr))) {
     detail = "CUDA DF device UHF J/K pointers are invalid";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  if (!terms.coulomb && !terms.exchange) return VIBEQC_STATUS_SUCCESS;
   cudaError_t cuda_error = cudaSetDevice(plan->device_id);
   if (cuda_error != cudaSuccess) {
     return cuda_failure(cuda_error, "select CUDA DF device", detail);
   }
-  sum_spin_density_kernel<<<blocks_for(plan->batch_size * plan->matrix_elements), kThreads, 0,
-                            plan->stream>>>(plan->batch_size * plan->matrix_elements, alpha_density,
-                                            beta_density, plan->total_density);
-  cuda_error = cudaPeekAtLastError();
-  if (cuda_error != cudaSuccess) {
-    return cuda_failure(cuda_error, "sum CUDA DF device UHF density", detail);
+  if (terms.coulomb) {
+    sum_spin_density_kernel<<<blocks_for(plan->batch_size * plan->matrix_elements), kThreads, 0,
+                              plan->stream>>>(plan->batch_size * plan->matrix_elements,
+                                              alpha_density, beta_density, plan->total_density);
+    cuda_error = cudaPeekAtLastError();
+    if (cuda_error != cudaSuccess) {
+      return cuda_failure(cuda_error, "sum CUDA DF device UHF density", detail);
+    }
   }
-  vibeqc_status status = build_coulomb(*plan, plan->total_density, detail);
-  if (status == VIBEQC_STATUS_SUCCESS) {
-    status = build_exchange(*plan, alpha_density, plan->alpha_exchange, detail, true);
+  vibeqc_status status =
+      terms.coulomb ? build_coulomb(*plan, plan->total_density, detail) : VIBEQC_STATUS_SUCCESS;
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
+    status = build_exchange(*plan, alpha_density, plan->alpha_exchange, detail,
+                            density_layout == FockMatrixLayout::ColumnMajor);
   }
-  if (status == VIBEQC_STATUS_SUCCESS) {
-    status = build_exchange(*plan, beta_density, plan->beta_exchange, detail, true);
+  if (terms.exchange && status == VIBEQC_STATUS_SUCCESS) {
+    status = build_exchange(*plan, beta_density, plan->beta_exchange, detail,
+                            density_layout == FockMatrixLayout::ColumnMajor);
   }
   if (status != VIBEQC_STATUS_SUCCESS) return status;
   const std::size_t bytes = plan->batch_size * plan->matrix_elements * sizeof(double);
-  if (coulomb != plan->coulomb) {
+  if (terms.coulomb && coulomb != plan->coulomb) {
     cuda_error =
         cudaMemcpyAsync(coulomb, plan->coulomb, bytes, cudaMemcpyDeviceToDevice, plan->stream);
   }
-  if (cuda_error == cudaSuccess && alpha_exchange != plan->alpha_exchange) {
+  if (terms.exchange && cuda_error == cudaSuccess && alpha_exchange != plan->alpha_exchange) {
     cuda_error = cudaMemcpyAsync(alpha_exchange, plan->alpha_exchange, bytes,
                                  cudaMemcpyDeviceToDevice, plan->stream);
   }
-  if (cuda_error == cudaSuccess && beta_exchange != plan->beta_exchange) {
+  if (terms.exchange && cuda_error == cudaSuccess && beta_exchange != plan->beta_exchange) {
     cuda_error = cudaMemcpyAsync(beta_exchange, plan->beta_exchange, bytes,
                                  cudaMemcpyDeviceToDevice, plan->stream);
   }

@@ -627,41 +627,47 @@ DensityFittingThreeCenter orthonormalize_density_fitting_three_center(
 }
 
 DensityFittingRhfJk build_density_fitting_rhf_jk(const DensityFittingThreeCenter& three_center,
-                                                 const std::vector<double>& density) {
+                                                 const std::vector<double>& density,
+                                                 JkTermSelection terms) {
   validate_three_center(three_center);
   const std::size_t matrix_elements =
       checked_matrix_elements(three_center.nbf, "DF orbital dimension is invalid");
   validate_density(density, matrix_elements);
   return {
       three_center.nbf,
-      build_coulomb(three_center, density),
-      build_exchange(three_center, density),
+      terms.coulomb ? build_coulomb(three_center, density) : std::vector<double>{},
+      terms.exchange ? build_exchange(three_center, density) : std::vector<double>{},
   };
 }
 
 DensityFittingUhfJk build_density_fitting_uhf_jk(const DensityFittingThreeCenter& three_center,
                                                  const std::vector<double>& alpha_density,
-                                                 const std::vector<double>& beta_density) {
+                                                 const std::vector<double>& beta_density,
+                                                 JkTermSelection terms) {
   validate_three_center(three_center);
   const std::size_t matrix_elements =
       checked_matrix_elements(three_center.nbf, "DF orbital dimension is invalid");
   validate_density(alpha_density, matrix_elements);
   validate_density(beta_density, matrix_elements);
-  std::vector<double> total_density(matrix_elements, 0.0);
-  for (std::size_t element = 0; element < matrix_elements; ++element) {
-    total_density[element] = alpha_density[element] + beta_density[element];
+  std::vector<double> total_density;
+  if (terms.coulomb) {
+    total_density.resize(matrix_elements);
+    for (std::size_t element = 0; element < matrix_elements; ++element)
+      total_density[element] = alpha_density[element] + beta_density[element];
   }
   return {
       three_center.nbf,
-      build_coulomb(three_center, total_density),
-      build_exchange(three_center, alpha_density),
-      build_exchange(three_center, beta_density),
+      terms.coulomb ? build_coulomb(three_center, total_density) : std::vector<double>{},
+      terms.exchange ? build_exchange(three_center, alpha_density) : std::vector<double>{},
+      terms.exchange ? build_exchange(three_center, beta_density) : std::vector<double>{},
   };
 }
 
 DensityFittingRhfGradient build_density_fitting_rhf_gradient(
     const integrals::DensityFittingIntegralData& integrals, const std::vector<double>& density,
-    double relative_threshold) {
+    double relative_threshold, JkCoefficients coefficients) {
+  if (!std::isfinite(coefficients.coulomb) || !std::isfinite(coefficients.exchange))
+    throw std::invalid_argument("DF gradient coefficients must be finite");
   validate_density_fitting_derivative_data(integrals);
   validate_gradient_density(density, integrals.nbf, "DF RHF gradient density is inconsistent");
   const std::vector<double> inverse = metric_pseudoinverse(integrals, relative_threshold);
@@ -678,15 +684,21 @@ DensityFittingRhfGradient build_density_fitting_rhf_gradient(
         integrals.three_center_derivative.data() + coordinate * three_center_elements;
     const std::vector<double> inverse_derivative =
         metric_pseudoinverse_derivative(integrals, inverse, metric_derivative, relative_threshold);
-    const double coulomb = coulomb_quadratic_derivative(
-        integrals, density, inverse, inverse_derivative, three_center_derivative);
-    const double exchange = exchange_quadratic_derivative(
-        integrals, density, inverse, inverse_derivative, three_center_derivative);
+    const double coulomb =
+        coefficients.coulomb == 0.0
+            ? 0.0
+            : coulomb_quadratic_derivative(integrals, density, inverse, inverse_derivative,
+                                           three_center_derivative);
+    const double exchange =
+        coefficients.exchange == 0.0
+            ? 0.0
+            : exchange_quadratic_derivative(integrals, density, inverse, inverse_derivative,
+                                            three_center_derivative);
     // `coulomb` already differentiates 1/2 (P|P)DF, while `exchange`
-    // differentiates the unweighted exchange quadratic. Apply the RHF
-    // exchange coefficient here, matching the closed-shell convention used
-    // throughout the existing SCF implementation.
-    result.derivative[coordinate] = coulomb - 0.25 * exchange;
+    // differentiates the unweighted exchange quadratic. The signed Fock
+    // exchange coefficient therefore needs the extra energy factor 1/2.
+    result.derivative[coordinate] =
+        coefficients.coulomb * coulomb + 0.5 * coefficients.exchange * exchange;
     result.forces[coordinate] = -result.derivative[coordinate];
   }
   return result;
@@ -695,7 +707,9 @@ DensityFittingRhfGradient build_density_fitting_rhf_gradient(
 DensityFittingUhfGradient build_density_fitting_uhf_gradient(
     const integrals::DensityFittingIntegralData& integrals,
     const std::vector<double>& alpha_density, const std::vector<double>& beta_density,
-    double relative_threshold) {
+    double relative_threshold, JkCoefficients coefficients) {
+  if (!std::isfinite(coefficients.coulomb) || !std::isfinite(coefficients.exchange))
+    throw std::invalid_argument("DF gradient coefficients must be finite");
   validate_density_fitting_derivative_data(integrals);
   validate_gradient_density(alpha_density, integrals.nbf,
                             "DF UHF alpha gradient density is inconsistent");
@@ -720,15 +734,25 @@ DensityFittingUhfGradient build_density_fitting_uhf_gradient(
         integrals.three_center_derivative.data() + coordinate * three_center_elements;
     const std::vector<double> inverse_derivative =
         metric_pseudoinverse_derivative(integrals, inverse, metric_derivative, relative_threshold);
-    const double coulomb = coulomb_quadratic_derivative(
-        integrals, total_density, inverse, inverse_derivative, three_center_derivative);
-    const double alpha_exchange = exchange_quadratic_derivative(
-        integrals, alpha_density, inverse, inverse_derivative, three_center_derivative);
-    const double beta_exchange = exchange_quadratic_derivative(
-        integrals, beta_density, inverse, inverse_derivative, three_center_derivative);
-    // `coulomb` already differentiates 1/2 J(Pa+Pb), and each exchange
-    // quadratic receives the UHF -1/2 coefficient.
-    result.derivative[coordinate] = coulomb - 0.5 * alpha_exchange - 0.5 * beta_exchange;
+    const double coulomb =
+        coefficients.coulomb == 0.0
+            ? 0.0
+            : coulomb_quadratic_derivative(integrals, total_density, inverse, inverse_derivative,
+                                           three_center_derivative);
+    const double alpha_exchange =
+        coefficients.exchange == 0.0
+            ? 0.0
+            : exchange_quadratic_derivative(integrals, alpha_density, inverse, inverse_derivative,
+                                            three_center_derivative);
+    const double beta_exchange =
+        coefficients.exchange == 0.0
+            ? 0.0
+            : exchange_quadratic_derivative(integrals, beta_density, inverse, inverse_derivative,
+                                            three_center_derivative);
+    // Keep the established spin-by-spin summation order for standard UHF.
+    result.derivative[coordinate] = coefficients.coulomb * coulomb +
+                                    0.5 * coefficients.exchange * alpha_exchange +
+                                    0.5 * coefficients.exchange * beta_exchange;
     result.forces[coordinate] = -result.derivative[coordinate];
   }
   return result;

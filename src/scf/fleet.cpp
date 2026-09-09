@@ -153,11 +153,17 @@ FleetPlan::FleetPlan(std::vector<core::System> systems, vibeqc_method method, Sc
           method_ == VIBEQC_METHOD_UHF ? FockSpin::Unrestricted : FockSpin::Restricted,
           fitted ? FockApproximation::DensityFitted : FockApproximation::Exact),
       backend, options_.screening_tolerance, options_.density_fitting_relative_threshold);
-  if (options_.resolved_fock_build.has_value() && *options_.resolved_fock_build != expected) {
-    throw std::invalid_argument("fleet options disagree with the resolved HF Fock strategy");
-  }
-  options_.resolved_fock_build = expected;
-  if (!fitted) require_exact_direct_strategy(expected, expected.spec.spin, backend);
+  if (!options_.resolved_fock_build) options_.resolved_fock_build = expected;
+  const auto& strategy = *options_.resolved_fock_build;
+  validate_resolved_fock_build(strategy);
+  if (strategy.spec.spin != expected.spec.spin || strategy.backend != backend ||
+      strategy.screening_tolerance != options_.screening_tolerance ||
+      (options_.compute_forces && strategy.spec.derivative_order != 1) ||
+      (strategy.metric_relative_threshold != 0.0 &&
+       strategy.metric_relative_threshold != options_.density_fitting_relative_threshold) ||
+      (backend == FockBackend::Cuda &&
+       strategy.legacy_density_fitting != cuda_density_fitting_enabled_))
+    throw std::invalid_argument("fleet options disagree with the resolved Fock strategy");
   std::iota(execution_order_.begin(), execution_order_.end(), 0);
   std::stable_sort(execution_order_.begin(), execution_order_.end(),
                    [&](std::size_t a, std::size_t b) {
@@ -214,33 +220,15 @@ std::vector<FleetItemResult> FleetPlan::execute(
 
     const bool has_warm_density = warm_starts_enabled_ && warm_densities_[system_index].has_value();
     item.warm_start_used = has_warm_density;
-    const ResolvedFockBuild& strategy = *options_.resolved_fock_build;
-    const bool use_cuda_density_fitting =
-        strategy.legacy_density_fitting && strategy.backend == FockBackend::Cuda;
     const auto evaluate = [&](const std::vector<double>* initial_density) {
-      if (strategy.legacy_density_fitting) {
-        const core::System auxiliary =
-            auxiliary_for_geometry(auxiliary_template_, execution_system);
-        if (use_cuda_density_fitting) {
-          return method_ == VIBEQC_METHOD_UHF
-                     ? run_uhf_density_fitting_cuda(execution_system, auxiliary, options_,
-                                                    device_id_, initial_density)
-                     : run_rhf_density_fitting_cuda(execution_system, auxiliary, options_,
-                                                    device_id_, initial_density);
-        }
-        return method_ == VIBEQC_METHOD_UHF
-                   ? run_uhf_density_fitting(execution_system, auxiliary, options_, initial_density)
-                   : run_rhf_density_fitting(execution_system, auxiliary, options_,
-                                             initial_density);
-      }
-      return method_ == VIBEQC_METHOD_UHF ? run_uhf(execution_system, options_, initial_density)
-                                          : run_rhf(execution_system, options_, initial_density);
+      const core::System auxiliary = auxiliary_for_geometry(auxiliary_template_, execution_system);
+      return run_fock_strategy(execution_system, &auxiliary, options_, device_id_, initial_density);
     };
     try {
       const std::vector<double>* initial_density =
           has_warm_density ? &warm_densities_[system_index]->density : nullptr;
       item.scf = evaluate(initial_density);
-      if (use_cuda_density_fitting) {
+      if (options_.resolved_fock_build->backend == FockBackend::Cuda) {
         item.executed_backend = VIBEQC_BACKEND_CUDA;
       }
       if (has_warm_density && !item.scf.converged) {
