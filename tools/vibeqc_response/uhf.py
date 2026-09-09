@@ -426,6 +426,10 @@ class UHFResponseOperator:
             raise NotImplementedError(
                 "UHF response requires a validated spin-resolved CUDA J/K plan"
             )
+        # Matching dimensions/reference metadata cannot certify the ERI action.
+        # Recycling must retain the identity of the backend actually applied.
+        if problem.operator_identity != uhf_operator_identity(backend):
+            raise ValueError("problem operator_identity does not match its UHF backend")
         self.problem = problem
         self.backend = backend
         validate = getattr(backend, "validate_reference", None)

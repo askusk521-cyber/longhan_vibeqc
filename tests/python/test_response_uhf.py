@@ -9,9 +9,11 @@ from tools.vibeqc_response import (
     CudaDFJKBackend,
     DenseAOResponseBackend,
     GMRESOptions,
+    KrylovRecycleSpace,
     NativeJKBackend,
     UHFReferenceSnapshot,
     UHFResponseOperator,
+    solve,
     solve_many,
 )
 
@@ -159,6 +161,16 @@ def test_uhf_problem_rejects_stale_spin_reference_even_at_matching_dimension():
         problem.assert_compatible(other)
 
 
+def test_uhf_operator_rejects_a_different_backend_with_matching_dimensions():
+    """A changed ERI Hamiltonian must not inherit an old recycle-space key."""
+    reference = _reference()
+    backend = DenseAOResponseBackend(_symmetric_eri())
+    problem = UHFResponseOperator.build_problem(reference, backend)
+    changed = DenseAOResponseBackend(_symmetric_eri(seed=180))
+    with pytest.raises(ValueError, match="operator_identity.*UHF backend"):
+        UHFResponseOperator(problem, changed)
+
+
 def test_uhf_snapshot_rejects_reported_unconverged_residual():
     """Canonical-looking orbitals cannot override a failed SCF diagnostic."""
     with pytest.raises(ValueError, match="scf_residual exceeds"):
@@ -207,9 +219,23 @@ def test_native_one_electron_uhf_export_accepts_an_empty_beta_spin():
         assert problem.layout.block_dimension("alpha") == 0
         assert problem.layout.block_dimension("beta") == 0
         assert problem.dimension == 0
-        dense = UHFResponseOperator(problem, backend).to_dense()
+        operator = UHFResponseOperator(problem, backend)
+        dense = operator.to_dense()
         assert dense.shape == (0, 0)
         assert not dense.flags.writeable
+        # Empty spin spaces must remain usable through the shared solver API,
+        # including repeated publication into the same bound recycle space.
+        recycle = KrylovRecycleSpace(problem)
+        for _ in range(2):
+            result = solve(operator, np.empty(0), recycle=recycle)
+            assert result.converged and result.residual_norm == 0.0
+            assert result.solution.shape == (0,)
+            assert recycle.storage_bytes == 0
+        for strategy in ("sequential", "blocked", "recycled"):
+            result = solve_many(operator, np.empty((0, 2)), strategy=strategy)
+            assert result.converged
+            assert result.solution.shape == (0, 2)
+            assert all(item.residual_norm == 0.0 for item in result.results)
 
 
 def test_native_open_shell_uhf_export_builds_a_response_problem():

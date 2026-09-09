@@ -565,8 +565,8 @@ class KrylovRecycleSpace:
 
     def projection_bytes(self, dimension):
         """Reserve the output guess and one scaled retained-vector temporary."""
-        if type(dimension) is not int or dimension < 1:
-            raise ValueError("dimension must be a positive integer")
+        if type(dimension) is not int or dimension < 0:
+            raise ValueError("dimension must be a nonnegative integer")
         return 2 * dimension * 8
 
     def update_bytes(self, dimension):
@@ -576,6 +576,8 @@ class KrylovRecycleSpace:
         update builds at most the destination capacity, without stacking or
         taking an SVD of the complete old/result basis.
         """
+        if dimension == 0:
+            return 0
         capacity = min(self.max_vectors, dimension, self.max_bytes // (dimension * 8))
         return (capacity + 3) * dimension * 8
 
@@ -605,7 +607,9 @@ class KrylovRecycleSpace:
         if not result.converged:
             return self
         n = result.solution.size
-        capacity = min(self.max_vectors, n, self.max_bytes // (n * 8))
+        # A valid UHF reference can have no occupied-virtual rotations. Its
+        # solved empty vector has no reusable directions or storage cost.
+        capacity = min(self.max_vectors, n, self.max_bytes // (n * 8)) if n else 0
         replacement = []
         # Retain old directions first and stop as soon as capacity is reached;
         # no full candidate matrix is created.
