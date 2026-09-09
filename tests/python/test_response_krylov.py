@@ -505,3 +505,30 @@ def test_sequential_peak_counts_current_result_once():
     )
     assert result.converged
     assert result.peak_workspace_bytes == budget
+
+
+@pytest.mark.parametrize("scale", [1e-200, 1e200])
+def test_true_residual_norm_does_not_underflow_or_overflow(scale):
+    """A finite nonzero RHS cannot be accepted with the initial zero solution."""
+    operator = _MatrixOperator(np.eye(2), 2)
+    rhs = np.array([scale, 0.0])
+    result = solve(operator, rhs)
+    assert result.converged
+    assert result.reason != "initial_residual"
+    np.testing.assert_allclose(result.solution / scale, [1.0, 0.0], atol=1e-12)
+    for matrix in (np.eye(2), np.zeros((2, 2))):
+        blocked = solve_many(_MatrixOperator(matrix, 2), rhs, strategy="blocked")
+        actual_relative = np.linalg.norm(
+            matrix @ (blocked.solution[:, 0] / scale) - [1.0, 0.0]
+        )
+        if blocked.converged:
+            assert actual_relative <= GMRESOptions().rtol
+        else:
+            assert blocked.results[0].relative_residual == pytest.approx(
+                actual_relative
+            )
+
+
+def test_unrepresentable_rhs_norm_is_rejected():
+    with pytest.raises(ValueError, match="norm overflows"):
+        solve(_MatrixOperator(np.eye(2), 2), np.full(2, np.finfo(float).max))

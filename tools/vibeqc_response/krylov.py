@@ -14,7 +14,18 @@ from .problem import ResponseCompatibilityError, ResponseSolveError
 
 
 def _vector_norm(value):
-    return float(np.linalg.norm(np.asarray(value, dtype=np.float64)))
+    """Scale before squaring so finite tiny/large vectors cannot look solved."""
+    values = np.asarray(value, dtype=np.float64)
+    scale = float(np.max(np.abs(values), initial=0.0))
+    if not np.isfinite(scale):
+        raise ValueError("response norm requires finite vector values")
+    if scale == 0.0:
+        return 0.0
+    scaled = (values / scale).reshape(-1)
+    result = scale * float(np.sqrt(np.dot(scaled, scaled)))
+    if not np.isfinite(result):
+        raise ValueError("response vector norm overflows FP64")
+    return result
 
 
 def _relative_residual(residual_norm, rhs_norm):
@@ -834,9 +845,13 @@ def _block_solve(operator, rhs, options):
         )
         actions += nrhs
         action_seconds += time.perf_counter() - apply_started
-        norms = np.linalg.norm(residual, axis=0)
+        norms = np.array([_vector_norm(residual[:, column]) for column in range(nrhs)])
         history = [float(max(old, new)) for old, new in zip(history, norms)]
-        targets = np.maximum(options.atol, options.rtol * np.linalg.norm(b, axis=0))
+        targets = np.maximum(
+            options.atol,
+            options.rtol
+            * np.array([_vector_norm(b[:, column]) for column in range(nrhs)]),
+        )
         if np.all(norms <= targets):
             break
         if keep == 0:
@@ -846,8 +861,8 @@ def _block_solve(operator, rhs, options):
         last_start = q
     results = []
     for column in range(nrhs):
-        norm = float(np.linalg.norm(b[:, column] - operator.apply(solution[:, column])))
-        target = max(options.atol, options.rtol * np.linalg.norm(b[:, column]))
+        norm = _vector_norm(b[:, column] - operator.apply(solution[:, column]))
+        target = max(options.atol, options.rtol * _vector_norm(b[:, column]))
         converged = norm <= target
         if converged:
             reason = "converged"
@@ -860,7 +875,7 @@ def _block_solve(operator, rhs, options):
                 immutable(solution[:, column]),
                 converged,
                 norm,
-                _relative_residual(norm, float(np.linalg.norm(b[:, column]))),
+                _relative_residual(norm, float(_vector_norm(b[:, column]))),
                 iterations,
                 reason,
                 tuple(history),
