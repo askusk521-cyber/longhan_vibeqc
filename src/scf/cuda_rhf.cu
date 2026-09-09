@@ -14299,7 +14299,8 @@ bool same_options(const ScfOptions& first, const ScfOptions& second) {
          first.diis_history == second.diis_history &&
          first.energy_tolerance == second.energy_tolerance &&
          first.density_tolerance == second.density_tolerance &&
-         first.screening_tolerance == second.screening_tolerance;
+         first.screening_tolerance == second.screening_tolerance &&
+         first.resolved_fock_build == second.resolved_fock_build;
 }
 
 /**
@@ -16294,6 +16295,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     return launch_bounded_streaming_fock(is_unrestricted, quartet_density, quartet_fock,
                                          allow_mixed_precision);
   };
+  // The exact provider is resolved/validated by run_hf_cuda_bucket_cached.
+  // Dense, packed, generated and streamed paths below are execution schedules
+  // of that same operator; retain their fused standard-HF kernel ownership.
   const auto launch_fock_builder = [&](const double* density_input,
                                        bool allow_mixed_precision) -> cudaError_t {
     const double* quartet_density = transformed_direct ? direct_density : density_input;
@@ -18235,15 +18239,37 @@ CudaRhfBasisLayoutStats inspect_rhf_cuda_basis_layout(const std::vector<core::Sy
 namespace {
 
 std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
-    CudaRhfBucketPlan** plan, const std::vector<core::System>& systems, const ScfOptions& options,
+    CudaRhfBucketPlan** plan, const std::vector<core::System>& systems,
+    const ScfOptions& requested_options,
     const std::vector<const std::vector<double>*>& initial_densities, int device_id,
     bool unrestricted, bool shell_class_profiling, bool inactive_eigensolver_profiling) {
-  if (options.hooks || options.strict_initial_density) {
+  if (requested_options.hooks || requested_options.strict_initial_density) {
     // Host callbacks are an explicit CPU capability, never a device fallback.
     std::vector<RhfBucketItem> outputs(systems.size());
     fill_global_failure(outputs, VIBEQC_STATUS_NOT_IMPLEMENTED);
     return outputs;
   }
+
+  // Resolve legacy internal callers once per prepared execution, before any
+  // device setup. Fock kernels and final exact force assembly share this guard.
+  ScfOptions execution_options = requested_options;
+  try {
+    const FockSpin spin = unrestricted ? FockSpin::Unrestricted : FockSpin::Restricted;
+    if (!execution_options.resolved_fock_build.has_value()) {
+      execution_options.resolved_fock_build = resolve_fock_build(
+          make_hf_fock_spec(spin), FockBackend::Cuda, execution_options.screening_tolerance);
+    }
+    require_exact_direct_strategy(*execution_options.resolved_fock_build, spin, FockBackend::Cuda);
+    if (execution_options.resolved_fock_build->screening_tolerance !=
+        execution_options.screening_tolerance) {
+      throw std::invalid_argument("CUDA screening differs from its resolved Fock strategy");
+    }
+  } catch (const std::invalid_argument&) {
+    std::vector<RhfBucketItem> outputs(systems.size());
+    fill_global_failure(outputs, VIBEQC_STATUS_INVALID_ARGUMENT);
+    return outputs;
+  }
+  const ScfOptions& options = execution_options;
 
   if (plan == nullptr) {
     std::vector<RhfBucketItem> outputs(systems.size());
@@ -19574,8 +19600,11 @@ ScfResult run_rhf_cuda(const core::System& system, const ScfOptions& options, in
   std::vector<RhfBucketItem> result =
       run_rhf_cuda_bucket(systems, options, initial_densities, device_id);
   if (result.empty()) throw std::runtime_error("CUDA RHF returned no result");
-  if (result.front().status == VIBEQC_STATUS_CUDA_ERROR ||
-      result.front().status == VIBEQC_STATUS_OUT_OF_MEMORY) {
+  const vibeqc_status status = result.front().status;
+  if (status == VIBEQC_STATUS_INVALID_ARGUMENT) {
+    throw std::invalid_argument("CUDA RHF received invalid arguments");
+  }
+  if (status != VIBEQC_STATUS_SUCCESS && status != VIBEQC_STATUS_SCF_NOT_CONVERGED) {
     throw std::runtime_error("CUDA RHF execution failed");
   }
   return std::move(result.front().scf);
@@ -19591,8 +19620,11 @@ ScfResult run_uhf_cuda(const core::System& system, const ScfOptions& options, in
   std::vector<RhfBucketItem> result =
       run_uhf_cuda_bucket(systems, options, initial_densities, device_id);
   if (result.empty()) throw std::runtime_error("CUDA UHF returned no result");
-  if (result.front().status == VIBEQC_STATUS_CUDA_ERROR ||
-      result.front().status == VIBEQC_STATUS_OUT_OF_MEMORY) {
+  const vibeqc_status status = result.front().status;
+  if (status == VIBEQC_STATUS_INVALID_ARGUMENT) {
+    throw std::invalid_argument("CUDA UHF received invalid arguments");
+  }
+  if (status != VIBEQC_STATUS_SUCCESS && status != VIBEQC_STATUS_SCF_NOT_CONVERGED) {
     throw std::runtime_error("CUDA UHF execution failed");
   }
   return std::move(result.front().scf);
