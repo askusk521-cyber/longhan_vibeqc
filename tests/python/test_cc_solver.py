@@ -170,6 +170,19 @@ def test_false_shared_residual_cannot_bypass_expanded_acceptance(monkeypatch):
     assert result.history[-1]["independent_r2_max"] > 1e-9
 
 
+def test_prepared_ccsd_rejects_ks_reference():
+    s, p, _meta, _ = fixture_problem()
+    ks = replace(
+        s,
+        algorithm="KS",
+        functional_identity="test-functional",
+        grid_identity="test-grid",
+        hf_backend="test-ks",
+    )
+    with pytest.raises(ValueError, match="RHF"):
+        PreparedCCSD(ks, p)
+
+
 def test_nonfinite_initial_equation_has_no_fabricated_energy_and_replays(tmp_path):
     s, p, _meta, a = fixture_problem()
     result = solve(

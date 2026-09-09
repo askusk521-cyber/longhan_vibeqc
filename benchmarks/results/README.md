@@ -7,6 +7,11 @@ They demonstrate the shared validation schema without claiming a speedup.
 The [CG08 TensorIR CPU records](cg08/README.md) check typed tensor fragments,
 serialization, and conservative rewrites against independent coordinate loops.
 
+The [issue #179 response records](response-179/README.md) check the shared
+matrix-free RHF response operator, explicit tiny-matrix/finite-rotation
+oracles, bounded GMRES/block/recycled multi-RHS solves, and real RTX 5090 DF
+J/K actions.  The records also state the CPKS/`#162` fail-closed boundary.
+
 The [issue #135 f-shell matrix](f-shell-135/README.md) records all-34 release
 resources and independent GPU numerics, actual f-containing molecular endpoints,
 scoped FPPS acceptance, and the unsupported bounded-batch boundary. Development

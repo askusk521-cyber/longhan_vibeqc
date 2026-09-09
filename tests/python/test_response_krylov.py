@@ -1,0 +1,353 @@
+"""Bounded GMRES, block solves, recycling and explicit failure semantics."""
+
+from dataclasses import replace
+
+import numpy as np
+import pytest
+
+from tools.vibeqc_posthf.fixtures import fixture_snapshot, load_fixture
+from tools.vibeqc_response import (
+    DenseAOResponseBackend,
+    DiagonalPreconditioner,
+    GMRESOptions,
+    KrylovRecycleSpace,
+    ResponseCompatibilityError,
+    ResponseSolveError,
+    ResponseUnsupported,
+    RHFResponseOperator,
+    solve,
+    solve_many,
+)
+from tools.vibeqc_response.problem import ResponseProblem
+
+
+class _MatrixOperator:
+    """Small standalone operator with the public response-operator contract."""
+
+    def __init__(self, matrix, dimension):
+        self.matrix = np.asarray(matrix, dtype=float)
+        self.dimension = dimension
+        self.problem = type(
+            "Problem",
+            (),
+            {
+                "compatibility_identity": "synthetic",
+                "validate_rhs": self._validate_rhs,
+            },
+        )()
+        self.statistics = {"actions": 0}
+
+    def _validate_rhs(self, values):
+        value = np.asarray(values, dtype=float)
+        if value.ndim == 1:
+            value = value[:, None]
+        if value.shape[0] != self.dimension or not np.isfinite(value).all():
+            raise ValueError("invalid synthetic RHS")
+        return value
+
+    def apply(self, vector):
+        self.statistics["actions"] += 1
+        return self.matrix @ np.asarray(vector, dtype=float)
+
+    def apply_transpose(self, vector):
+        return self.matrix.T @ np.asarray(vector, dtype=float)
+
+
+def _synthetic_operator(size=12, seed=179):
+    diagonal = np.linspace(1.0, 4.0, size)
+    matrix = np.diag(diagonal)
+    matrix[0, 1] = 0.2
+    matrix[1, 0] = -0.1
+    return _MatrixOperator(matrix, size)
+
+
+def test_gmres_true_residual_and_dot_identity():
+    operator = _synthetic_operator()
+    rhs = np.linspace(-1.0, 1.0, operator.dimension)
+    result = solve(
+        operator,
+        rhs,
+        options=GMRESOptions(rtol=1e-12, restart=8, max_iterations=100),
+    )
+    assert result.converged
+    assert result.residual_norm <= 1e-11
+    assert result.history[-1] == pytest.approx(result.residual_norm)
+    np.testing.assert_allclose(
+        operator.apply(result.solution), rhs, atol=2e-11, rtol=2e-11
+    )
+    left = np.arange(operator.dimension, dtype=float)
+    right = np.ones(operator.dimension)
+    lhs = np.dot(left, operator.apply(right))
+    rhs_dot = np.dot(operator.apply_transpose(left), right)
+    assert abs(lhs - rhs_dot) < 1e-12
+
+
+def test_deliberate_nonconvergence_and_singular_operator_do_not_claim_success():
+    operator = _synthetic_operator()
+    rhs = np.ones(operator.dimension)
+    result = solve(
+        operator,
+        rhs,
+        options=GMRESOptions(
+            rtol=1e-15, restart=2, max_iterations=1, stagnation_window=100
+        ),
+    )
+    assert not result.converged
+    assert result.reason in ("max_iterations", "stagnation", "breakdown")
+    with pytest.raises(ResponseSolveError):
+        result.require_converged()
+    singular = _MatrixOperator(np.zeros((4, 4)), 4)
+    failed = solve(
+        singular,
+        np.ones(4),
+        options=GMRESOptions(rtol=1e-12, restart=4, max_iterations=10),
+    )
+    assert not failed.converged
+    assert failed.reason in ("singular", "breakdown", "max_iterations")
+    with pytest.raises(ResponseSolveError):
+        failed.require_converged()
+
+
+def test_workspace_limit_is_reported_before_operator_application():
+    operator = _synthetic_operator()
+    result = solve(
+        operator,
+        np.ones(operator.dimension),
+        options=GMRESOptions(
+            restart=8,
+            max_iterations=10,
+            max_workspace_bytes=8,
+        ),
+    )
+    assert not result.converged
+    assert result.reason == "workspace_limit"
+    assert operator.statistics["actions"] == 0
+
+
+def test_diagonal_preconditioner_is_separate_and_rejects_zero_denominator():
+    operator = _synthetic_operator()
+    diagonal = np.diag(operator.matrix)
+    preconditioner = DiagonalPreconditioner(diagonal)
+    rhs = np.linspace(-1.0, 1.0, operator.dimension)
+    result = solve(
+        operator,
+        rhs,
+        preconditioner=preconditioner,
+        options=GMRESOptions(rtol=1e-12, restart=4, max_iterations=20),
+    )
+    assert result.converged
+    with pytest.raises(ValueError, match="no denominator was clamped"):
+        DiagonalPreconditioner([1.0, 0.0, 2.0])
+    with pytest.raises(ValueError, match="blocked GMRES"):
+        solve_many(
+            operator,
+            np.column_stack((rhs, rhs)),
+            strategy="blocked",
+            preconditioner=preconditioner,
+        )
+
+
+def test_failed_solve_does_not_poison_recycle_space():
+    singular = _MatrixOperator(np.zeros((4, 4)), 4)
+    space = KrylovRecycleSpace(singular.problem, max_vectors=2)
+    result = solve(
+        singular,
+        np.ones(4),
+        recycle=space,
+        options=GMRESOptions(rtol=1e-12, restart=4, max_iterations=4),
+    )
+    assert not result.converged
+    assert space._vectors == []
+
+
+def test_block_solver_preserves_tiny_nonzero_rhs_and_indefinite_operator():
+    tiny = _MatrixOperator(np.eye(2), 2)
+    rhs = np.array([1e-13, 0.0])
+    result = solve_many(
+        tiny,
+        rhs,
+        strategy="blocked",
+        options=GMRESOptions(rtol=1e-10, atol=0.0, restart=2, max_iterations=4),
+    )
+    assert result.converged
+    np.testing.assert_allclose(result.solution[:, 0], rhs, atol=1e-25, rtol=1e-12)
+    indefinite = _MatrixOperator(np.array([[0.0, 1.0], [1.0, 0.0]]), 2)
+    result = solve_many(
+        indefinite,
+        np.array([1.0, 0.0]),
+        strategy="blocked",
+        options=GMRESOptions(rtol=1e-12, restart=2, max_iterations=4),
+    )
+    assert result.converged
+    assert result.results[0].residual_norm < 1e-12
+
+
+def test_block_workspace_preflight_accounts_for_initial_basis_and_retained_results():
+    operator = _MatrixOperator(np.eye(100), 100)
+    result = solve_many(
+        operator,
+        np.eye(100),
+        strategy="blocked",
+        options=GMRESOptions(
+            rtol=1e-10,
+            restart=1,
+            max_iterations=1,
+            max_workspace_bytes=2500,
+        ),
+    )
+    assert not result.converged
+    assert all(item.reason == "workspace_limit" for item in result.results)
+
+
+def test_sequential_workspace_budget_charges_retained_results():
+    operator = _MatrixOperator(np.eye(4), 4)
+    rhs = np.column_stack((np.ones(4), np.arange(1.0, 5.0)))
+    options = GMRESOptions(rtol=1e-12, restart=2, max_iterations=4)
+    single = solve(operator, rhs[:, 0], options=options)
+    retained = single.solution.nbytes + single.basis.nbytes
+    budget = single.workspace_bytes + retained - 1
+    result = solve_many(
+        operator,
+        rhs,
+        strategy="sequential",
+        options=replace(options, max_workspace_bytes=budget),
+    )
+    assert result.results[0].converged
+    assert result.results[1].reason == "workspace_limit"
+    assert result.peak_workspace_bytes >= single.workspace_bytes
+
+
+def test_true_residual_checkpoint_at_restart_and_iteration_limit():
+    operator = _MatrixOperator(np.diag([1.0, 2.0]), 2)
+    result = solve(
+        operator,
+        np.ones(2),
+        options=GMRESOptions(
+            rtol=1e-12,
+            restart=2,
+            max_iterations=2,
+            true_residual_every=3,
+        ),
+    )
+    assert result.converged
+    assert result.residual_norm < 1e-11
+
+
+def test_transport_validates_destination_dimension_and_storage_bound():
+    source = _MatrixOperator(np.eye(1), 1)
+    destination = _MatrixOperator(np.eye(2), 2)
+    destination.problem.dimension = 2
+    space = KrylovRecycleSpace(source.problem, max_vectors=1, max_bytes=32)
+    space._vectors = [np.array([1.0])]
+    transported = space.transport(destination.problem, lambda _: np.array([1.0, 0.0]))
+    assert transported._vectors[0].shape == (2,)
+    with pytest.raises(ValueError, match="invalid vector"):
+        space.transport(destination.problem, lambda _: np.array([1.0]))
+
+
+def test_near_degenerate_reference_is_diagnosed_without_clamping():
+    meta, arrays = load_fixture("h2")
+    reference = fixture_snapshot(meta, arrays)
+    energies = reference.orbital_energies.copy()
+    energies[1] = energies[0] + 1e-10
+    fock = (
+        reference.overlap
+        @ reference.coefficients
+        @ np.diag(energies)
+        @ reference.coefficients.T
+        @ reference.overlap
+    )
+    near = type(reference)(
+        reference.overlap,
+        reference.hcore,
+        fock,
+        reference.coefficients,
+        energies,
+        reference.occupations,
+        reference.electron_count,
+        reference.reference_energy,
+        reference.scf_residual,
+        reference.geometry_hash,
+        reference.basis_hash,
+        reference.generation_id,
+        hamiltonian_id=reference.hamiltonian_id,
+        hf_backend=reference.hf_backend,
+    )
+    problem = ResponseProblem.from_reference(
+        near, method="rhf", operator_identity="synthetic"
+    )
+    assert problem.diagnostics["near_degenerate"]
+    with pytest.raises(ResponseCompatibilityError, match="response problem"):
+        # Deliberately compare the same numerical layout with a different
+        # operator identity; the diagnostic gate itself is checked below.
+        problem.assert_compatible(
+            ResponseProblem.from_reference(
+                near, method="rhf", operator_identity="different"
+            )
+        )
+    with pytest.raises(ResponseUnsupported, match="near-degenerate"):
+        problem.require_stable()
+
+
+def test_multi_rhs_strategies_and_rank_deficient_rhs():
+    operator = _synthetic_operator()
+    rng = np.random.default_rng(179)
+    rhs = rng.normal(size=(operator.dimension, 3))
+    sequential = solve_many(
+        operator,
+        rhs,
+        strategy="sequential",
+        options=GMRESOptions(rtol=1e-12, restart=8, max_iterations=100),
+    )
+    blocked = solve_many(
+        operator,
+        rhs,
+        strategy="blocked",
+        options=GMRESOptions(rtol=1e-12, restart=8, max_iterations=100),
+    )
+    recycled = solve_many(
+        operator,
+        rhs,
+        strategy="recycled",
+        options=GMRESOptions(rtol=1e-12, restart=8, max_iterations=100),
+    )
+    assert sequential.converged and blocked.converged and recycled.converged
+    np.testing.assert_allclose(sequential.solution, blocked.solution, atol=1e-10)
+    np.testing.assert_allclose(sequential.solution, recycled.solution, atol=1e-10)
+    assert all(result.recycled_vectors > 0 for result in recycled.results[1:])
+    dependent = np.column_stack((rhs[:, 0], rhs[:, 0], rhs[:, 1]))
+    dependent_result = solve_many(
+        operator,
+        dependent,
+        strategy="blocked",
+        options=GMRESOptions(rtol=1e-12, restart=8, max_iterations=100),
+    )
+    assert dependent_result.converged
+    assert dependent_result.rank_deficient_rhs
+    np.testing.assert_allclose(
+        dependent_result.solution[:, 0], dependent_result.solution[:, 1], atol=1e-10
+    )
+
+
+def test_stale_recycle_space_fails_closed_and_explicit_transport_works():
+    meta, arrays = load_fixture("h2")
+    reference = fixture_snapshot(meta, arrays)
+    backend = DenseAOResponseBackend(arrays["ao"])
+    problem = RHFResponseOperator.build_problem(reference, backend)
+    operator = RHFResponseOperator(problem, backend)
+    space = KrylovRecycleSpace(problem, max_vectors=4)
+    solve(
+        operator,
+        np.ones(problem.dimension),
+        recycle=space,
+        options=GMRESOptions(rtol=1e-12, restart=6, max_iterations=50),
+    )
+    changed = RHFResponseOperator.build_problem(
+        reference, DenseAOResponseBackend(arrays["ao"] * 1.0000001)
+    )
+    # A different dense backend has a different operator identity even though
+    # the numerical ERI happens to be equal.
+    with pytest.raises(ResponseCompatibilityError, match="stale"):
+        space.assert_compatible(changed)
+    transported = space.transport(changed, lambda vector: vector)
+    transported.assert_compatible(changed)
