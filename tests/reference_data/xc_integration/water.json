@@ -126,8 +126,8 @@
   "reference": {
     "PySCF": "2.14.0",
     "Libxc": "7.0.0",
-    "NumPy": "2.2.6",
-    "python": "3.11.16 (main, Sep  1 2026, 14:18:37) [Clang 22.1.3 ]",
+    "NumPy": "2.5.3",
+    "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
     "actual_angular_momenta": [
       0,
       0,
@@ -137,7 +137,7 @@
     ],
     "pyscf_numint_sha256": "ff7384551c7a6b80ff8a5ffcd915eb8bfbf6ca4b8f987f912aa82a1d6edda7e8",
     "exporter_sha256": "fc83ad88b16fd7269686315be2f4fb42626eacabf82034e3a3a35fd432f90c50",
-    "basis_adapter_sha256": "874b306375aa0c6c263aa57bb4c36de13ba0842cdd20332b5ecc8e71ae9a1604",
+    "basis_adapter_sha256": "88b59d85e891edf86405990179723802682f479fc265a91773b088b1ce1b162e",
     "functionals": {
       "LDA_XC_PW": "LDA_X,LDA_C_PW",
       "PBE": "GGA_X_PBE,GGA_C_PBE"
@@ -202,7 +202,7 @@
         7,
         7
       ],
-      "sha256": "038a8f901f5f060b2025fc98027cb1850bdbdc1e73678937f05803ac8c232ec0"
+      "sha256": "b1461455f83c57befb9af6b3ab9eb447e92a398c8a58766f1c71373ce855197b"
     },
     "LDA_XC_PW_total_electrons": {
       "shape": [
@@ -222,7 +222,7 @@
         7,
         7
       ],
-      "sha256": "3599cba6f0e84dc1550c23355002cd14830861dfd539f6709d938ebef0395898"
+      "sha256": "da9066c5082b77916ded6e91411ad1064773a4a3c3d80edff27c368274cc1f72"
     },
     "LDA_XC_PW_spin_electrons": {
       "shape": [
@@ -234,14 +234,14 @@
       "shape": [
         1
       ],
-      "sha256": "b7bcf4f64e7c546408bd3fde8eb6a05ffa8d9f49a237267e2a27382b7d4e31ca"
+      "sha256": "9e55a6a48ed131ba1a0cce3edcafd1024ba6ce8056f9b2b9ff168ad3620a71e5"
     },
     "PBE_total_potential": {
       "shape": [
         7,
         7
       ],
-      "sha256": "f5990a64e6b02135e250f38b38f3c085df38f20e96aedcd6f80d6292625cdc06"
+      "sha256": "42b2e5664865887a189ca16cc5020e71abea650a448c4fac117d1430792d6158"
     },
     "PBE_total_electrons": {
       "shape": [
@@ -261,7 +261,7 @@
         7,
         7
       ],
-      "sha256": "93e5559b22452443214697718a08a28ac660edb5082f8b3fa1e3de2e347aa434"
+      "sha256": "99b8d38e2bd188437dd4ad5b1acb3a304c15438719a56927f01d427bb97ca112"
     },
     "PBE_spin_electrons": {
       "shape": [
@@ -270,5 +270,5 @@
       "sha256": "0b85f1dd9e547afdaf0654dffaaca0e45e12b930df0a4e1c4d1ea7a35786fb88"
     }
   },
-  "identity": "d0b8568e876ef0975f4b3e2d99571144cd72bec7aace5cf108616b0c4d994346"
+  "identity": "5b63db08026694a5cf64c31b09011355dad8b71a0541751b882d0787b4c3e47d"
 }

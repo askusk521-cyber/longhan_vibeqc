@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,8 @@ namespace vibeqc::scf {
 struct CudaDensityFittingJkPlan;
 struct CudaDensityFittingIntegralSource;
 struct CudaDensityFittingMetricDiagnostic;
+struct DensityFittingDensityResponse;
+struct DfGradientResources;
 
 /** Integral-source placement, distinct from metric rank and J/K plan storage. */
 struct CudaDensityFittingSourceDiagnostic {
@@ -27,6 +30,18 @@ struct CudaDensityFittingSourceDiagnostic {
 /** Describe the choices frozen into a source; a null handle is unavailable. */
 CudaDensityFittingSourceDiagnostic cuda_density_fitting_integral_source_diagnostic(
     const CudaDensityFittingIntegralSource* source) noexcept;
+
+/** Contract generated DF derivatives using resident raw values or this plan's source.
+ * Positive gradients contain only the DF two-electron response. The owning
+ * stream is shared with value regeneration; weights and metric reverse work
+ * use explicitly bounded host staging. No failure authorizes an oracle retry.
+ */
+vibeqc_status execute_cuda_density_fitting_generated_force_response(
+    CudaDensityFittingJkPlan* plan, std::size_t system, const core::System& orbital,
+    const core::System& auxiliary, std::span<const double> raw_a, const std::vector<double>& metric,
+    std::span<const DensityFittingDensityResponse> terms, unsigned schedule,
+    std::size_t maximum_bytes, std::size_t maximum_auxiliary_tile, std::vector<double>& derivative,
+    std::string& detail, DfGradientResources* resources = nullptr);
 
 /**
  * Prepare a device-resident source for bounded DF tile generation.

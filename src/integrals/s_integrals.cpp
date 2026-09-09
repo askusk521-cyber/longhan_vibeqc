@@ -693,11 +693,15 @@ DensityFittingIntegralData transform_density_fitting_integrals(
   const std::size_t ncoord = orbital_system.atoms.size() * 3;
   const std::size_t metric_size = cartesian_naux * cartesian_naux;
   const std::size_t tensor_size = cartesian_nbf * cartesian_nbf * cartesian_naux;
+  // A fused consumer may omit both derivative tensors. Partial omission is
+  // invalid because the two arrays describe the same physical coordinate set.
+  const bool derivatives =
+      !cartesian.metric_derivative.empty() || !cartesian.three_center_derivative.empty();
   if (cartesian.nbf != cartesian_nbf || cartesian.naux != cartesian_naux ||
       cartesian.ncoord != ncoord || cartesian.metric.size() != metric_size ||
       cartesian.three_center.size() != tensor_size ||
-      cartesian.metric_derivative.size() != ncoord * metric_size ||
-      cartesian.three_center_derivative.size() != ncoord * tensor_size) {
+      (derivatives && (cartesian.metric_derivative.size() != ncoord * metric_size ||
+                       cartesian.three_center_derivative.size() != ncoord * tensor_size))) {
     throw std::invalid_argument("Cartesian density-fitting tensor dimensions are inconsistent");
   }
 
@@ -717,6 +721,7 @@ DensityFittingIntegralData transform_density_fitting_integrals(
   transformed.three_center =
       transform_three_center(cartesian.three_center.data(), cartesian_nbf, cartesian_naux,
                              target_orbital_aos, target_auxiliary_aos);
+  if (!derivatives) return transformed;
   transformed.metric_derivative.reserve(ncoord * transformed.naux * transformed.naux);
   transformed.three_center_derivative.reserve(ncoord * transformed.nbf * transformed.nbf *
                                               transformed.naux);

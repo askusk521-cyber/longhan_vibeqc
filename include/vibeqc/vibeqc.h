@@ -505,6 +505,31 @@ VIBEQC_API vibeqc_status vibeqc_system_cross_overlap_cpu(vibeqc_context* context
                                                          const vibeqc_system* source,
                                                          double* output, size_t output_count);
 
+/** Owned numeric staging and explicit transfers for a generic DF gradient.
+ * Caller-owned systems/weights and opaque CUDA allocations are excluded. */
+typedef struct vibeqc_df_gradient_resources {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t host_bytes, device_bytes, host_to_device_bytes, device_to_host_bytes;
+  uint64_t weight_tile_elements, tiles, uploads, stream_synchronizations;
+} vibeqc_df_gradient_resources;
+
+/** Contract fixed external DF weights into an energy gradient on CUDA.
+ * bar_a is full row-major [mu,nu,P]; bar_m is full row-major [P,Q]. Every
+ * element is counted once; nonsymmetric inputs require no implicit factors.
+ * Counts equal NAO*NAO*NAUX and NAUX*NAUX even when a null channel means zero.
+ * Orbital/auxiliary systems share physical atom coordinates, with independently
+ * assigned shell owners. Output is [atom,xyz], excluding all non-DF terms.
+ * maximum_bytes bounds numeric host staging and device allocations separately;
+ * maximum_tile_elements=0 selects an automatic bound. schedule=0 uses threads,
+ * 1 uses deterministic serial traversal. Failures preserve caller output.
+ */
+VIBEQC_API vibeqc_status vibeqc_system_df_gradient_cuda(
+    vibeqc_context* context, const vibeqc_system* orbital, const vibeqc_system* auxiliary,
+    const double* bar_a, size_t count_a, const double* bar_m, size_t count_m, unsigned schedule,
+    size_t maximum_bytes, size_t maximum_tile_elements, double* gradient, size_t gradient_count,
+    vibeqc_df_gradient_resources* resources);
+
 VIBEQC_API vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context,
                                                     const vibeqc_system* system,
                                                     const vibeqc_method_descriptor* descriptor,

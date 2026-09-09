@@ -14,7 +14,9 @@
 #include "molecule/basis.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
+#include "scf/cuda_df_gradient.hpp"
 #include "scf/density_fitting.hpp"
+#include "scf/df_response_weights.hpp"
 #include "scf/mean_field.hpp"
 
 namespace {
@@ -477,6 +479,59 @@ int main() {
                     "UHF DF gradient violates translation invariance");
     }
 
+    // The HF adapter emits generic, strided external weights. Dot these
+    // against the independent raw derivative tensors, with two memory/tile
+    // choices including a final partial auxiliary block, to isolate the
+    // energy reverse chain before testing its GPU consumer.
+    const auto check_response_weights = [&](bool unrestricted, std::size_t budget,
+                                            std::size_t tile_cap) {
+      const std::size_t n = integrals.nbf, a = integrals.naux, matrix = n * n;
+      const auto inverse = vibeqc::scf::density_fitting_metric_pseudoinverse(integrals, 1e-12);
+      std::vector<double> symmetric_rhf(matrix);
+      for (std::size_t i = 0; i < n; ++i)
+        for (std::size_t j = 0; j < n; ++j)
+          symmetric_rhf[i * n + j] = 0.5 * (rhf_density[i * n + j] + rhf_density[j * n + i]);
+      const auto expected = unrestricted ? uhf_gradient.derivative
+                                         : vibeqc::scf::build_density_fitting_rhf_gradient(
+                                               integrals, symmetric_rhf, 1e-12)
+                                               .derivative;
+      std::vector<double> total(matrix);
+      for (std::size_t ij = 0; ij < matrix; ++ij) total[ij] = alpha_density[ij] + beta_density[ij];
+      std::vector<vibeqc::scf::DensityFittingDensityResponse> terms;
+      if (unrestricted) {
+        terms = {{total, 1.0, 0.0}, {alpha_density, 0.0, 0.5}, {beta_density, 0.0, 0.5}};
+      } else {
+        terms = {{symmetric_rhf, 1.0, 0.25}};
+      }
+      std::vector<double> derivative(integrals.ncoord, 0.0);
+      const auto stats = vibeqc::scf::contract_density_fitting_response_weights(
+          n, a, integrals.metric, inverse, terms, 1e-12, budget, tile_cap,
+          [&](std::size_t p, std::span<double> output) {
+            for (std::size_t ij = 0; ij < matrix; ++ij)
+              output[ij] = integrals.three_center[ij * a + p];
+          },
+          [&](unsigned kind, std::size_t offset, std::size_t stride,
+              std::span<const double> weights) {
+            const auto& raw =
+                kind ? integrals.metric_derivative : integrals.three_center_derivative;
+            const auto elements = kind ? a * a : matrix * a;
+            for (std::size_t coordinate = 0; coordinate < integrals.ncoord; ++coordinate)
+              for (std::size_t k = 0; k < weights.size(); ++k)
+                derivative[coordinate] +=
+                    weights[k] * raw[coordinate * elements + offset + k * stride];
+          });
+      require(stats.host_peak_bytes <= budget,
+              "HF external weights exceed the host scratch budget");
+      require(stats.auxiliary_tile < a && a % stats.auxiliary_tile != 0,
+              "HF weight regression must exercise a final partial auxiliary block");
+      require_matrix_close(derivative, expected, 5.0e-10,
+                           "HF external response weights differ from raw gradient oracle");
+    };
+    for (bool unrestricted : {false, true}) {
+      check_response_weights(unrestricted, 16384U, 3U);
+      check_response_weights(unrestricted, 65536U, 7U);
+    }
+
     // The complete force helpers add the ordinary one-electron, overlap
     // Pulay, and nuclear-repulsion pieces around the DF response. With a
     // zero weighted density the finite-difference check isolates their
@@ -517,6 +572,56 @@ int main() {
     // equals Coulomb for one AO: dE2 = (1 - 1/4) * 2*rho0*rho1.
     require_close(rotating_gradient.derivative[0], 3.0, 1.0e-12,
                   "rank-deficient DF metric response omitted null-space mixing");
+
+    // Thresholding a finite eigenvalue is not the derivative of an exact-null
+    // Moore-Penrose inverse. This fixture keeps the rank fixed while rotating
+    // the retained/discarded subspaces; the old projector shortcut gives 1.
+    const std::vector<double> truncated_metric{1.0, 0.0, 0.0, 0.2};
+    const std::vector<double> truncated_inverse{1.0, 0.0, 0.0, 0.0};
+    const std::vector<double> metric_motion{0.0, 1.0, 1.0, 0.0};
+    const auto spectral_response = vibeqc::scf::density_fitting_metric_inverse_response(
+        truncated_metric, truncated_inverse, metric_motion, 2, 0.3);
+    require_close(spectral_response[1], 1.25, 1.0e-13,
+                  "thresholded metric response omitted finite discarded eigenvalues");
+    for (const double step : {1.0e-4, 2.0e-5}) {
+      auto plus_metric = truncated_metric, minus_metric = truncated_metric;
+      plus_metric[1] = plus_metric[2] = step;
+      minus_metric[1] = minus_metric[2] = -step;
+      const auto plus_factor = vibeqc::scf::factor_density_fitting_metric(plus_metric, 2, 0.3);
+      const auto minus_factor = vibeqc::scf::factor_density_fitting_metric(minus_metric, 2, 0.3);
+      require(plus_factor.effective_rank == 1 && minus_factor.effective_rank == 1,
+              "subspace finite differences crossed the selected rank");
+      for (std::size_t i = 0; i < 2; ++i)
+        for (std::size_t j = 0; j < 2; ++j) {
+          double plus_inverse = 0.0, minus_inverse = 0.0;
+          for (std::size_t k = 0; k < 2; ++k) {
+            plus_inverse += plus_factor.inverse_square_root[2 * i + k] *
+                            plus_factor.inverse_square_root[2 * k + j];
+            minus_inverse += minus_factor.inverse_square_root[2 * i + k] *
+                             minus_factor.inverse_square_root[2 * k + j];
+          }
+          require_close(spectral_response[2 * i + j], (plus_inverse - minus_inverse) / (2 * step),
+                        1.0e-7, "spectral metric response differs from energy-side factorization");
+        }
+    }
+    const std::vector<double> external_inverse_weight{0.2, 0.4, -0.3, 0.1};
+    const auto metric_weight = vibeqc::scf::density_fitting_metric_inverse_response(
+        truncated_metric, truncated_inverse, external_inverse_weight, 2, 0.3);
+    double forward_dot = 0.0, reverse_dot = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+      forward_dot += external_inverse_weight[i] * spectral_response[i];
+      reverse_dot += metric_weight[i] * metric_motion[i];
+    }
+    require_close(forward_dot, reverse_dot, 1.0e-14,
+                  "generic metric inverse response violates forward/reverse duality");
+    bool rank_crossing_rejected = false;
+    try {
+      (void)vibeqc::scf::density_fitting_metric_inverse_response(
+          {1.0, 0.0, 0.0, 0.3}, truncated_inverse, metric_motion, 2, 0.3);
+    } catch (const std::runtime_error& error) {
+      rank_crossing_rejected = std::string(error.what()).find("rank crossing") != std::string::npos;
+    }
+    require(rank_crossing_rejected, "metric response silently accepted a rank crossing");
 
 #if VIBEQC_HAS_CUDA
     {
@@ -717,6 +822,32 @@ int main() {
             if (initial_forces.empty()) initial_forces = replay[0].scf.forces;
             require_matrix_close(replay[0].scf.forces, initial_forces, 5.0e-9,
                                  "DF cache budget change altered forces");
+          }
+          // A changed metric cutoff is a changed Hamiltonian even at fixed
+          // geometry. Compare cached replay with an independently built plan
+          // in both resident and source-backed storage modes.
+          require(vibeqc::scf::factor_density_fitting_metric(integrals.metric, integrals.naux, 0.05)
+                          .effective_rank < integrals.naux,
+                  "cache cutoff regression must discard a metric direction");
+          for (std::size_t budget : {0U, 1024U * 1024U}) {
+            bucket_options.density_fitting_memory_budget_bytes = budget;
+            for (double cutoff : {1.0e-10, 0.05, 1.0e-10}) {
+              bucket_options.density_fitting_relative_threshold = cutoff;
+              const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
+                                      bucket_initial, 0, nullptr, &prepared_cache);
+              PlanGuard fresh;
+              const auto expected = run(&fresh.plan, bucket_systems, auxiliary, bucket_options,
+                                        bucket_initial, 0, nullptr, nullptr);
+              for (std::size_t i = 0; i < bucket_systems.size(); ++i) {
+                require(replay[i].status == VIBEQC_STATUS_SUCCESS &&
+                            expected[i].status == VIBEQC_STATUS_SUCCESS,
+                        "metric cutoff replay failed");
+                require_close(replay[i].scf.energy, expected[i].scf.energy, 1.0e-10,
+                              "DF cache retained the previous metric Hamiltonian");
+                require_matrix_close(replay[i].scf.forces, expected[i].scf.forces, 5.0e-9,
+                                     "DF cache retained the previous metric response");
+              }
+            }
           }
         }
       }
@@ -961,6 +1092,60 @@ int main() {
           integrals, alpha_density, beta_density, 1.0e-12);
       require_matrix_close(source_uhf_force, source_host_uhf_gradient.derivative, 8.0e-10,
                            "source-backed CUDA UHF force response differs from oracle");
+
+      // Generated HF weights use the same derivative consumer as arbitrary
+      // external responses. Compare its resident/source paths on the owning
+      // stream while changing both host and device staging budgets.
+      std::vector<double> generated_rhf_density(rhf_density.size()),
+          generated_total(rhf_density.size());
+      for (std::size_t ij = 0; ij < rhf_density.size(); ++ij) {
+        generated_rhf_density[ij] = 2 * alpha_density[ij];
+        generated_total[ij] = alpha_density[ij] + beta_density[ij];
+      }
+      const auto generated_rhf_oracle =
+          vibeqc::scf::build_density_fitting_rhf_gradient(integrals, generated_rhf_density, 1e-12);
+      for (bool unrestricted : {false, true}) {
+        std::vector<vibeqc::scf::DensityFittingDensityResponse> terms =
+            unrestricted
+                ? std::vector<vibeqc::scf::DensityFittingDensityResponse>{{generated_total, 1.0,
+                                                                           0.0},
+                                                                          {alpha_density, 0.0, 0.5},
+                                                                          {beta_density, 0.0, 0.5}}
+                : std::vector<vibeqc::scf::DensityFittingDensityResponse>{
+                      {generated_rhf_density, 1.0, 0.25}};
+        for (auto* response_plan : {resident_plan.get(), source_plan.get()}) {
+          for (std::size_t budget : {16384U, 65536U}) {
+            std::vector<double> generated_gradient{123.0};
+            std::string generated_detail;
+            vibeqc::scf::DfGradientResources resources;
+            const auto status = vibeqc::scf::execute_cuda_density_fitting_generated_force_response(
+                response_plan, 0, orbital, auxiliary, integrals.three_center, integrals.metric,
+                terms, 0, budget, budget == 16384U ? 3U : 7U, generated_gradient, generated_detail,
+                &resources);
+            require(status == VIBEQC_STATUS_SUCCESS, generated_detail.c_str());
+            require_matrix_close(generated_gradient,
+                                 unrestricted ? source_host_uhf_gradient.derivative
+                                              : generated_rhf_oracle.derivative,
+                                 8e-10, "generated CUDA DF-HF response differs from raw oracle");
+            require(resources.host_bytes <= budget && resources.device_bytes <= budget,
+                    "generated DF-HF response exceeds its numeric staging budget");
+            require(resources.auxiliary_weight_tile < integrals.naux &&
+                        integrals.naux % resources.auxiliary_weight_tile != 0,
+                    "generated DF-HF response must exercise a final partial weight block");
+            require(resources.device_to_host_bytes >= integrals.ncoord * sizeof(double) &&
+                        ((response_plan == resident_plan.get()) ==
+                         (resources.device_to_host_bytes == integrals.ncoord * sizeof(double))),
+                    "generated DF-HF value staging boundary is incorrectly reported");
+            const auto saved = generated_gradient;
+            require(vibeqc::scf::execute_cuda_density_fitting_generated_force_response(
+                        response_plan, 0, orbital, auxiliary, integrals.three_center,
+                        integrals.metric, terms, 0, 32, 0, generated_gradient,
+                        generated_detail) == VIBEQC_STATUS_OUT_OF_MEMORY &&
+                        generated_gradient == saved,
+                    "generated DF-HF budget failure changed caller output");
+          }
+        }
+      }
 
       // Exercise a genuinely heterogeneous source batch.  The two orbital
       // systems have identical public dimensions but reverse their spherical

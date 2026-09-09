@@ -41,7 +41,9 @@ def pyscf_molecule(inputs):
         )
     mol = gto.M(
         atom=list(zip(labels, inputs["coordinates"], strict=True)),
-        basis=basis,
+        # Atoms owning only the other DF basis have no shells in this molecule.
+        # PySCF accepts missing basis keys, but rejects an explicit empty list.
+        basis={label: shells for label, shells in basis.items() if shells},
         unit="Bohr",
         cart=inputs["basis_representation"] == "cartesian",
         charge=inputs["charge"],

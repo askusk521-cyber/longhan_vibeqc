@@ -78,8 +78,8 @@
   "reference": {
     "PySCF": "2.14.0",
     "Libxc": "7.0.0",
-    "NumPy": "2.2.6",
-    "python": "3.11.16 (main, Sep  1 2026, 14:18:37) [Clang 22.1.3 ]",
+    "NumPy": "2.5.3",
+    "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
     "actual_angular_momenta": [
       0,
       1,
@@ -88,7 +88,7 @@
     ],
     "pyscf_numint_sha256": "ff7384551c7a6b80ff8a5ffcd915eb8bfbf6ca4b8f987f912aa82a1d6edda7e8",
     "exporter_sha256": "fc83ad88b16fd7269686315be2f4fb42626eacabf82034e3a3a35fd432f90c50",
-    "basis_adapter_sha256": "874b306375aa0c6c263aa57bb4c36de13ba0842cdd20332b5ecc8e71ae9a1604",
+    "basis_adapter_sha256": "88b59d85e891edf86405990179723802682f479fc265a91773b088b1ce1b162e",
     "functionals": {
       "LDA_XC_PW": "LDA_X,LDA_C_PW",
       "PBE": "GGA_X_PBE,GGA_C_PBE"
@@ -140,32 +140,32 @@
       "shape": [
         20
       ],
-      "sha256": "9c723b628deb7012727f24d5eb06c3b248b975d0a39099b146e6397152136867"
+      "sha256": "b74dd9d275b39b8852d982d4d97fbc6255adff708a783587f7b065d51f84ceda"
     },
     "LDA_XC_PW_total_energy": {
       "shape": [
         1
       ],
-      "sha256": "f7755fd7710afa1f15743fefa7caa967315fbf755555fcef83dadfad64113286"
+      "sha256": "217236daaf624326161f22bbac2be2567aad6e253ac835a482f64468badf2350"
     },
     "LDA_XC_PW_total_potential": {
       "shape": [
         20,
         20
       ],
-      "sha256": "930a46605ecd030b206f03ad58c6be9c5a4e8b2e668fc3e9863655459f2f7c3f"
+      "sha256": "261115ddc521bed7b06ba43a3f7789defc786da129f59bc5bcf565077694223b"
     },
     "LDA_XC_PW_total_electrons": {
       "shape": [
         1
       ],
-      "sha256": "95a1e315726e1e825f5da088e93184488dcacd61d4ef4e627cd31d3bd0ced2fb"
+      "sha256": "48d2d32defaa4e1e037fafa4ee42221f96dc77dbbe2500c4dd0e5c3e62240d6b"
     },
     "LDA_XC_PW_spin_energy": {
       "shape": [
         1
       ],
-      "sha256": "d858236b6f8cfbadcd3cd48af68e08da8060922e520fb056e5ab8c07930c9355"
+      "sha256": "742561e20734ce460f7b9f0f57cfd7a6d46f16a10bbb1655852dba9cce0dfbc7"
     },
     "LDA_XC_PW_spin_potential": {
       "shape": [
@@ -173,38 +173,38 @@
         20,
         20
       ],
-      "sha256": "6b0d105fe2c2bb2ee46d1026681e5ee417a3a67d8cd981a1f1142be79ed36a93"
+      "sha256": "14b3434aa30bdfa169ac4105e30647d4f21464525af6a60e84649d90d9d849f8"
     },
     "LDA_XC_PW_spin_electrons": {
       "shape": [
         2
       ],
-      "sha256": "49a057e8b085cffee3a755a0cc447da893d8896cff0a9d97bacb093dda8f9a76"
+      "sha256": "85d6acebcf0a7b4c852870e79667b9a16e3b90a95fdb32e99f3ddd4a8389745a"
     },
     "PBE_total_energy": {
       "shape": [
         1
       ],
-      "sha256": "1a996434a67cfdea7de5f3d696d31c3f1a7a3f7d08ce17a02dfe78d227338001"
+      "sha256": "5423fad9544318fc9fac0d1c912fc7c4e006c185aca0ffe2ab1b0d8bebebedb6"
     },
     "PBE_total_potential": {
       "shape": [
         20,
         20
       ],
-      "sha256": "1e2c355781f92dd0957142693b475c942a29b3fc7d41a33ac56d205ba5916b20"
+      "sha256": "a08948c459870816ef0782fe300407f7dfd2f04f7b15a09e15b96e8af95b1206"
     },
     "PBE_total_electrons": {
       "shape": [
         1
       ],
-      "sha256": "95a1e315726e1e825f5da088e93184488dcacd61d4ef4e627cd31d3bd0ced2fb"
+      "sha256": "971bd270e05b67338a07df9f9eede0b248381e09be32487d50fc70debb5149a5"
     },
     "PBE_spin_energy": {
       "shape": [
         1
       ],
-      "sha256": "c302c4c32aba229296dffe0ad0cda28da41c61b224862e70184733a1cb840948"
+      "sha256": "55d790951383ff273e1d8b0964c88c560db972210b169eafd6ea16144fb30d93"
     },
     "PBE_spin_potential": {
       "shape": [
@@ -212,14 +212,14 @@
         20,
         20
       ],
-      "sha256": "46e77cf99382d6fb090bcaadec3d3bf27ea61cb16191c6fe823ff70370840e69"
+      "sha256": "29f9336a3512a13f80d9affe631e8e8cd52834bce9d1d706ada5359e85294f42"
     },
     "PBE_spin_electrons": {
       "shape": [
         2
       ],
-      "sha256": "49a057e8b085cffee3a755a0cc447da893d8896cff0a9d97bacb093dda8f9a76"
+      "sha256": "18b38b3c1dc066ec7a3678e29b66e6647087ede451fdd1f1366280fd22f6d2aa"
     }
   },
-  "identity": "31c1af130597fd97a1490a6ab3344041c20343f74eee687f0741c0fac75ec6c9"
+  "identity": "f8df0ffbe013ae5b03260d9ca531523c91245027c84f9b0af4fffb6e59a6d1d0"
 }
