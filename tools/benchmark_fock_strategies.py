@@ -97,6 +97,7 @@ def worker(args):
     library.vibeqc_get_source_identity.restype = ctypes.c_char_p
     record["native_source_identity"] = library.vibeqc_get_source_identity().decode()
     rows = []
+    record["prepared_diagnostics"] = []
     cases = {
         "h2": [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))],
         "water": [
@@ -114,6 +115,11 @@ def worker(args):
 
     def encode(result):
         items = result.items if hasattr(result, "items") else (result,)
+        expected = "cuda" if args.device == "cuda" else "cpu_reference"
+        if any(
+            item.executed_backend != expected or not item.converged for item in items
+        ):
+            raise RuntimeError("benchmark backend or convergence differs from request")
         return [
             {
                 "energy": item.energy,
@@ -122,9 +128,32 @@ def worker(args):
                 "energy_change": item.energy_change,
                 "density_rms": item.density_rms,
                 "warm_start_used": getattr(item, "warm_start_used", False),
+                "executed_backend": item.executed_backend,
             }
             for item in items
         ]
+
+    def diagnostic(plan, metadata, count):
+        # Outside the timing interval: retain the selected eigensolver and DF
+        # allocation/tiling records without turning on scientific profiling.
+        def optional(query):
+            try:
+                return {"entries": [d.to_dict() for d in query()], "reason": None}
+            except NotImplementedError:
+                # The legacy ABI represents an empty diagnostic set with
+                # NOT_IMPLEMENTED (e.g. no CUDA eigensolver in a CPU bucket).
+                return {"entries": [], "reason": "no records exposed by this route"}
+
+        record["prepared_diagnostics"].append(
+            {
+                **metadata,
+                "system_count": count,
+                "eigensolver": optional(plan.last_eigensolver_diagnostics),
+                "density_fitting": optional(
+                    plan.last_density_fitting_metric_diagnostics
+                ),
+            }
+        )
 
     def measure(name, function, metadata):
         samples, outputs = [], []
@@ -177,6 +206,7 @@ def worker(args):
                     [atoms], charges=[charge], multiplicities=[multiplicity]
                 ) as plan:
                     plan.execute(strict=True)
+                    diagnostic(plan, meta, 1)
                     measure("warm_replay", lambda _: plan.execute(strict=True), meta)
                     measure(
                         "changed_geometry",
@@ -205,6 +235,7 @@ def worker(args):
                 )
                 with calc.prepare_batch(systems, **batch_state) as plan:
                     plan.execute(strict=True)
+                    diagnostic(plan, meta, 4)
                     measure(
                         "batch_four_warm", lambda _: plan.execute(strict=True), meta
                     )
@@ -212,7 +243,7 @@ def worker(args):
     probe = args.output.parent / f"dispatch-{args.label}"
     command(
         [
-            "c++",
+            record["build"]["CMAKE_CXX_COMPILER"],
             "-std=c++20",
             "-O3",
             "-DNDEBUG",
