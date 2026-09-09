@@ -682,6 +682,35 @@ int main() {
                            host_one_electron.nuclear_repulsion_derivative, 3.0e-11,
                            "CUDA nuclear derivative differs from oracle");
 
+      // Energy-only setup must omit derivative storage at its source, while
+      // preserving the independently checked one-electron and DF values.
+      vibeqc::integrals::IntegralData value_one_electron;
+      require(vibeqc::scf::build_cuda_one_electron_integrals(0, orbital, value_one_electron,
+                                                             cuda_one_electron_detail, false,
+                                                             false) == VIBEQC_STATUS_SUCCESS,
+              cuda_one_electron_detail.c_str());
+      require(value_one_electron.overlap_derivative.empty() &&
+                  value_one_electron.hcore_derivative.empty() &&
+                  value_one_electron.nuclear_repulsion_derivative.empty(),
+              "energy-only one-electron setup produced derivatives");
+      require_matrix_close(value_one_electron.overlap, host_one_electron.overlap, 3.0e-11,
+                           "energy-only CUDA overlap differs from oracle");
+      require_matrix_close(value_one_electron.hcore, host_one_electron.hcore, 3.0e-11,
+                           "energy-only CUDA Hcore differs from oracle");
+      require_close(value_one_electron.nuclear_repulsion, host_one_electron.nuclear_repulsion,
+                    3.0e-12, "energy-only nuclear repulsion differs from oracle");
+      vibeqc::integrals::DensityFittingIntegralData value_df;
+      require(vibeqc::scf::build_cuda_density_fitting_integrals(0, orbital, auxiliary, value_df,
+                                                                cuda_integral_detail,
+                                                                false) == VIBEQC_STATUS_SUCCESS,
+              cuda_integral_detail.c_str());
+      require(value_df.metric_derivative.empty() && value_df.three_center_derivative.empty(),
+              "energy-only DF setup produced derivatives");
+      require_matrix_close(value_df.metric, integrals.metric, 3.0e-11,
+                           "energy-only CUDA metric differs from oracle");
+      require_matrix_close(value_df.three_center, integrals.three_center, 3.0e-11,
+                           "energy-only CUDA three-center tensor differs from oracle");
+
       // Spin-independent integral packing must also accept odd-electron UHF
       // inputs. H2+ has the same one-electron values as H2 at fixed geometry.
       auto open_shell_orbital = orbital;

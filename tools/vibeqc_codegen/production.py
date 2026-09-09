@@ -1235,6 +1235,14 @@ __device__ __forceinline__ bool {prefix}_stream_survives(
   return contribution >= screening_tolerance;
 }}
 
+/** Count the arithmetic route actually selected for one retained quartet. */
+__device__ __forceinline__ void {prefix}_record_fock_precision(
+    std::uint32_t state, unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
+  unsigned long long* counter = state == 3U ? fp32_work_count : fp64_work_count;
+  if (counter != nullptr) atomicAdd(counter, 1ULL);
+}}
+
 /** Canonicalize one pair product into the stable generated task ABI. */
 __device__ __forceinline__ void {prefix}_stream_populate_task(
     const vibeqc::scf::detail::GeneratedShellPairStream& topology,
@@ -1352,7 +1360,9 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
     const Generated{class_name}Vec3* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   static_assert(kGenerated{class_name}FockBlockThreads == 32U);
 {state_declarations}
   __shared__ std::uint32_t bra_ordinal;
@@ -1405,9 +1415,12 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
             &contribution_bound);
       }}
       if (keep) {{
+        const std::uint32_t precision_state = {retained_state};
+        {prefix}_record_fock_precision(
+            precision_state, fp64_work_count, fp32_work_count);
         {prefix}_stream_populate_task(
             topology, bra_pair, ket_pair, {task_reference});
-        if ({retained_state} == 3U) {{
+        if (precision_state == 3U) {{
           {
             f'''{prefix}_packed_mixed_fock_lane<Unrestricted>(
               {task_pointer}, primitive_pairs, primitive_pair_offsets,
@@ -1444,7 +1457,9 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
     const Generated{class_name}Vec3* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   static_assert(kGenerated{class_name}FockBlockThreads == {schedule.block_threads}U);
   __shared__ Generated{class_name}ShellTask stream_tasks[{tasks_per_block}];
   {
@@ -1515,6 +1530,8 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
           }}
           state = past_schwarz_tail ? 2U : (keep ? {retained_state} : 0U);
           if (keep) {{
+            {prefix}_record_fock_precision(
+                state, fp64_work_count, fp32_work_count);
             {prefix}_stream_populate_task(
                 topology, bra_pair, ket_pair, stream_tasks[subgroup]);
           }}
@@ -1575,7 +1592,9 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
     const Generated{class_name}Vec3* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* task_head) {{
+    const double* density, double* fock, std::uint32_t* task_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   static_assert(kGenerated{class_name}FockBlockThreads ==
                 {schedule.block_threads}U);
   __shared__ Generated{class_name}ShellTask stream_task[1];
@@ -1638,6 +1657,8 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
         stream_state = keep ? {retained_state} : 0U;
         if (past_schwarz_tail) stream_state = 2U;
         if (keep) {{
+          {prefix}_record_fock_precision(
+              stream_state, fp64_work_count, fp32_work_count);
           {prefix}_stream_populate_task(
               topology, bra_pair, ket_pair, stream_task[0]);
         }}
@@ -1677,7 +1698,9 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
     const Generated{class_name}Vec3* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   static_assert(kGenerated{class_name}FockBlockThreads ==
                 {schedule.block_threads}U);
   __shared__ Generated{class_name}ShellTask stream_task[1];
@@ -1723,6 +1746,8 @@ __device__ __forceinline__ void {prefix}_streaming_fock(
         }}
         stream_state = past_schwarz_tail ? 2U : (keep ? {retained_state} : 0U);
         if (keep) {{
+          {prefix}_record_fock_precision(
+              stream_state, fp64_work_count, fp32_work_count);
           {prefix}_stream_populate_task(
               topology, bra_pair, ket_pair, stream_task[0]);
         }}
@@ -1761,11 +1786,14 @@ void {prefix}_shell_class_fock_rhf_streaming_kernel(
     const Generated{class_name}Vec3* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   {prefix}_streaming_fock<false>(
       topology, primitive_pairs, primitive_pair_offsets, ao_coefficients,
       atom_positions, screening_tolerance, mixed_precision_enabled,
-      fp64_threshold, schwarz_bounds, density, fock, bra_head);
+      fp64_threshold, schwarz_bounds, density, fock, bra_head,
+      fp64_work_count, fp32_work_count);
 }}
 
 extern "C" __global__ __launch_bounds__(kGenerated{class_name}FockBlockThreads)
@@ -1777,11 +1805,14 @@ void {prefix}_shell_class_fock_uhf_streaming_kernel(
     const Generated{class_name}Vec3* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   {prefix}_streaming_fock<true>(
       topology, primitive_pairs, primitive_pair_offsets, ao_coefficients,
       atom_positions, screening_tolerance, mixed_precision_enabled,
-      fp64_threshold, schwarz_bounds, density, fock, bra_head);
+      fp64_threshold, schwarz_bounds, density, fock, bra_head,
+      fp64_work_count, fp32_work_count);
 }}
 """
     return common + worker + kernels
@@ -1802,7 +1833,9 @@ extern "C" cudaError_t {symbol or f"vibeqc_launch_generated_{spec.name}_streamin
     const double* ao_coefficients, const void* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) {{
   if (worker_blocks == 0U) return cudaSuccess;
   const auto* topology = static_cast<
       const vibeqc::scf::detail::GeneratedShellPairStream*>(
@@ -1818,14 +1851,14 @@ extern "C" cudaError_t {symbol or f"vibeqc_launch_generated_{spec.name}_streamin
         topology, typed_primitive_pairs, primitive_pair_offsets,
         ao_coefficients, typed_positions, screening_tolerance,
         mixed_precision_enabled, fp64_threshold, schwarz_bounds, density,
-        fock, bra_head);
+        fock, bra_head, fp64_work_count, fp32_work_count);
   }} else {{
     generated_{spec.name}_shell_class_fock_rhf_streaming_kernel<<<
         worker_blocks, kGenerated{class_name}FockBlockThreads, 0, stream>>>(
         topology, typed_primitive_pairs, primitive_pair_offsets,
         ao_coefficients, typed_positions, screening_tolerance,
         mixed_precision_enabled, fp64_threshold, schwarz_bounds, density,
-        fock, bra_head);
+        fock, bra_head, fp64_work_count, fp32_work_count);
   }}
   return cudaPeekAtLastError();
 }}
@@ -2129,7 +2162,9 @@ cudaError_t launch_shell_class_streaming_fock(
     const double* ao_coefficients, const void* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) noexcept;
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) noexcept;
 
 /** Launch the optional resident-bra ppps force worker. */
 cudaError_t launch_ppps_resident(
@@ -2228,7 +2263,8 @@ def emit_registry_source(
         f"""extern "C" cudaError_t vibeqc_launch_generated_{spec.name}_streaming_fock(
     cudaStream_t, bool, unsigned, const void*, const std::int64_t*,
     const void*, const double*, const void*, double, bool, double,
-    const double*, const double*, double*, std::uint32_t*);"""
+    const double*, const double*, double*, std::uint32_t*,
+    unsigned long long*, unsigned long long*);"""
         for spec in streaming_fock_specs
     )
     streaming_fock_cases = "\n".join(
@@ -2237,7 +2273,8 @@ def emit_registry_source(
           stream, unrestricted, worker_blocks, shell_pair_stream,
           primitive_pair_offsets, primitive_pairs, ao_coefficients,
           atom_positions, screening_tolerance, mixed_precision_enabled,
-          fp64_threshold, schwarz_bounds, density, fock, bra_head);"""
+          fp64_threshold, schwarz_bounds, density, fock, bra_head,
+          fp64_work_count, fp32_work_count);"""
         for spec in streaming_fock_specs
     )
     resident_declaration = ""
@@ -2376,7 +2413,9 @@ cudaError_t launch_shell_class_streaming_fock(
     const double* ao_coefficients, const void* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head) noexcept {{
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count) noexcept {{
   switch (shell_class) {{
 {streaming_fock_cases}
     default: return cudaErrorInvalidValue;
@@ -2667,7 +2706,9 @@ def _streaming_fock_launch_parameter_declaration() -> str:
     const double* ao_coefficients, const void* atom_positions,
     double screening_tolerance, bool mixed_precision_enabled,
     double fp64_threshold, const double* schwarz_bounds,
-    const double* density, double* fock, std::uint32_t* bra_head"""
+    const double* density, double* fock, std::uint32_t* bra_head,
+    unsigned long long* fp64_work_count,
+    unsigned long long* fp32_work_count"""
 
 
 def _launch_argument_list() -> str:
@@ -2692,7 +2733,8 @@ def _streaming_fock_launch_argument_list() -> str:
     return """stream, unrestricted, worker_blocks, shell_pair_stream,
           primitive_pair_offsets, primitive_pairs, ao_coefficients,
           atom_positions, screening_tolerance, mixed_precision_enabled,
-          fp64_threshold, schwarz_bounds, density, fock, bra_head"""
+          fp64_threshold, schwarz_bounds, density, fock, bra_head,
+          fp64_work_count, fp32_work_count"""
 
 
 def emit_multi_registry_source(
@@ -2800,7 +2842,8 @@ def emit_multi_registry_source(
                         "cudaStream_t, bool, unsigned, const void*, "
                         "const std::int64_t*, const void*, const double*, "
                         "const void*, double, bool, double, const double*, "
-                        "const double*, double*, std::uint32_t*);"
+                        "const double*, double*, std::uint32_t*, "
+                        "unsigned long long*, unsigned long long*);"
                     )
                     streaming_fock_cases.append(
                         f"    case {shell_class}U:\n"

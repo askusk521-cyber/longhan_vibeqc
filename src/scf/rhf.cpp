@@ -712,22 +712,24 @@ std::vector<double> analytic_uhf_forces(const ResolvedFockBuild& strategy,
 
 void finalize_scf(const ResolvedFockBuild& strategy, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t occupied, Matrix& density,
-                  ScfResult& result) {
+                  bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
   Matrix final_fock = build_fock(strategy, ints.hcore, ints.eri, density, n);
   EigenResult orbitals = generalized_eigen(final_fock, orthogonalizer, n);
   density = density_from_orbitals(orbitals.vectors, n, occupied);
   final_fock = build_fock(strategy, ints.hcore, ints.eri, density, n);
   result.energy = electronic_energy(density, ints.hcore, final_fock) + ints.nuclear_repulsion;
-  const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
-  result.forces = analytic_forces(strategy, ints, density, weighted);
+  if (compute_forces) {
+    const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
+    result.forces = analytic_forces(strategy, ints, density, weighted);
+  }
   result.density = density;
 }
 
 void finalize_uhf(const ResolvedFockBuild& strategy, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t alpha_occupied,
                   std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
-                  ScfResult& result) {
+                  bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
   auto [alpha_fock, beta_fock] =
       build_uhf_focks(strategy, ints.hcore, ints.eri, alpha_density, beta_density, n);
@@ -740,12 +742,14 @@ void finalize_uhf(const ResolvedFockBuild& strategy, const integrals::IntegralDa
   result.energy =
       uhf_electronic_energy(alpha_density, beta_density, ints.hcore, alpha_fock, beta_fock) +
       ints.nuclear_repulsion;
-  const Matrix alpha_weighted = energy_weighted_density(
-      alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
-  const Matrix beta_weighted =
-      energy_weighted_density(beta_orbitals.vectors, beta_orbitals.values, n, beta_occupied, 1.0);
-  result.forces = analytic_uhf_forces(strategy, ints, alpha_density, beta_density, alpha_weighted,
-                                      beta_weighted);
+  if (compute_forces) {
+    const Matrix alpha_weighted = energy_weighted_density(
+        alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
+    const Matrix beta_weighted =
+        energy_weighted_density(beta_orbitals.vectors, beta_orbitals.values, n, beta_occupied, 1.0);
+    result.forces = analytic_uhf_forces(strategy, ints, alpha_density, beta_density, alpha_weighted,
+                                        beta_weighted);
+  }
   result.density = concatenate(alpha_density, beta_density);
 }
 
@@ -877,7 +881,8 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
                                                    const core::System& auxiliary_system,
                                                    double relative_threshold,
                                                    int cuda_device_id = -1,
-                                                   std::size_t output_budget_bytes = 0U) {
+                                                   std::size_t output_budget_bytes = 0U,
+                                                   bool include_derivatives = true) {
   // A non-negative device selects the CUDA Cartesian evaluator for the raw
   // metric/three-center tensors.  The default keeps CPU-reference callers
   // entirely on the existing oracle path.
@@ -896,7 +901,8 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
     std::string one_electron_detail;
     const vibeqc_status one_electron_status = build_cuda_one_electron_integrals(
         cuda_device_id, system, cartesian_one_electron, one_electron_detail,
-        !cuda_policy::generated_one_electron_derivatives_requested());
+        include_derivatives && !cuda_policy::generated_one_electron_derivatives_requested(),
+        include_derivatives);
     if (one_electron_status != VIBEQC_STATUS_SUCCESS) {
       throw std::runtime_error(one_electron_detail.empty()
                                    ? "CUDA one-electron integral generation failed"
@@ -913,11 +919,13 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
       integrals::DensityFittingIntegralData metadata;
       metadata.nbf = molecule::ao_count(system);
       metadata.naux = molecule::ao_count(auxiliary_system);
-      metadata.ncoord = system.atoms.size() * 3U;
+      metadata.ncoord = include_derivatives ? system.atoms.size() * 3U : 0U;
       data = assemble_density_fitting_metadata(std::move(data.one_electron), std::move(metadata),
                                                relative_threshold);
-      bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
-      bind_generated_df(data, system, auxiliary_system, cuda_device_id, output_budget_bytes);
+      if (include_derivatives) {
+        bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
+        bind_generated_df(data, system, auxiliary_system, cuda_device_id, output_budget_bytes);
+      }
       return data;
     }
 
@@ -925,7 +933,7 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
     std::string detail;
     const vibeqc_status status = build_cuda_density_fitting_integrals(
         cuda_device_id, system, auxiliary_system, cartesian, detail,
-        !cuda_policy::generated_df_derivatives_requested());
+        include_derivatives && !cuda_policy::generated_df_derivatives_requested());
     if (status != VIBEQC_STATUS_SUCCESS) {
       throw std::runtime_error(detail.empty() ? "CUDA density-fitting integral generation failed"
                                               : detail);
@@ -935,18 +943,22 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
     // host oracle after the device values and derivatives are downloaded.
     data.raw = integrals::transform_density_fitting_integrals(cartesian, system, auxiliary_system);
   } else {
-    data.one_electron = integrals::build_integrals(system);
-    data.raw = integrals::build_density_fitting_integrals(system, auxiliary_system);
+    data.one_electron = integrals::build_integrals(system, include_derivatives);
+    data.raw =
+        integrals::build_density_fitting_integrals(system, auxiliary_system, include_derivatives);
   }
 #else
   (void)cuda_device_id;
-  data.one_electron = integrals::build_integrals(system);
-  data.raw = integrals::build_density_fitting_integrals(system, auxiliary_system);
+  data.one_electron = integrals::build_integrals(system, include_derivatives);
+  data.raw =
+      integrals::build_density_fitting_integrals(system, auxiliary_system, include_derivatives);
 #endif
   data = assemble_density_fitting_data(std::move(data.one_electron), std::move(data.raw),
                                        relative_threshold);
-  bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
-  bind_generated_df(data, system, auxiliary_system, cuda_device_id, output_budget_bytes);
+  if (include_derivatives) {
+    bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
+    bind_generated_df(data, system, auxiliary_system, cuda_device_id, output_budget_bytes);
+  }
   return data;
 }
 
@@ -1127,6 +1139,11 @@ void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matri
   }
   result.energy = electronic_energy(density, data.one_electron.hcore, final_fock) +
                   data.one_electron.nuclear_repulsion;
+  if (!options.compute_forces) {
+    result.density = density;
+    return;
+  }
+
   const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
   // Run before the legacy response fallback guard: a requested generated
   // failure must propagate, never silently switch integral implementations.
@@ -1296,6 +1313,11 @@ void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matri
   result.energy = uhf_electronic_energy(alpha_density, beta_density, data.one_electron.hcore,
                                         alpha_fock, beta_fock) +
                   data.one_electron.nuclear_repulsion;
+  if (!options.compute_forces) {
+    result.density = concatenate(alpha_density, beta_density);
+    return;
+  }
+
   const Matrix alpha_weighted = energy_weighted_density(
       alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
   const Matrix beta_weighted =
@@ -1411,7 +1433,8 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
   if (strategy.screening_tolerance != options.screening_tolerance) {
     throw std::invalid_argument("resolved Fock screening differs from SCF options");
   }
-  const integrals::IntegralData ints = integrals::build_cartesian_integrals(system);
+  const integrals::IntegralData ints =
+      integrals::build_cartesian_integrals(system, options.compute_forces);
   const std::size_t n = ints.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
@@ -1483,7 +1506,7 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
 
   // Rebuild and diagonalize the un-extrapolated converged Fock matrix. The
   // resulting orbitals define the energy-weighted density in the Pulay term.
-  finalize_scf(strategy, ints, orthogonalizer, occupied, density, result);
+  finalize_scf(strategy, ints, orthogonalizer, occupied, density, options.compute_forces, result);
   return result;
 }
 
@@ -1499,7 +1522,8 @@ ScfResult run_uhf(const core::System& system, const ScfOptions& options,
   if (strategy.screening_tolerance != options.screening_tolerance) {
     throw std::invalid_argument("resolved Fock screening differs from SCF options");
   }
-  const integrals::IntegralData ints = integrals::build_cartesian_integrals(system);
+  const integrals::IntegralData ints =
+      integrals::build_cartesian_integrals(system, options.compute_forces);
   const std::size_t n = ints.nbf;
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (alpha_occupied > n || beta_occupied > n) {
@@ -1593,7 +1617,7 @@ ScfResult run_uhf(const core::System& system, const ScfOptions& options,
   // As in RHF, rebuild from the un-extrapolated converged spin Fock matrices
   // before forming orbital-weighted Pulay densities and analytic forces.
   finalize_uhf(strategy, ints, orthogonalizer, alpha_occupied, beta_occupied, alpha_density,
-               beta_density, result);
+               beta_density, options.compute_forces, result);
   return result;
 }
 
@@ -1601,7 +1625,8 @@ ScfResult run_rhf_density_fitting(const core::System& system, const core::System
                                   const ScfOptions& options,
                                   const std::vector<double>* initial_density) {
   const DensityFittingScfData data = prepare_density_fitting_data(
-      system, auxiliary_system, options.density_fitting_relative_threshold);
+      system, auxiliary_system, options.density_fitting_relative_threshold, -1, 0U,
+      options.compute_forces);
   const std::size_t n = data.one_electron.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
@@ -1683,7 +1708,8 @@ ScfResult run_uhf_density_fitting(const core::System& system, const core::System
                                   const ScfOptions& options,
                                   const std::vector<double>* initial_density) {
   const DensityFittingScfData data = prepare_density_fitting_data(
-      system, auxiliary_system, options.density_fitting_relative_threshold);
+      system, auxiliary_system, options.density_fitting_relative_threshold, -1, 0U,
+      options.compute_forces);
   const std::size_t n = data.one_electron.nbf;
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (alpha_occupied > n || beta_occupied > n) {
@@ -2302,7 +2328,7 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
 
   DensityFittingScfData data = prepare_density_fitting_data(
       system, auxiliary_system, options.density_fitting_relative_threshold, device_id,
-      options.density_fitting_memory_budget_bytes);
+      options.density_fitting_memory_budget_bytes, options.compute_forces);
   const std::size_t n = data.one_electron.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
@@ -2403,7 +2429,7 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
 
   DensityFittingScfData data = prepare_density_fitting_data(
       system, auxiliary_system, options.density_fitting_relative_threshold, device_id,
-      options.density_fitting_memory_budget_bytes);
+      options.density_fitting_memory_budget_bytes, options.compute_forces);
   const std::size_t n = data.one_electron.nbf;
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (alpha_occupied > n || beta_occupied > n) {

@@ -43,7 +43,7 @@ struct DensityFittingIntegralData {
  * execution evaluates the same formulas on device and does not call this
  * routine or copy these integral tensors to the GPU.
  */
-IntegralData build_integrals(const core::System& system);
+IntegralData build_integrals(const core::System& system, bool include_derivatives = true);
 
 /**
  * Write a row-major rectangular <target AO | source AO> overlap on the CPU.
@@ -63,7 +63,8 @@ void cross_overlap(const core::System& target, const core::System& source,
  * integral-generation kernels.
  */
 DensityFittingIntegralData build_density_fitting_integrals(const core::System& orbital_system,
-                                                           const core::System& auxiliary_system);
+                                                           const core::System& auxiliary_system,
+                                                           bool include_derivatives = true);
 
 /**
  * Transform Cartesian density-fitting tensors into the public AO
@@ -82,13 +83,14 @@ DensityFittingIntegralData transform_density_fitting_integrals(
 IntegralData transform_integrals(const IntegralData& cartesian, const core::System& system);
 
 /** Compatibility name retained for callers that explicitly request Cartesian. */
-inline IntegralData build_cartesian_integrals(const core::System& system) {
-  return build_integrals(system);
+inline IntegralData build_cartesian_integrals(const core::System& system,
+                                              bool include_derivatives = true) {
+  return build_integrals(system, include_derivatives);
 }
 
 /** Backward-compatible name retained for the original s-shell test helpers. */
-inline IntegralData build_s_integrals(const core::System& system) {
-  return build_integrals(system);
+inline IntegralData build_s_integrals(const core::System& system, bool include_derivatives = true) {
+  return build_integrals(system, include_derivatives);
 }
 
 }  // namespace vibeqc::integrals

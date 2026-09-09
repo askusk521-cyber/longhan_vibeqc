@@ -273,8 +273,12 @@ class HfPreparedCalculation final : public PreparedCalculation {
 
   [[nodiscard]] const Capabilities& capabilities() const noexcept override { return capabilities_; }
 
-  Result execute() override {
-    const scf::ResolvedFockBuild& strategy = *options_.resolved_fock_build;
+  Result execute(bool compute_forces) override {
+    // Keep the prepared scientific controls immutable. Output selection is an
+    // execution property and must not leak into a later replay of this plan.
+    scf::ScfOptions execution_options = options_;
+    execution_options.compute_forces = compute_forces;
+    const scf::ResolvedFockBuild& strategy = *execution_options.resolved_fock_build;
     const bool unrestricted = strategy.spec.spin == scf::FockSpin::Unrestricted;
     const bool use_cuda = strategy.backend == scf::FockBackend::Cuda;
     scf::ScfResult native;
@@ -282,19 +286,20 @@ class HfPreparedCalculation final : public PreparedCalculation {
       const core::System& auxiliary =
           auxiliary_template_.has_value() ? *auxiliary_template_ : system_;
       if (use_cuda) {
-        native = unrestricted ? scf::run_uhf_density_fitting_cuda(system_, auxiliary, options_,
-                                                                  context_->device_id)
-                              : scf::run_rhf_density_fitting_cuda(system_, auxiliary, options_,
-                                                                  context_->device_id);
+        native = unrestricted ? scf::run_uhf_density_fitting_cuda(
+                                    system_, auxiliary, execution_options, context_->device_id)
+                              : scf::run_rhf_density_fitting_cuda(
+                                    system_, auxiliary, execution_options, context_->device_id);
       } else {
-        native = unrestricted ? scf::run_uhf_density_fitting(system_, auxiliary, options_)
-                              : scf::run_rhf_density_fitting(system_, auxiliary, options_);
+        native = unrestricted ? scf::run_uhf_density_fitting(system_, auxiliary, execution_options)
+                              : scf::run_rhf_density_fitting(system_, auxiliary, execution_options);
       }
     } else if (use_cuda) {
-      native = unrestricted ? scf::run_uhf_cuda(system_, options_, context_->device_id)
-                            : scf::run_rhf_cuda(system_, options_, context_->device_id);
+      native = unrestricted ? scf::run_uhf_cuda(system_, execution_options, context_->device_id)
+                            : scf::run_rhf_cuda(system_, execution_options, context_->device_id);
     } else {
-      native = unrestricted ? scf::run_uhf(system_, options_) : scf::run_rhf(system_, options_);
+      native = unrestricted ? scf::run_uhf(system_, execution_options)
+                            : scf::run_rhf(system_, execution_options);
     }
     return adapt_result(std::move(native),
                         use_cuda ? VIBEQC_BACKEND_CUDA : VIBEQC_BACKEND_CPU_REFERENCE);

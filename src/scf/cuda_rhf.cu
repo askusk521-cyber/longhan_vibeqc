@@ -343,6 +343,14 @@ struct DeviceShellClassProfileEntry {
   unsigned long long primitive_quartets;
 };
 
+/** Add one compacted page count to a profiling-only 64-bit accumulator. */
+__global__ void accumulate_fock_precision_work_kernel(const std::uint32_t* page_count,
+                                                      unsigned long long* total_count) {
+  if (blockIdx.x == 0U && threadIdx.x == 0U && page_count != nullptr && total_count != nullptr) {
+    atomicAdd(total_count, static_cast<unsigned long long>(*page_count));
+  }
+}
+
 static_assert(sizeof(DeviceShellClassProfileEntry) == sizeof(CudaRhfShellClassProfileEntry));
 
 /** Raw spin-resolved density magnitudes for one direct-AO shell block. */
@@ -10594,7 +10602,8 @@ __global__
 __launch_bounds__(detail::kDirectQuartetThreads) void bounded_direct_dddd_streaming_kernel(
     DeviceBatch batch, const GeneratedShellPairStream* topology_pointer, double screening_tolerance,
     const double* schwarz_bounds, const double* density, const std::uint8_t* active, double* output,
-    std::uint32_t* bra_head, DeviceShellClassProfileEntry* profile) {
+    std::uint32_t* bra_head, DeviceShellClassProfileEntry* profile,
+    unsigned long long* fp64_work_count) {
   static_assert(detail::kDirectQuartetThreads == 32);
   constexpr std::uint32_t kSkip = 0U;
   constexpr std::uint32_t kConsume = 1U;
@@ -10650,6 +10659,7 @@ __launch_bounds__(detail::kDirectQuartetThreads) void bounded_direct_dddd_stream
         }
         stream_state = keep ? kConsume : kSkip;
         if (keep) {
+          if (fp64_work_count != nullptr) atomicAdd(fp64_work_count, 1ULL);
           task = {bra_pair, ket_pair, 0U};
           const std::size_t first_count = shell_ao_pair_count(batch, bra_pair);
           const std::size_t second_count = shell_ao_pair_count(batch, ket_pair);
@@ -12216,6 +12226,8 @@ struct ArenaLayout {
   std::size_t bounded_fock_class_timer_starts{};
   std::size_t bounded_fock_class_timer_elapsed{};
   std::size_t bounded_fock_class_timer_launches{};
+  std::size_t bounded_fock_fp64_work_counts{};
+  std::size_t bounded_fock_fp32_work_counts{};
   std::size_t active_shell_quartet_tile_offsets{};
   std::size_t active_shell_quartet_tile_counts{};
   std::size_t active_shell_quartet_tiles{};
@@ -12466,6 +12478,12 @@ bool make_layout(std::size_t batch_size, std::size_t nbf, std::size_t direct_nbf
       !append_array<std::uint32_t>(
           bounded_fock_class_timing ? detail::kDirectQuartetShellClassCount : 0, cursor,
           made.bounded_fock_class_timer_launches) ||
+      !append_array<unsigned long long>(
+          bounded_fock_class_timing ? detail::kDirectQuartetShellClassCount : 0, cursor,
+          made.bounded_fock_fp64_work_counts) ||
+      !append_array<unsigned long long>(
+          bounded_fock_class_timing ? detail::kDirectQuartetShellClassCount : 0, cursor,
+          made.bounded_fock_fp32_work_counts) ||
       !append_array<std::uint32_t>(persistent_eri || bounded_direct_streaming
                                        ? 0
                                        : detail::kDirectQuartetAngularOrderCount + 1,
@@ -14108,6 +14126,9 @@ struct CudaRhfBucketPlan {
   bool shell_class_profiling{};
   bool inactive_eigensolver_profiling{};
   bool bounded_fock_class_timing{};
+  // These switches change captured work even when topology and arithmetic match.
+  bool bounded_streaming_override{};
+  bool fock_only_diagnostic{};
   bool graph_native_eigensolver_override{};
   bool reuse_converged_fock{};
   bool mixed_precision_fock{};
@@ -14157,6 +14178,7 @@ bool same_options(const ScfOptions& first, const ScfOptions& second) {
          first.energy_tolerance == second.energy_tolerance &&
          first.density_tolerance == second.density_tolerance &&
          first.screening_tolerance == second.screening_tolerance &&
+         first.compute_forces == second.compute_forces &&
          first.resolved_fock_build == second.resolved_fock_build;
 }
 
@@ -14693,6 +14715,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
        plan.shell_class_profiling != shell_class_profiling ||
        plan.inactive_eigensolver_profiling != inactive_eigensolver_profiling ||
        plan.bounded_fock_class_timing != bounded_fock_class_timing ||
+       plan.bounded_streaming_override != bounded_direct_streaming_override_requested() ||
+       plan.fock_only_diagnostic != bounded_direct_fock_only_diagnostic ||
        plan.graph_native_eigensolver_override != requested_graph_native_eigensolver_override ||
        plan.reuse_converged_fock != requested_reuse_converged_fock ||
        plan.generated_one_electron_values !=
@@ -14893,6 +14917,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     plan.shell_class_profiling = shell_class_profiling;
     plan.inactive_eigensolver_profiling = inactive_eigensolver_profiling;
     plan.bounded_fock_class_timing = bounded_fock_class_timing;
+    plan.bounded_streaming_override = bounded_direct_streaming_override_requested();
+    plan.fock_only_diagnostic = bounded_direct_fock_only_diagnostic;
     plan.graph_native_eigensolver_override = requested_graph_native_eigensolver_override;
     plan.reuse_converged_fock = requested_reuse_converged_fock;
     plan.mixed_precision_fock = requested_mixed_precision_fock;
@@ -15213,6 +15239,14 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       bounded_fock_class_timing
           ? arena_pointer<std::uint32_t>(resources.arena_, layout.bounded_fock_class_timer_launches)
           : nullptr;
+  unsigned long long* bounded_fock_fp64_work_counts =
+      bounded_fock_class_timing ? arena_pointer<unsigned long long>(
+                                      resources.arena_, layout.bounded_fock_fp64_work_counts)
+                                : nullptr;
+  unsigned long long* bounded_fock_fp32_work_counts =
+      bounded_fock_class_timing ? arena_pointer<unsigned long long>(
+                                      resources.arena_, layout.bounded_fock_fp32_work_counts)
+                                : nullptr;
   auto active_shell_quartet_tile_offsets =
       arena_pointer<std::uint32_t>(resources.arena_, layout.active_shell_quartet_tile_offsets);
   auto active_shell_quartet_tile_counts =
@@ -15905,7 +15939,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
               (host_generated_mixed_fock_shell_class_mask & (std::uint64_t{1} << shell_class)) !=
                   0U,
           mixed_precision_fock_threshold, schwarz_bounds, quartet_density, quartet_fock,
-          bounded_direct_generated_task_heads + shell_class);
+          bounded_direct_generated_task_heads + shell_class,
+          bounded_fock_class_timing ? bounded_fock_fp64_work_counts + shell_class : nullptr,
+          bounded_fock_class_timing ? bounded_fock_fp32_work_counts + shell_class : nullptr);
       if (error != cudaSuccess) return error;
       if (bounded_fock_class_timing) {
         finish_bounded_fock_class_timer_kernel<<<1, 1, 0, resources.stream_>>>(
@@ -15930,17 +15966,21 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     if (is_unrestricted) {
       bounded_direct_dddd_streaming_kernel<true, DirectScreeningPurpose::Fock, false>
           <<<plan.persistent_quartet_worker_blocks, detail::kDirectQuartetThreads, 0,
-             resources.stream_>>>(device_batch, bounded_stream_topology,
-                                  options.screening_tolerance, schwarz_bounds, quartet_density,
-                                  active, quartet_fock,
-                                  bounded_direct_generated_task_heads + kDdddShellClass, nullptr);
+             resources.stream_>>>(
+              device_batch, bounded_stream_topology, options.screening_tolerance, schwarz_bounds,
+              quartet_density, active, quartet_fock,
+              bounded_direct_generated_task_heads + kDdddShellClass, nullptr,
+              bounded_fock_class_timing ? bounded_fock_fp64_work_counts + kDdddShellClass
+                                        : nullptr);
     } else {
       bounded_direct_dddd_streaming_kernel<false, DirectScreeningPurpose::Fock, false>
           <<<plan.persistent_quartet_worker_blocks, detail::kDirectQuartetThreads, 0,
-             resources.stream_>>>(device_batch, bounded_stream_topology,
-                                  options.screening_tolerance, schwarz_bounds, quartet_density,
-                                  active, quartet_fock,
-                                  bounded_direct_generated_task_heads + kDdddShellClass, nullptr);
+             resources.stream_>>>(
+              device_batch, bounded_stream_topology, options.screening_tolerance, schwarz_bounds,
+              quartet_density, active, quartet_fock,
+              bounded_direct_generated_task_heads + kDdddShellClass, nullptr,
+              bounded_fock_class_timing ? bounded_fock_fp64_work_counts + kDdddShellClass
+                                        : nullptr);
     }
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
@@ -16011,6 +16051,13 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
 #undef VIBEQC_COMPACT_BOUNDED_FOCK_PAGE
         error = cudaPeekAtLastError();
         if (error != cudaSuccess) return error;
+        if (bounded_fock_class_timing) {
+          accumulate_fock_precision_work_kernel<<<1, 1, 0, resources.stream_>>>(
+              bounded_direct_generated_task_counts + shell_class,
+              bounded_fock_fp64_work_counts + shell_class);
+          error = cudaPeekAtLastError();
+          if (error != cudaSuccess) return error;
+        }
         // The compactor uses the head as a persistent bra scheduler; generated
         // consumers use the same slot as their task scheduler, so reset it
         // after compaction and before launching the page.
@@ -16040,6 +16087,17 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // whole-topology generic evaluator.
     if (host_uncovered_fock_shell_class_mask != 0U && !bounded_direct_aot_only_diagnostic) {
       return cudaErrorNotSupported;
+    }
+    if (bounded_direct_fock_only_diagnostic) {
+      // The fixed-density measurement uses one uniform streaming schedule.
+      // Mark every generated class for that consumer so an all-FP64 page does
+      // not hide the arithmetic selected by the diagnostic threshold.
+      cudaError_t diagnostic_error = cudaMemsetAsync(
+          bounded_direct_generated_overflow, 1,
+          detail::kDirectQuartetShellClassCount * sizeof(std::uint32_t), resources.stream_);
+      if (diagnostic_error != cudaSuccess) return diagnostic_error;
+      return launch_bounded_streaming_fock(is_unrestricted, quartet_density, quartet_fock,
+                                           allow_mixed_precision);
     }
     if (!bounded_direct_count_diagnostic) {
       // Normal bounded execution uses disjoint exact pages for every
@@ -16779,6 +16837,16 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
                                  detail::kDirectQuartetShellClassCount * sizeof(std::uint32_t),
                                  resources.stream_);
   }
+  if (cuda_error == cudaSuccess && bounded_fock_class_timing) {
+    cuda_error = cudaMemsetAsync(bounded_fock_fp64_work_counts, 0,
+                                 detail::kDirectQuartetShellClassCount * sizeof(unsigned long long),
+                                 resources.stream_);
+  }
+  if (cuda_error == cudaSuccess && bounded_fock_class_timing) {
+    cuda_error = cudaMemsetAsync(bounded_fock_fp32_work_counts, 0,
+                                 detail::kDirectQuartetShellClassCount * sizeof(unsigned long long),
+                                 resources.stream_);
+  }
   if (cuda_error == cudaSuccess && split_provider_iteration) {
     std::vector<std::uint8_t> host_active(batch_size, 1U);
     for (std::uint32_t iteration = 0; iteration < options.max_iterations; ++iteration) {
@@ -16887,12 +16955,24 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   if (cuda_error == cudaSuccess && bounded_fock_class_timing && bounded_direct_streaming) {
     std::array<std::uint64_t, detail::kDirectQuartetShellClassCount> host_elapsed{};
     std::array<std::uint32_t, detail::kDirectQuartetShellClassCount> host_launches{};
+    std::array<unsigned long long, detail::kDirectQuartetShellClassCount> host_fp64_work{};
+    std::array<unsigned long long, detail::kDirectQuartetShellClassCount> host_fp32_work{};
     cuda_error = cudaMemcpyAsync(host_elapsed.data(), bounded_fock_class_timer_elapsed,
                                  host_elapsed.size() * sizeof(std::uint64_t),
                                  cudaMemcpyDeviceToHost, resources.stream_);
     if (cuda_error == cudaSuccess) {
       cuda_error = cudaMemcpyAsync(host_launches.data(), bounded_fock_class_timer_launches,
                                    host_launches.size() * sizeof(std::uint32_t),
+                                   cudaMemcpyDeviceToHost, resources.stream_);
+    }
+    if (cuda_error == cudaSuccess) {
+      cuda_error = cudaMemcpyAsync(host_fp64_work.data(), bounded_fock_fp64_work_counts,
+                                   host_fp64_work.size() * sizeof(unsigned long long),
+                                   cudaMemcpyDeviceToHost, resources.stream_);
+    }
+    if (cuda_error == cudaSuccess) {
+      cuda_error = cudaMemcpyAsync(host_fp32_work.data(), bounded_fock_fp32_work_counts,
+                                   host_fp32_work.size() * sizeof(unsigned long long),
                                    cudaMemcpyDeviceToHost, resources.stream_);
     }
     if (cuda_error == cudaSuccess) {
@@ -16933,6 +17013,24 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
                      timing.shell_class, timing.launches,
                      static_cast<double>(timing.elapsed_nanoseconds) * 1.0e-6, share);
       }
+      std::fprintf(stderr, "bounded-direct-fock-precision-profile enabled=%u threshold=%.17g\n",
+                   mixed_precision_fock ? 1U : 0U, mixed_precision_fock_threshold);
+      for (std::size_t kernel_index = 0; kernel_index < bounded_fock_kernel_count; ++kernel_index) {
+        const generated::ShellKernelMetadata& kernel = bounded_fock_kernels[kernel_index];
+        const unsigned shell_class = kernel.shell_class;
+        if (shell_class >= host_fp64_work.size() ||
+            (host_fp64_work[shell_class] == 0ULL && host_fp32_work[shell_class] == 0ULL)) {
+          continue;
+        }
+        const unsigned mixed_capable =
+            (host_generated_mixed_fock_shell_class_mask & (std::uint64_t{1} << shell_class)) != 0U
+                ? 1U
+                : 0U;
+        std::fprintf(stderr,
+                     "  %-4s class=%u fp64_quartets=%llu fp32_quartets=%llu mixed_capable=%u\n",
+                     kernel.name, shell_class, host_fp64_work[shell_class],
+                     host_fp32_work[shell_class], mixed_capable);
+      }
       std::fflush(stderr);
     }
   }
@@ -16945,6 +17043,7 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // omits the eigensolve/convergence tail. Return after device timings are
     // copied so no final-Fock rebuild or analytic-force work contaminates it.
     fill_global_failure(outputs, VIBEQC_STATUS_NOT_CONVERGED);
+    for (auto& output : outputs) output.fock_only_diagnostic = true;
     return outputs;
   }
 
@@ -17061,96 +17160,105 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   // The accepted density update has already passed the requested SCF density
   // tolerance, so retaining P keeps all final energy/two-electron force terms
   // evaluated consistently at the same P and F(P).
-  cuda_error = launch_direct_force_compaction();
-  if (cuda_error != cudaSuccess) {
-    fill_global_failure(outputs, cuda_status(cuda_error));
-    return outputs;
-  }
-  if (shell_class_profiling && quartet_direct) {
-    cuda_error = cudaMemsetAsync(
-        shell_class_profile, 0,
-        detail::kDirectQuartetShellClassCount * sizeof(DeviceShellClassProfileEntry),
-        resources.stream_);
+  if (options.compute_forces) {
+    cuda_error = launch_direct_force_compaction();
     if (cuda_error != cudaSuccess) {
       fill_global_failure(outputs, cuda_status(cuda_error));
       return outputs;
     }
-  }
-  if (shell_class_profiling && quartet_direct && total_shell_quartet_tiles != 0) {
-    profile_active_shell_quartet_tiles_kernel<<<blocks_for(total_shell_quartet_tiles), threads, 0,
-                                                resources.stream_>>>(
-        device_batch, total_shell_quartet_tiles, active_shell_quartet_tile_offsets,
-        active_shell_quartet_tile_counts, active_shell_quartet_tiles, shell_class_profile);
+    if (shell_class_profiling && quartet_direct) {
+      cuda_error = cudaMemsetAsync(
+          shell_class_profile, 0,
+          detail::kDirectQuartetShellClassCount * sizeof(DeviceShellClassProfileEntry),
+          resources.stream_);
+      if (cuda_error != cudaSuccess) {
+        fill_global_failure(outputs, cuda_status(cuda_error));
+        return outputs;
+      }
+    }
+    if (shell_class_profiling && quartet_direct && total_shell_quartet_tiles != 0) {
+      profile_active_shell_quartet_tiles_kernel<<<blocks_for(total_shell_quartet_tiles), threads, 0,
+                                                  resources.stream_>>>(
+          device_batch, total_shell_quartet_tiles, active_shell_quartet_tile_offsets,
+          active_shell_quartet_tile_counts, active_shell_quartet_tiles, shell_class_profile);
+    }
   }
   if (unrestricted) {
     compute_uhf_energy_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
                                 resources.stream_>>>(static_cast<std::int32_t>(batch_size),
                                                      static_cast<std::int32_t>(nbf), density, hcore,
                                                      fock, nuclear_repulsion, active, energy);
-    build_spin_weighted_density_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                         resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
-        coefficients, eigenvalues, active, weighted_density);
-    sum_uhf_spin_matrices_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), density, active,
-        total_density);
-    sum_uhf_spin_matrices_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), weighted_density,
-        active, total_weighted_density);
+    if (options.compute_forces) {
+      build_spin_weighted_density_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
+                                           resources.stream_>>>(
+          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
+          coefficients, eigenvalues, active, weighted_density);
+      sum_uhf_spin_matrices_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
+          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), density, active,
+          total_density);
+      sum_uhf_spin_matrices_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
+          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), weighted_density,
+          active, total_weighted_density);
+    }
   } else {
     compute_energy_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
                             resources.stream_>>>(static_cast<std::int32_t>(batch_size),
                                                  static_cast<std::int32_t>(nbf), density, hcore,
                                                  fock, nuclear_repulsion, active, energy);
-    build_weighted_density_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
-        coefficients, eigenvalues, active, weighted_density);
+    if (options.compute_forces) {
+      build_weighted_density_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
+          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
+          coefficients, eigenvalues, active, weighted_density);
+    }
   }
-  cuda_error = cudaMemsetAsync(forces, 0, total_atoms * 3 * sizeof(double), resources.stream_);
-  if (cuda_error != cudaSuccess) {
-    fill_global_failure(outputs, cuda_status(cuda_error));
-    return outputs;
-  }
-  if (quartet_direct && !bounded_direct_streaming) {
-    cuda_error = cudaMemsetAsync(persistent_force_task_heads, 0,
-                                 kPersistentForceAngularOrderCount * sizeof(std::uint32_t),
-                                 resources.stream_);
+  if (options.compute_forces) {
+    cuda_error = cudaMemsetAsync(forces, 0, total_atoms * 3 * sizeof(double), resources.stream_);
     if (cuda_error != cudaSuccess) {
       fill_global_failure(outputs, cuda_status(cuda_error));
       return outputs;
     }
-  }
-  nuclear_force_kernel<<<blocks_for(force_coordinate_count), threads, 0, resources.stream_>>>(
-      device_batch, active, forces);
-  // Derivative selection is read on every force execution; it retains no
-  // candidate-specific geometry or plan buffers that could become stale.
-  if (cuda_policy::generated_one_electron_derivatives_requested()) {
-    const OneElectronWeightView weights{unrestricted ? total_weighted_density : weighted_density,
-                                        unrestricted ? total_density : density,
-                                        unrestricted ? total_density : density,
-                                        -1.0,
-                                        1.0,
-                                        1.0};
-    cuda_error = launch_generated_one_electron_gradient(
-        one_electron_view(device_batch), ao_pair_first, ao_pair_second, pair_count, weights, active,
-        cuda_policy::one_electron_derivative_mapping_requested(), -1.0, forces, resources.stream_);
-    if (cuda_error != cudaSuccess) {
-      fill_global_failure(outputs, cuda_status(cuda_error));
-      return outputs;
+    if (quartet_direct && !bounded_direct_streaming) {
+      cuda_error = cudaMemsetAsync(persistent_force_task_heads, 0,
+                                   kPersistentForceAngularOrderCount * sizeof(std::uint32_t),
+                                   resources.stream_);
+      if (cuda_error != cudaSuccess) {
+        fill_global_failure(outputs, cuda_status(cuda_error));
+        return outputs;
+      }
     }
-  } else if (cooperative_one_electron_force) {
-    constexpr std::size_t shared_bytes = 3 * sizeof(OneElectronDerivativeHermiteCoefficients);
-    one_electron_force_cooperative_kernel<<<static_cast<unsigned>(one_electron_force_elements),
-                                            threads, shared_bytes, resources.stream_>>>(
-        device_batch, ao_pair_first, ao_pair_second, pair_count,
-        unrestricted ? total_density : density,
-        unrestricted ? total_weighted_density : weighted_density, active, forces);
-  } else {
-    one_electron_force_scalar_kernel<<<blocks_for(one_electron_force_elements), threads, 0,
-                                       resources.stream_>>>(
-        device_batch, ao_pair_first, ao_pair_second, pair_count,
-        unrestricted ? total_density : density,
-        unrestricted ? total_weighted_density : weighted_density, active, forces);
+    nuclear_force_kernel<<<blocks_for(force_coordinate_count), threads, 0, resources.stream_>>>(
+        device_batch, active, forces);
+    // Derivative selection is read on every force execution; it retains no
+    // candidate-specific geometry or plan buffers that could become stale.
+    if (cuda_policy::generated_one_electron_derivatives_requested()) {
+      const OneElectronWeightView weights{unrestricted ? total_weighted_density : weighted_density,
+                                          unrestricted ? total_density : density,
+                                          unrestricted ? total_density : density,
+                                          -1.0,
+                                          1.0,
+                                          1.0};
+      cuda_error = launch_generated_one_electron_gradient(
+          one_electron_view(device_batch), ao_pair_first, ao_pair_second, pair_count, weights,
+          active, cuda_policy::one_electron_derivative_mapping_requested(), -1.0, forces,
+          resources.stream_);
+      if (cuda_error != cudaSuccess) {
+        fill_global_failure(outputs, cuda_status(cuda_error));
+        return outputs;
+      }
+    } else if (cooperative_one_electron_force) {
+      constexpr std::size_t shared_bytes = 3 * sizeof(OneElectronDerivativeHermiteCoefficients);
+      one_electron_force_cooperative_kernel<<<static_cast<unsigned>(one_electron_force_elements),
+                                              threads, shared_bytes, resources.stream_>>>(
+          device_batch, ao_pair_first, ao_pair_second, pair_count,
+          unrestricted ? total_density : density,
+          unrestricted ? total_weighted_density : weighted_density, active, forces);
+    } else {
+      one_electron_force_scalar_kernel<<<blocks_for(one_electron_force_elements), threads, 0,
+                                         resources.stream_>>>(
+          device_batch, ao_pair_first, ao_pair_second, pair_count,
+          unrestricted ? total_density : density,
+          unrestricted ? total_weighted_density : weighted_density, active, forces);
+    }
   }
   const std::uint64_t explicit_generated_force_shell_class_mask =
       generated::enabled_shell_class_mask() & host_present_shell_class_mask;
@@ -17526,7 +17634,7 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
          resources.stream_>>>(device_batch, bounded_stream_topology, options.screening_tolerance, \
                               schwarz_bounds, quartet_density, active, forces,                    \
                               bounded_direct_generated_task_heads + kDdddShellClass,              \
-                              shell_class_profiling ? shell_class_profile : nullptr)
+                              shell_class_profiling ? shell_class_profile : nullptr, nullptr)
     if (is_unrestricted) {
       if (purpose == DirectScreeningPurpose::Force) {
         VIBEQC_LAUNCH_NATIVE_DDDD_FORCE(true, DirectScreeningPurpose::Force);
@@ -17716,7 +17824,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     error = launch_bounded_generic_force(is_unrestricted, purpose, quartet_density);
     return error;
   };
-  if (quartet_direct && plan.shell_quartet_tile_capacities[kGenericOrderFiveAngularOrder] != 0) {
+  if (options.compute_forces && quartet_direct &&
+      plan.shell_quartet_tile_capacities[kGenericOrderFiveAngularOrder] != 0) {
     cuda_error =
         cudaMemsetAsync(generic_order5_tile_count, 0, sizeof(std::uint32_t), resources.stream_);
     if (cuda_error == cudaSuccess) {
@@ -17734,7 +17843,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       return outputs;
     }
   }
-  if (bounded_direct_fock_only_diagnostic && bounded_direct_streaming) {
+  if (!options.compute_forces) {
+    // Energy-only execution intentionally omits every analytic-force kernel.
+  } else if (bounded_direct_fock_only_diagnostic && bounded_direct_streaming) {
     // Nuclear and one-electron forces above remain in the timing so this
     // diagnostic isolates only the bounded two-electron force tail.
   } else if (unrestricted && persistent_eri) {
@@ -17840,7 +17951,7 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   }
 
   if (reuse_converged_fock) {
-    // Energy and forces above consumed each system's selected consistent
+    // The requested outputs above consumed each system's selected consistent
     // snapshot. Advance only reused systems to the already accepted P_{n+1}
     // for their returned warm state; rebuilt systems already contain it.
     copy_selected_matrices_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
@@ -17859,7 +17970,7 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   std::vector<double> host_energy_change(batch_size);
   std::vector<double> host_density_rms(batch_size);
   std::vector<double> host_density(spin_matrix_elements);
-  std::vector<double> host_forces(total_atoms * 3);
+  std::vector<double> host_forces(options.compute_forces ? total_atoms * 3 : 0U);
   std::vector<std::uint8_t> host_converged(batch_size);
   std::vector<std::uint8_t> host_failed(batch_size);
   std::vector<std::uint32_t> host_iterations(batch_size);
@@ -17884,13 +17995,20 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       {host_energy_change.data(), energy_change, batch_size * sizeof(double)},
       {host_density_rms.data(), density_rms, batch_size * sizeof(double)},
       {host_density.data(), density, spin_matrix_elements * sizeof(double)},
-      {host_forces.data(), forces, total_atoms * 3 * sizeof(double)},
       {host_converged.data(), converged, batch_size * sizeof(std::uint8_t)},
       {host_failed.data(), failed, batch_size * sizeof(std::uint8_t)},
       {host_iterations.data(), iterations, batch_size * sizeof(std::uint32_t)},
   };
   for (const Download& download : downloads) {
     cuda_error = cudaMemcpyAsync(download.host, download.device, download.bytes,
+                                 cudaMemcpyDeviceToHost, resources.stream_);
+    if (cuda_error != cudaSuccess) {
+      fill_global_failure(outputs, cuda_status(cuda_error));
+      return outputs;
+    }
+  }
+  if (options.compute_forces) {
+    cuda_error = cudaMemcpyAsync(host_forces.data(), forces, total_atoms * 3 * sizeof(double),
                                  cudaMemcpyDeviceToHost, resources.stream_);
     if (cuda_error != cudaSuccess) {
       fill_global_failure(outputs, cuda_status(cuda_error));
@@ -18016,9 +18134,12 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     const std::size_t density_stride = spin_count * matrix_size;
     result.density.assign(host_density.begin() + system * density_stride,
                           host_density.begin() + (system + 1) * density_stride);
-    const std::size_t atom_begin = static_cast<std::size_t>(host.atom_offsets[system]);
-    const std::size_t atom_end = static_cast<std::size_t>(host.atom_offsets[system + 1]);
-    result.forces.assign(host_forces.begin() + atom_begin * 3, host_forces.begin() + atom_end * 3);
+    if (options.compute_forces) {
+      const std::size_t atom_begin = static_cast<std::size_t>(host.atom_offsets[system]);
+      const std::size_t atom_end = static_cast<std::size_t>(host.atom_offsets[system + 1]);
+      result.forces.assign(host_forces.begin() + atom_begin * 3,
+                           host_forces.begin() + atom_end * 3);
+    }
     output.status = host_failed[system] != 0 ? VIBEQC_STATUS_NUMERICAL_FAILURE
                                              : (result.converged ? VIBEQC_STATUS_SUCCESS
                                                                  : VIBEQC_STATUS_SCF_NOT_CONVERGED);
@@ -18182,6 +18303,9 @@ std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
        !same_options((*plan)->options, options) || (*plan)->unrestricted != unrestricted ||
        (*plan)->shell_class_profiling != shell_class_profiling ||
        (*plan)->inactive_eigensolver_profiling != inactive_eigensolver_profiling ||
+       (*plan)->bounded_fock_class_timing != bounded_fock_class_timing_requested() ||
+       (*plan)->bounded_streaming_override != bounded_direct_streaming_override_requested() ||
+       (*plan)->fock_only_diagnostic != bounded_direct_fock_only_diagnostic_requested() ||
        (*plan)->graph_native_eigensolver_override != graph_native_eigensolver_override ||
        (*plan)->reuse_converged_fock != reuse_converged_fock ||
        (*plan)->generated_one_electron_values !=
@@ -18820,241 +18944,7 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
 }
 
 /** Generate Cartesian overlap/Hcore matrices and their coordinate response. */
-vibeqc_status build_cuda_one_electron_integrals_impl(int device_id, const core::System& system,
-                                                     integrals::IntegralData& output,
-                                                     std::string& detail,
-                                                     bool include_derivatives) {
-  if (device_id < 0) {
-    detail = "CUDA one-electron integral generation received an invalid device";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  core::System cartesian_system = system;
-  cartesian_system.basis_representation = VIBEQC_BASIS_CARTESIAN;
-  HostBatch host;
-  std::vector<const std::vector<double>*> no_warm(1, nullptr);
-  // One-electron integrals are spin independent. General spin packing accepts
-  // both RHF and UHF systems; closed-shell packing incorrectly rejects the
-  // odd-electron orbital metadata needed by an open-shell DF endpoint.
-  if (!pack_host_batch({cartesian_system}, no_warm, host, true) || host.nbf == 0U) {
-    detail = "Cartesian one-electron basis cannot be represented by CUDA";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  if (host.nbf > std::numeric_limits<std::int32_t>::max() ||
-      host.nbf > std::numeric_limits<std::size_t>::max() / host.nbf) {
-    detail = "Cartesian one-electron basis dimensions are invalid";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  const std::size_t matrix_elements = host.nbf * host.nbf;
-  const std::size_t pair_count = host.nbf * (host.nbf + 1U) / 2U;
-  if (pair_count > std::numeric_limits<unsigned>::max() * static_cast<std::size_t>(128U)) {
-    detail = "CUDA one-electron launch dimensions are too large";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  std::vector<std::int32_t> pair_first;
-  std::vector<std::int32_t> pair_second;
-  pair_first.reserve(pair_count);
-  pair_second.reserve(pair_count);
-  for (std::size_t row = 0; row < host.nbf; ++row) {
-    for (std::size_t column = 0; column <= row; ++column) {
-      pair_first.push_back(static_cast<std::int32_t>(row));
-      pair_second.push_back(static_cast<std::int32_t>(column));
-    }
-  }
-
-  cudaError_t cuda_error = cudaSetDevice(device_id);
-  if (cuda_error != cudaSuccess) {
-    detail = "CUDA device selection failed while generating one-electron integrals";
-    return cuda_status(cuda_error);
-  }
-  cudaStream_t stream = nullptr;
-  cuda_error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-  if (cuda_error != cudaSuccess) {
-    detail = "CUDA stream creation failed while generating one-electron integrals";
-    return cuda_status(cuda_error);
-  }
-  std::vector<void*> allocations;
-  auto release = [&]() {
-    for (void* pointer : allocations) (void)runtime::resource_cuda_free(pointer);
-    allocations.clear();
-    if (stream != nullptr) {
-      (void)cudaStreamDestroy(stream);
-      stream = nullptr;
-    }
-  };
-  runtime::ResourceScopeExit upload_scope{release};
-  auto upload = [&](const void* source, std::size_t bytes) -> void* {
-    if (bytes == 0U) return nullptr;
-    void* destination = nullptr;
-    if (runtime::resource_cuda_malloc(&destination, bytes) != cudaSuccess) return nullptr;
-    if (source != nullptr &&
-        cudaMemcpy(destination, source, bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
-      (void)runtime::resource_cuda_free(destination);
-      return nullptr;
-    }
-    try {
-      allocations.push_back(destination);
-    } catch (const std::bad_alloc&) {
-      (void)runtime::resource_cuda_free(destination);
-      throw;
-    }
-    return destination;
-  };
-  auto upload_vector = [&](const auto& values) -> void* {
-    return upload(values.data(), values.size() * sizeof(values[0]));
-  };
-
-  DeviceBatch device_batch{};
-  device_batch.batch_size = 1;
-  device_batch.nbf = static_cast<std::int32_t>(host.nbf);
-  device_batch.direct_nbf = static_cast<std::int32_t>(host.direct_nbf);
-  device_batch.total_atoms = static_cast<std::int64_t>(host.atomic_numbers.size());
-  device_batch.total_shells = static_cast<std::int64_t>(host.shell_atoms.size());
-  device_batch.total_shell_pairs = static_cast<std::int64_t>(host.shell_pair_first.size());
-  device_batch.shell_pair_first =
-      static_cast<const std::int32_t*>(upload_vector(host.shell_pair_first));
-  device_batch.shell_pair_second =
-      static_cast<const std::int32_t*>(upload_vector(host.shell_pair_second));
-  device_batch.atom_offsets = static_cast<const std::int64_t*>(upload_vector(host.atom_offsets));
-  device_batch.atom_systems = static_cast<const std::int32_t*>(upload_vector(host.atom_systems));
-  device_batch.atomic_numbers =
-      static_cast<const std::int32_t*>(upload_vector(host.atomic_numbers));
-  device_batch.positions = static_cast<const double*>(upload_vector(host.positions));
-  device_batch.shell_atoms = static_cast<const std::int32_t*>(upload_vector(host.shell_atoms));
-  device_batch.shell_angular = static_cast<const std::uint8_t*>(upload_vector(host.shell_angular));
-  device_batch.shell_ao_offsets =
-      static_cast<const std::int64_t*>(upload_vector(host.shell_ao_offsets));
-  device_batch.shell_direct_ao_offsets =
-      static_cast<const std::int64_t*>(upload_vector(host.shell_direct_ao_offsets));
-  device_batch.shell_primitive_offsets =
-      static_cast<const std::int64_t*>(upload_vector(host.shell_primitive_offsets));
-  device_batch.ao_shells = static_cast<const std::int32_t*>(upload_vector(host.ao_shells));
-  device_batch.ao_term_counts =
-      static_cast<const std::uint8_t*>(upload_vector(host.ao_term_counts));
-  device_batch.ao_term_angular =
-      static_cast<const std::uint8_t*>(upload_vector(host.ao_term_angular));
-  device_batch.ao_term_coefficients =
-      static_cast<const double*>(upload_vector(host.ao_term_coefficients));
-  device_batch.direct_ao_shells =
-      static_cast<const std::int32_t*>(upload_vector(host.direct_ao_shells));
-  device_batch.direct_ao_angular =
-      static_cast<const std::uint8_t*>(upload_vector(host.direct_ao_angular));
-  device_batch.direct_ao_coefficients =
-      static_cast<const double*>(upload_vector(host.direct_ao_coefficients));
-  device_batch.primitive_exponents =
-      static_cast<const double*>(upload_vector(host.primitive_exponents));
-  device_batch.primitive_coefficients =
-      static_cast<const double*>(upload_vector(host.primitive_coefficients));
-  const std::array<const void*, 20> metadata{device_batch.shell_pair_first,
-                                             device_batch.shell_pair_second,
-                                             device_batch.atom_offsets,
-                                             device_batch.atom_systems,
-                                             device_batch.atomic_numbers,
-                                             device_batch.positions,
-                                             device_batch.shell_atoms,
-                                             device_batch.shell_angular,
-                                             device_batch.shell_ao_offsets,
-                                             device_batch.shell_direct_ao_offsets,
-                                             device_batch.shell_primitive_offsets,
-                                             device_batch.ao_shells,
-                                             device_batch.ao_term_counts,
-                                             device_batch.ao_term_angular,
-                                             device_batch.ao_term_coefficients,
-                                             device_batch.direct_ao_shells,
-                                             device_batch.direct_ao_angular,
-                                             device_batch.direct_ao_coefficients,
-                                             device_batch.primitive_exponents,
-                                             device_batch.primitive_coefficients};
-  for (const void* pointer : metadata) {
-    if (pointer == nullptr) {
-      detail = "CUDA allocation failed while staging one-electron metadata";
-      release();
-      return VIBEQC_STATUS_OUT_OF_MEMORY;
-    }
-  }
-  const auto* device_pair_first = static_cast<const std::int32_t*>(upload_vector(pair_first));
-  const auto* device_pair_second = static_cast<const std::int32_t*>(upload_vector(pair_second));
-  double* device_overlap = static_cast<double*>(upload(nullptr, matrix_elements * sizeof(double)));
-  double* device_hcore = static_cast<double*>(upload(nullptr, matrix_elements * sizeof(double)));
-  double* device_nuclear = static_cast<double*>(upload(nullptr, sizeof(double)));
-  if (device_pair_first == nullptr || device_pair_second == nullptr || device_overlap == nullptr ||
-      device_hcore == nullptr || device_nuclear == nullptr) {
-    detail = "CUDA allocation failed for one-electron integral output";
-    release();
-    return VIBEQC_STATUS_OUT_OF_MEMORY;
-  }
-
-  output = {};
-  output.nbf = host.nbf;
-  output.ncoord = system.atoms.size() * 3U;
-  output.overlap.resize(matrix_elements);
-  output.hcore.resize(matrix_elements);
-  if (include_derivatives) output.overlap_derivative.resize(output.ncoord * matrix_elements);
-  if (include_derivatives) output.hcore_derivative.resize(output.ncoord * matrix_elements);
-  output.nuclear_repulsion_derivative.resize(output.ncoord);
-  constexpr unsigned threads = 128U;
-  const unsigned pair_blocks = static_cast<unsigned>((pair_count + threads - 1U) / threads);
-  if (cuda_policy::generated_one_electron_values_requested()) {
-    cuda_error = launch_generated_one_electron_values(
-        one_electron_view(device_batch), device_pair_first, device_pair_second, pair_count,
-        cuda_policy::one_electron_value_mapping_requested(), device_overlap, device_hcore, stream);
-    if (cuda_error != cudaSuccess) {
-      detail = "generated CUDA one-electron value launch failed";
-      release();
-      return cuda_status(cuda_error);
-    }
-  } else {
-    build_cuda_one_electron_integrals_kernel<false>
-        <<<pair_blocks, threads, 0, stream>>>(device_batch, device_pair_first, device_pair_second,
-                                              pair_count, -1, device_overlap, device_hcore);
-  }
-  build_cuda_nuclear_repulsion_kernel<false><<<1, 1, 0, stream>>>(device_batch, -1, device_nuclear);
-  cuda_error = cudaGetLastError();
-  if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
-  if (cuda_error == cudaSuccess) {
-    cuda_error = cudaMemcpy(output.overlap.data(), device_overlap, matrix_elements * sizeof(double),
-                            cudaMemcpyDeviceToHost);
-  }
-  if (cuda_error == cudaSuccess) {
-    cuda_error = cudaMemcpy(output.hcore.data(), device_hcore, matrix_elements * sizeof(double),
-                            cudaMemcpyDeviceToHost);
-  }
-  if (cuda_error == cudaSuccess) {
-    cuda_error = cudaMemcpy(&output.nuclear_repulsion, device_nuclear, sizeof(double),
-                            cudaMemcpyDeviceToHost);
-  }
-  for (std::size_t coordinate = 0; cuda_error == cudaSuccess && coordinate < output.ncoord;
-       ++coordinate) {
-    if (include_derivatives)
-      build_cuda_one_electron_integrals_kernel<true><<<pair_blocks, threads, 0, stream>>>(
-          device_batch, device_pair_first, device_pair_second, pair_count,
-          static_cast<std::int64_t>(coordinate), device_overlap, device_hcore);
-    build_cuda_nuclear_repulsion_kernel<true>
-        <<<1, 1, 0, stream>>>(device_batch, static_cast<std::int64_t>(coordinate), device_nuclear);
-    cuda_error = cudaGetLastError();
-    if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
-    if (cuda_error == cudaSuccess && include_derivatives) {
-      cuda_error =
-          cudaMemcpy(output.overlap_derivative.data() + coordinate * matrix_elements,
-                     device_overlap, matrix_elements * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_error == cudaSuccess && include_derivatives) {
-      cuda_error =
-          cudaMemcpy(output.hcore_derivative.data() + coordinate * matrix_elements, device_hcore,
-                     matrix_elements * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_error == cudaSuccess) {
-      cuda_error = cudaMemcpy(output.nuclear_repulsion_derivative.data() + coordinate,
-                              device_nuclear, sizeof(double), cudaMemcpyDeviceToHost);
-    }
-  }
-  if (cuda_error != cudaSuccess) {
-    detail = "CUDA kernel failed while generating one-electron integrals";
-    release();
-    return cuda_status(cuda_error);
-  }
-  release();
-  return VIBEQC_STATUS_SUCCESS;
-}
+#include "scf/cuda/one_electron_integrals.cuh"
 
 /** Generate one-electron tensors for a homogeneous packed system batch. */
 vibeqc_status build_cuda_one_electron_integrals_batch_impl(
@@ -19427,9 +19317,10 @@ vibeqc_status build_cuda_one_electron_integrals_batch(int device_id,
 
 vibeqc_status build_cuda_one_electron_integrals(int device_id, const core::System& system,
                                                 integrals::IntegralData& output,
-                                                std::string& detail, bool include_derivatives) {
+                                                std::string& detail, bool include_derivatives,
+                                                bool include_nuclear_derivatives) {
   return build_cuda_one_electron_integrals_impl(device_id, system, output, detail,
-                                                include_derivatives);
+                                                include_derivatives, include_nuclear_derivatives);
 }
 
 std::vector<RhfBucketItem> run_rhf_cuda_bucket_cached(

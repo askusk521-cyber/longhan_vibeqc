@@ -27,7 +27,7 @@ vibeqc_status build_cuda_one_electron_integrals_batch(int, const std::vector<cor
 }
 
 vibeqc_status build_cuda_one_electron_integrals(int, const core::System&, integrals::IntegralData&,
-                                                std::string& detail, bool) {
+                                                std::string& detail, bool, bool) {
   detail = "CUDA one-electron integral generation is unavailable in this build";
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 }

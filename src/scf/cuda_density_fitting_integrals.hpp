@@ -47,11 +47,15 @@ vibeqc_status build_cuda_one_electron_integrals_batch(int device_id,
                                                       std::string& detail,
                                                       bool include_derivatives = true);
 
-/** Generate Cartesian one-electron values and first nuclear derivatives. */
+/** Generate Cartesian one-electron values and optional first nuclear derivatives.
+ * include_derivatives controls AO response matrices. Nuclear response remains
+ * available to fused force consumers unless include_nuclear_derivatives=false;
+ * energy-only callers disable both flags to omit all derivative work. */
 vibeqc_status build_cuda_one_electron_integrals(int device_id, const core::System& system,
                                                 integrals::IntegralData& output,
                                                 std::string& detail,
-                                                bool include_derivatives = true);
+                                                bool include_derivatives = true,
+                                                bool include_nuclear_derivatives = true);
 
 }  // namespace vibeqc::scf
 

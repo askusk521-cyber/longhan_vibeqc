@@ -377,8 +377,8 @@ std::vector<FleetItemResult> FleetPlan::execute(
           item.scf = std::move(cuda_results[slot].scf);
           item.executed_backend = VIBEQC_BACKEND_CUDA;
 
-          if (item.warm_start_used && item.status != VIBEQC_STATUS_SUCCESS &&
-              item.status != VIBEQC_STATUS_CUDA_ERROR &&
+          if (item.warm_start_used && !cuda_results[slot].fock_only_diagnostic &&
+              item.status != VIBEQC_STATUS_SUCCESS && item.status != VIBEQC_STATUS_CUDA_ERROR &&
               item.status != VIBEQC_STATUS_OUT_OF_MEMORY) {
             item.warm_start_fallback = true;
             const std::vector<core::System> cold_system{cuda_systems[slot]};
