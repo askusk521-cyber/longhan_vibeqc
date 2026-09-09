@@ -232,6 +232,9 @@ independent DF device layouts. `vibeqc_cuda_fock_composition_tests` compares
 all exact/DF/absent pairs, both spins, signed responses and separate batch items
 against CPU integrals. It checks resident and regenerated DF storage with a
 truncated metric, and complete SCF/replay/changed-geometry force endpoints.
+The optional `vibeqc_cuda_fock_provider_tests --through-f-response` numerical
+tier adds signed d/f UHF responses against the complete CPU derivative tensors
+for both public representations and both independently prepared batch items.
 
 `tests/python/test_fock.py` exercises public independent choices, transactional
 failure, identity, source lifetime, SCF/replay/force consistency and semilocal XC

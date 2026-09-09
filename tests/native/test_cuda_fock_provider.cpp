@@ -103,12 +103,13 @@ void device_selection() {
     }
 }
 
-void direct_providers() {
+void direct_providers(bool through_f_response) {
   for (unsigned angular : {0U, 1U, 2U, 3U})
     for (auto representation : {VIBEQC_BASIS_CARTESIAN, VIBEQC_BASIS_SPHERICAL}) {
       // Noncoincident centers and unequal primitive/basis metadata distinguish
       // items with identical dimensions. Through-f values also test public AO
-      // expansion ordering; small s/p cases exercise full geometric response.
+      // expansion ordering. The optional numerical tier adds d/f response
+      // without repeating expensive high-angular CPU derivatives for every mask.
       vibeqc::core::System first;
       first.atoms = {{1, {0.0, 0.1, -0.7}}, {1, {0.2, -0.1, 0.7}}};
       first.shells = {{0, 0, {{0.8, 0.7}, {0.2, 0.3}}}, {1, angular, {{0.6, 1.0}}}};
@@ -122,7 +123,7 @@ void direct_providers() {
               detail.c_str());
       require(vibeqc::molecule::validate_and_normalize(second, detail) == VIBEQC_STATUS_SUCCESS,
               detail.c_str());
-      const bool derivatives = angular < 2;
+      const bool derivatives = angular < 2 || through_f_response;
       const auto ints = vibeqc::integrals::build_integrals(first, derivatives);
       const auto other = vibeqc::integrals::build_integrals(second, derivatives);
       const std::size_t n = ints.nbf, matrix = n * n;
@@ -150,6 +151,7 @@ void direct_providers() {
       for (bool uhf : {false, true})
         for (bool j : {false, true})
           for (bool k : {false, true}) {
+            const bool response = derivatives && (angular < 2 || (uhf && j && k));
             auto spec = make_hf_fock_spec(uhf ? FockSpin::Unrestricted : FockSpin::Restricted);
             spec.derivative_order = derivatives ? 1 : 0;
             spec.coulomb.present = j;
@@ -169,7 +171,7 @@ void direct_providers() {
               ej.insert(ej.end(), expected.coulomb.begin(), expected.coulomb.end());
               eka.insert(eka.end(), expected.exchange_alpha.begin(), expected.exchange_alpha.end());
               ekb.insert(ekb.end(), expected.exchange_beta.begin(), expected.exchange_beta.end());
-              if (derivatives)
+              if (response)
                 for (std::size_t coordinate = 0; coordinate < 6; ++coordinate)
                   gradient.push_back(contract_exact_direct_energy_derivative(
                       cpu, n,
@@ -191,15 +193,17 @@ void direct_providers() {
             compare(dka, eka);
             compare(dkb, ekb);
             std::vector<double> actual_gradient;
-            const auto status = execute_cuda_direct_energy_derivative(
-                plan.get(), spec, packed_a, uhf ? packed_b : std::vector<double>{}, actual_gradient,
-                detail);
-            if (derivatives) {
-              require(status == VIBEQC_STATUS_SUCCESS, detail.c_str());
-              compare(actual_gradient, gradient);
-            } else
-              require(status == VIBEQC_STATUS_INVALID_ARGUMENT,
-                      "unrequested direct derivatives executed");
+            if (response || !derivatives) {
+              const auto status = execute_cuda_direct_energy_derivative(
+                  plan.get(), spec, packed_a, uhf ? packed_b : std::vector<double>{},
+                  actual_gradient, detail);
+              if (response) {
+                require(status == VIBEQC_STATUS_SUCCESS, detail.c_str());
+                compare(actual_gradient, gradient);
+              } else
+                require(status == VIBEQC_STATUS_INVALID_ARGUMENT,
+                        "unrequested direct derivatives executed");
+            }
           }
       auto fitted = make_hf_fock_spec(FockSpin::Restricted, FockApproximation::DensityFitted);
       std::vector<double> j{123.0}, ka, kb;
@@ -252,12 +256,15 @@ void direct_providers() {
     }
 }
 }  // namespace
-int main() {
+int main(int argc, char** argv) {
   try {
+    require(argc == 1 || (argc == 2 && std::string(argv[1]) == "--through-f-response"),
+            "expected optional --through-f-response");
+    const bool through_f_response = argc == 2;
     device_selection();
-    direct_providers();
-    std::cout << "CUDA independent J/K: DF layouts/selection and direct through-f values, s/p "
-                 "derivatives PASS\n";
+    direct_providers(through_f_response);
+    std::cout << "CUDA independent J/K: DF layouts/selection and direct through-f values, "
+              << (through_f_response ? "through-f" : "s/p") << " derivatives PASS\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
