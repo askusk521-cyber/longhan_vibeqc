@@ -156,6 +156,7 @@ add_library(vibeqc SHARED
   src/scf/fock_build.cpp
   src/scf/fock_provider.cpp
   src/scf/cuda_fock_provider.cpp
+  src/scf/fock_prepared.cpp
   src/scf/fock_execution.cpp
   src/scf/rhf.cpp
 )

@@ -28,6 +28,7 @@
 #include "scf/cuda_one_electron_gradient.hpp"
 #include "scf/density_fitting.hpp"
 #include "scf/fock_build.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/fock_provider.hpp"
 #include "scf/proposals.hpp"
 
@@ -885,12 +886,10 @@ void bind_generated_df(DensityFittingScfData& data, const core::System& orbital,
 #endif
 }
 
-DensityFittingScfData prepare_density_fitting_data(const core::System& system,
-                                                   const core::System& auxiliary_system,
-                                                   double relative_threshold,
-                                                   int cuda_device_id = -1,
-                                                   std::size_t output_budget_bytes = 0U,
-                                                   bool include_derivatives = true) {
+[[maybe_unused]] DensityFittingScfData prepare_density_fitting_data(
+    const core::System& system, const core::System& auxiliary_system, double relative_threshold,
+    int cuda_device_id = -1, std::size_t output_budget_bytes = 0U,
+    bool include_derivatives = true) {
   // A non-negative device selects the CUDA Cartesian evaluator for the raw
   // metric/three-center tensors.  The default keeps CPU-reference callers
   // entirely on the existing oracle path.
@@ -1612,55 +1611,30 @@ static ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions&
   return result;
 }
 
-ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* auxiliary,
-                                const ScfOptions& options,
-                                const std::vector<double>* initial_density) {
-  if (!options.resolved_fock_build)
-    throw std::invalid_argument("CPU Fock execution requires a resolved strategy");
-  auto strategy = *options.resolved_fock_build;
-  validate_resolved_fock_build(strategy);
-  if (strategy.backend != FockBackend::Cpu ||
-      strategy.screening_tolerance != options.screening_tolerance ||
-      (options.compute_forces && strategy.spec.derivative_order != 1))
-    throw std::invalid_argument("CPU Fock strategy disagrees with execution controls");
+ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOptions& options,
+                                     const std::vector<double>* initial_density) {
+  const auto strategy = fock_strategy_for_execution(options);
+  if (strategy != plan.strategy())
+    throw std::invalid_argument("prepared Fock execution controls changed");
+  const auto& system = plan.system();
   if (strategy.spec.spin == FockSpin::Restricted &&
       (system.electron_count <= 0 || system.electron_count % 2 || system.multiplicity != 1))
     throw std::invalid_argument("restricted Fock SCF requires a closed-shell electron count");
-  // Energy-only execution may reuse a force-capable prepared semantic request,
-  // while its local integral view deliberately contains no derivative tensors.
-  if (!options.compute_forces) {
-    auto spec = strategy.spec;
-    spec.derivative_order = 0;
-    strategy = resolve_fock_build(spec, FockBackend::Cpu, strategy.screening_tolerance,
-                                  strategy.metric_relative_threshold);
-  }
-  const bool fitted = (strategy.spec.coulomb.present &&
-                       strategy.spec.coulomb.approximation == FockApproximation::DensityFitted) ||
-                      (strategy.spec.exchange.present &&
-                       strategy.spec.exchange.approximation == FockApproximation::DensityFitted);
-  integrals::IntegralData exact;
-  std::optional<DensityFittingScfData> df;
-  if (fitted) {
-    df = prepare_density_fitting_data(system, auxiliary ? *auxiliary : system,
-                                      strategy.metric_relative_threshold, -1, 0,
-                                      options.compute_forces);
-  } else {
-    exact = integrals::build_integrals(system, options.compute_forces);
-  }
-  // The existing CPU DF preparation already owns the orbital integral oracle.
-  // Mixed exact/DF plans reuse it instead of allocating a second four-center tensor.
-  const auto& ints = df ? df->one_electron : exact;
-  const CpuFockProviderView exact_provider(ints);
-  auto provider = [&](const FockTermSpec& term) -> std::optional<CpuFockProviderView> {
-    if (!term.present) return std::nullopt;
-    return term.approximation == FockApproximation::Exact ? exact_provider
-                                                          : CpuFockProviderView(*df);
-  };
-  const CpuFockPlanView plan(strategy, ints.nbf, ints.ncoord, provider(strategy.spec.coulomb),
-                             provider(strategy.spec.exchange));
   return strategy.spec.spin == FockSpin::Unrestricted
-             ? run_uhf_host_plan(system, options, ints, plan, df ? &*df : nullptr, initial_density)
-             : run_rhf_host_plan(system, options, ints, plan, df ? &*df : nullptr, initial_density);
+             ? run_uhf_host_plan(system, options, plan.one_electron(), plan, plan.cpu_fitted_data(),
+                                 initial_density)
+             : run_rhf_host_plan(system, options, plan.one_electron(), plan, plan.cpu_fitted_data(),
+                                 initial_density);
+}
+
+ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* auxiliary,
+                                const ScfOptions& options,
+                                const std::vector<double>* initial_density) {
+  const auto strategy = fock_strategy_for_execution(options);
+  if (strategy.backend != FockBackend::Cpu)
+    throw std::invalid_argument("CPU Fock entry requires a CPU strategy");
+  const PreparedFockPlan plan(system, auxiliary, strategy);
+  return run_prepared_fock_strategy(plan, options, initial_density);
 }
 
 ScfResult run_rhf(const core::System& system, const ScfOptions& options,
@@ -1802,88 +1776,12 @@ ScfResult run_cuda_independent_fock_strategy(const core::System& system,
                                              const core::System* auxiliary,
                                              const ScfOptions& options, int device_id,
                                              const std::vector<double>* initial_density) {
-  if (!options.resolved_fock_build)
-    throw std::invalid_argument("CUDA Fock execution requires a resolved strategy");
-  auto strategy = *options.resolved_fock_build;
-  validate_resolved_fock_build(strategy);
-  if (strategy.backend != FockBackend::Cuda || device_id < 0 ||
-      strategy.screening_tolerance != options.screening_tolerance ||
-      (options.compute_forces && strategy.spec.derivative_order != 1) ||
-      (strategy.metric_relative_threshold != 0.0 &&
-       strategy.metric_relative_threshold != options.density_fitting_relative_threshold))
-    throw std::invalid_argument("CUDA Fock strategy disagrees with execution controls");
-  if (strategy.spec.spin == FockSpin::Restricted &&
-      (system.electron_count <= 0 || system.electron_count % 2 || system.multiplicity != 1))
-    throw std::invalid_argument("restricted Fock SCF requires a closed-shell electron count");
-  if (!options.compute_forces) {
-    auto spec = strategy.spec;
-    spec.derivative_order = 0;
-    strategy = resolve_fock_build(spec, FockBackend::Cuda, strategy.screening_tolerance,
-                                  strategy.metric_relative_threshold);
-  }
-  bool exact = false, fitted = false;
-  for (const auto* term : {&strategy.spec.coulomb, &strategy.spec.exchange}) {
-    exact |= term->present && term->approximation == FockApproximation::Exact;
-    fitted |= term->present && term->approximation == FockApproximation::DensityFitted;
-  }
-  auto check = [](vibeqc_status status, const std::string& detail) {
-    if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
-    if (status == VIBEQC_STATUS_INVALID_ARGUMENT) throw std::invalid_argument(detail);
-    if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
-  };
-  std::string detail;
-  integrals::IntegralData cartesian;
-  check(build_cuda_one_electron_integrals(device_id, system, cartesian, detail,
-                                          options.compute_forces, options.compute_forces),
-        detail);
-  const auto ints = integrals::transform_integrals(cartesian, system);
-  cartesian = {};  // Release the Cartesian staging before persistent provider allocation.
-  // The independent schedule keeps host SCF control explicit. GPU integral
-  // consumers retain only their own metadata/tiles; no CPU ERI oracle or
-  // coordinate-indexed two-electron derivative tensor enters this route.
-  const auto budget = options.density_fitting_memory_budget_bytes
-                          ? options.density_fitting_memory_budget_bytes
-                          : 256U * 1024U * 1024U;
-  CudaDirectJkPlan* raw_exact{};
-  CudaDirectJkDiagnostic exact_info;
-  if (exact)
-    check(create_cuda_direct_jk_plan(device_id, {system}, strategy.spec.derivative_order,
-                                     strategy.screening_tolerance, fitted ? budget / 2 : budget,
-                                     &raw_exact, exact_info, detail),
-          detail);
-  std::unique_ptr<CudaDirectJkPlan, decltype(&destroy_cuda_direct_jk_plan)> direct(
-      raw_exact, &destroy_cuda_direct_jk_plan);
-  CudaDensityFittingPlanPtr df(nullptr, &destroy_cuda_density_fitting_jk_plan);
-  DensityFittingScfData data;
-  if (fitted) {
-    const auto& aux = auxiliary ? *auxiliary : system;
-    const auto available = budget - exact_info.device_bytes;
-    ScfOptions execution = options;
-    // Keep a disjoint allowance for generated DF response staging. An active
-    // outer ledger additionally enforces the complete prepared allocation cap.
-    execution.density_fitting_memory_budget_bytes = available / 2;
-    if (!execution.density_fitting_memory_budget_bytes) throw std::bad_alloc();
-    data.raw.nbf = ints.nbf;
-    data.raw.naux = molecule::ao_count(aux);
-    data.raw.ncoord = system.atoms.size() * 3;
-    data.metric_relative_threshold = strategy.metric_relative_threshold;
-    data.df_gradient_orbital = system;
-    data.df_gradient_auxiliary = aux;
-    data.df_gradient_mapping = cuda_policy::df_derivative_mapping_requested();
-    data.df_gradient_budget = available - execution.density_fitting_memory_budget_bytes;
-    df = make_cuda_density_fitting_plan(data, execution, device_id, ints.nbf, nullptr, &system,
-                                        &aux);
-  }
-  auto provider = [&](const FockTermSpec& term) -> std::optional<CudaFockProviderView> {
-    if (!term.present) return std::nullopt;
-    return term.approximation == FockApproximation::Exact ? CudaFockProviderView(direct.get())
-                                                          : CudaFockProviderView(df.get(), data);
-  };
-  const CudaFockPlanView plan(strategy, ints.nbf, system.atoms.size() * 3,
-                              provider(strategy.spec.coulomb), provider(strategy.spec.exchange));
-  return strategy.spec.spin == FockSpin::Unrestricted
-             ? run_uhf_host_plan(system, options, ints, plan, nullptr, initial_density)
-             : run_rhf_host_plan(system, options, ints, plan, nullptr, initial_density);
+  const auto strategy = fock_strategy_for_execution(options);
+  if (strategy.backend != FockBackend::Cuda)
+    throw std::invalid_argument("CUDA Fock entry requires a CUDA strategy");
+  const PreparedFockPlan plan(system, auxiliary, strategy, device_id,
+                              options.density_fitting_memory_budget_bytes);
+  return run_prepared_fock_strategy(plan, options, initial_density);
 }
 
 CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(

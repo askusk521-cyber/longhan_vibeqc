@@ -6,6 +6,7 @@
 
 #include "molecule/basis.hpp"
 #include "scf/fleet.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/fock_provider.hpp"
 #include "scf/mean_field.hpp"
 
@@ -287,6 +288,44 @@ void molecular_endpoints() {
   require(recovered[1].status == VIBEQC_STATUS_SUCCESS && recovered[1].warm_start_used,
           "rejected coordinates replaced previous warm state");
 }
+
+void prepared_identity() {
+  vibeqc::core::System system;
+  system.atoms = {{1, {0.0, 0.0, -0.7}}, {1, {0.0, 0.0, 0.7}}};
+  system.shells = {{0, 0, {{0.8, 1.0}}}, {1, 0, {{0.6, 1.0}}}};
+  system.electron_count = 2;
+  std::string detail;
+  require(vibeqc::molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS,
+          "prepared identity fixture failed");
+  const auto exact = resolve_fock_build(make_hf_fock_spec(FockSpin::Restricted), FockBackend::Cpu);
+  PreparedFockPlan plan(system, nullptr, exact);
+  const std::vector<double> density{0.8, 0.1, 0.1, 0.6};
+  const auto before = plan.build(density);
+  require(plan.matches(system, nullptr, exact, -1, 0), "identical source failed compatibility");
+  auto changed = system;
+  changed.atoms[1].position[2] += 0.1;
+  require(!plan.matches(changed, nullptr, exact, -1, 0), "stale geometry accepted");
+  changed = system;
+  changed.shells[0].primitives[0].exponent *= 1.2;
+  require(!plan.matches(changed, nullptr, exact, -1, 0), "same-shaped changed basis accepted");
+  require(plan.matches(system, &changed, exact, -1, 0), "unused auxiliary changed exact identity");
+  auto spec = exact.spec;
+  spec.exchange.coefficient = -0.2;
+  require(!plan.matches(system, nullptr, resolve_fock_build(spec, FockBackend::Cpu), -1, 0),
+          "changed Fock coefficient accepted as reusable source");
+  spec = exact.spec;
+  spec.coulomb.approximation = FockApproximation::DensityFitted;
+  const auto mixed = resolve_fock_build(spec, FockBackend::Cpu);
+  PreparedFockPlan fitted(system, &system, mixed);
+  require(!fitted.matches(system, &changed, mixed, -1, 0), "changed auxiliary basis accepted");
+  require(!fitted.matches(system, &system, resolve_fock_build(spec, FockBackend::Cpu, 1e-12, 1e-6),
+                          -1, 0),
+          "changed metric cutoff accepted");
+  spec.derivative_order = 0;
+  PreparedFockPlan values(system, &system, resolve_fock_build(spec, FockBackend::Cpu));
+  rejected([&] { (void)values.energy_derivative(density); }, "value-only source returned response");
+  matrix(plan.build(density).coulomb, before.coulomb, "prepared owner changed after other sources");
+}
 }  // namespace
 
 int main() {
@@ -294,6 +333,7 @@ int main() {
     combinations();
     preflight();
     molecular_endpoints();
+    prepared_identity();
     std::cout << "CPU Fock providers: independent raw matrices, energy, metric response, preflight "
                  "PASS\n";
     return 0;

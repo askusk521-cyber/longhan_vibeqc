@@ -12,6 +12,7 @@
 
 #include "api/handles.hpp"
 #include "scf/fleet.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
 
@@ -280,9 +281,9 @@ class HfPreparedCalculation final : public PreparedCalculation {
     execution_options.compute_forces = compute_forces;
     const scf::ResolvedFockBuild& strategy = *execution_options.resolved_fock_build;
     const bool use_cuda = strategy.backend == scf::FockBackend::Cuda;
-    auto native =
-        scf::run_fock_strategy(system_, auxiliary_template_ ? &*auxiliary_template_ : nullptr,
-                               execution_options, context_->device_id);
+    auto native = scf::run_fock_strategy_cached(
+        fock_cache_, system_, auxiliary_template_ ? &*auxiliary_template_ : nullptr,
+        execution_options, context_->device_id);
     return adapt_result(std::move(native),
                         use_cuda ? VIBEQC_BACKEND_CUDA : VIBEQC_BACKEND_CPU_REFERENCE);
   }
@@ -293,6 +294,7 @@ class HfPreparedCalculation final : public PreparedCalculation {
   core::System system_;
   scf::ScfOptions options_;
   std::optional<core::System> auxiliary_template_;
+  std::unique_ptr<scf::PreparedFockPlan> fock_cache_;
 };
 
 class HfPreparedBatch final : public PreparedBatch {

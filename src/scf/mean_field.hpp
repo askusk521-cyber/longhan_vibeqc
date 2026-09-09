@@ -1,6 +1,7 @@
 #ifndef VIBEQC_SCF_MEAN_FIELD_HPP
 #define VIBEQC_SCF_MEAN_FIELD_HPP
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -13,6 +14,21 @@ namespace vibeqc::scf {
 
 struct CudaDensityFittingMetricDiagnostic;
 struct CudaDensityFittingJkPlan;
+class PreparedFockPlan;
+
+/** Validate controls and derive the requested value/force capability for this
+ * execution without changing the immutable prepared method request. */
+ResolvedFockBuild fock_strategy_for_execution(const ScfOptions& options);
+ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOptions& options,
+                                     const std::vector<double>* initial_density = nullptr);
+
+/** Reuse independent CUDA sources when immutable inputs match. Build a new
+ * candidate completely before replacing cached sources; fused standard HF
+ * and the existing CPU storage lifetime retain their established dispatch. */
+ScfResult run_fock_strategy_cached(std::unique_ptr<PreparedFockPlan>& cache,
+                                   const core::System& system, const core::System* auxiliary,
+                                   const ScfOptions& options, int device_id,
+                                   const std::vector<double>* initial_density = nullptr);
 
 /** Rebuild only the source overlap on the CPU and apply the shared SCF
  * ensemble-density guard (Hermiticity, metric occupations, electron/spin trace).

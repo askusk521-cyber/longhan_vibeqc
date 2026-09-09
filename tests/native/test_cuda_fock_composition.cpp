@@ -7,6 +7,7 @@
 #include "molecule/basis.hpp"
 #include "scf/cuda_fock_provider.hpp"
 #include "scf/fleet.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 
 namespace {
@@ -261,12 +262,59 @@ void ragged_replay() {
   require(recovered[1].status == VIBEQC_STATUS_SUCCESS && recovered[1].warm_start_used,
           "CUDA rejected coordinates replaced the previous warm state");
 }
+
+void prepared_replay() {
+  auto system = fixture();
+  auto spec = make_hf_fock_spec(FockSpin::Restricted);
+  spec.coulomb.approximation = FockApproximation::DensityFitted;
+  ScfOptions options;
+  options.resolved_fock_build = resolve_fock_build(spec, FockBackend::Cuda);
+  std::unique_ptr<PreparedFockPlan> cache;
+  const auto first = run_fock_strategy_cached(cache, system, nullptr, options, 0);
+  require(first.converged && cache, "prepared CUDA source creation failed");
+  const auto* retained = cache.get();
+  const auto warm = run_fock_strategy_cached(cache, system, nullptr, options, 0, &first.density);
+  require(warm.converged && cache.get() == retained, "identical CUDA replay rebuilt sources");
+  close(warm.energy, first.energy, 2e-9, "retained CUDA source changed energy");
+  // Iteration controls affect convergence, not cached integral identity.
+  options.max_iterations += 20;
+  (void)run_fock_strategy_cached(cache, system, nullptr, options, 0, &first.density);
+  require(cache.get() == retained, "convergence controls invalidated integral sources");
+  const auto info = cache->diagnostic();
+  require(info.device_bytes >= info.direct.device_bytes && !info.fitted.empty() &&
+              info.fitted_source.metric_staged_on_host,
+          "prepared composite source diagnostics incomplete");
+  // A failed replacement cannot release the last valid prepared source.
+  options.density_fitting_memory_budget_bytes = 1;
+  bool oom = false;
+  try {
+    (void)run_fock_strategy_cached(cache, system, nullptr, options, 0);
+  } catch (const std::bad_alloc&) {
+    oom = true;
+  }
+  require(oom && cache.get() == retained, "failed preparation replaced valid CUDA cache");
+  options.density_fitting_memory_budget_bytes = 0;
+  system.atoms[1].position[2] += 0.09;
+  const auto moved = run_fock_strategy_cached(cache, system, nullptr, options, 0, &first.density);
+  require(moved.converged && cache.get() != retained, "changed geometry reused stale CUDA source");
+  const auto cold = run_fock_strategy(system, nullptr, options, 0);
+  close(moved.energy, cold.energy, 2e-9, "changed-geometry cached source differs from cold source");
+  auto changed = spec;
+  changed.exchange.coefficient = -0.25;
+  retained = cache.get();
+  options.resolved_fock_build = resolve_fock_build(changed, FockBackend::Cuda);
+  const auto model = run_fock_strategy_cached(cache, system, nullptr, options, 0);
+  require(model.converged && cache.get() != retained, "changed coefficients reused old CUDA plan");
+  require(!cache->matches(system, nullptr, *options.resolved_fock_build, 1, 0),
+          "changed CUDA device accepted as compatible");
+}
 }  // namespace
 int main() {
   try {
     composed_items();
     molecular_endpoints();
     ragged_replay();
+    prepared_replay();
     std::cout << "CUDA common Fock composition: exact/DF/absent pairs, signed gradients, batch "
                  "items, SCF/replay/geometry PASS\n";
     return 0;

@@ -14,6 +14,7 @@
 
 #include "molecule/basis.hpp"
 #include "runtime/resource_usage.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 
 namespace vibeqc::scf {
@@ -144,7 +145,8 @@ FleetPlan::FleetPlan(std::vector<core::System> systems, vibeqc_method method, Sc
       auxiliary_template_(std::move(auxiliary_template)),
       execution_order_(systems_.size()),
       bucket_ids_(systems_.size()),
-      warm_densities_(systems_.size()) {
+      warm_densities_(systems_.size()),
+      independent_fock_plans_(systems_.size()) {
   const bool fitted = options_.density_fitting_mode != VIBEQC_DENSITY_FITTING_NONE;
   const FockBackend backend =
       cuda_fock_enabled_ || cuda_density_fitting_enabled_ ? FockBackend::Cuda : FockBackend::Cpu;
@@ -227,7 +229,8 @@ std::vector<FleetItemResult> FleetPlan::execute(
     item.warm_start_used = has_warm_density;
     const auto evaluate = [&](const std::vector<double>* initial_density) {
       const core::System auxiliary = auxiliary_for_geometry(auxiliary_template_, execution_system);
-      return run_fock_strategy(execution_system, &auxiliary, options_, device_id_, initial_density);
+      return run_fock_strategy_cached(independent_fock_plans_[system_index], execution_system,
+                                      &auxiliary, options_, device_id_, initial_density);
     };
     try {
       const std::vector<double>* initial_density =
@@ -563,6 +566,9 @@ std::vector<FleetItemResult> FleetPlan::execute(
       std::size_t resident_bytes = 0;
       for (const auto* plan : cuda_bucket_plans_)
         resident_bytes = runtime::add_capacity(resident_bytes, hf_cuda_owned_device_bytes(plan));
+      for (const auto& plan : independent_fock_plans_)
+        if (plan)
+          resident_bytes = runtime::add_capacity(resident_bytes, plan->diagnostic().device_bytes);
       runtime::sample_cuda_arena_capacity(resident_bytes);
     }
     bucket_begin = bucket_end;

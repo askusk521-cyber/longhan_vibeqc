@@ -93,6 +93,18 @@ state. DF value and response cutoffs must agree with the resolved request.
 The quadratic response retains the full Frechet derivative of the truncated
 metric inverse, including retained/discarded-space mixing.
 
+`PreparedFockPlan` owns these views and their existing integral/source data.
+It supplies one-electron data to the shared host SCF consumer as well as raw
+J/K and fixed-density two-electron response to other consumers. Independent
+CUDA single/fleet execution retains one owner per item. Exact compatibility
+compares normalized atom/coordinate, shell/primitive, representation, charge,
+spin and auxiliary snapshots; resolved semantics, device, buffer allowance
+and relevant generated-kernel variants are also checked. No hash collision or
+recycled object address can validate a source. A complete replacement is built
+before swapping the cache. Convergence thresholds and warm density do not
+invalidate integrals. CPU SCF keeps its existing transient integral lifetime
+so retaining every reference ERI tensor does not change fleet memory policy.
+
 The mathematical request (`spec`) is distinct from backend/schedule fields.
 Screening, precision, and the DF metric cutoff are explicit resolved fields;
 an unused exact-provider metric cutoff is canonicalized away. Zero screening
@@ -134,7 +146,7 @@ against CPU integrals. It checks resident and regenerated DF storage with a
 truncated metric, and complete SCF/replay/changed-geometry force endpoints.
 
 This slice does not complete #202: public independent choices and diagnostics,
-an available XC consumer, retained independent fleet preparation and final
-invalidation/overhead evidence remain.
+an available XC consumer, the public prepared interface and final
+end-to-end identity/overhead evidence remain.
 Performance conclusions require matched, synchronized endpoint measurements
 on explicitly identified hardware. No complete DFT SCF method is advertised.

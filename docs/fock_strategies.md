@@ -46,9 +46,15 @@ signed derivatives, resident/source-backed DF storage, distinct batch items,
 and SCF/replay/changed-geometry endpoints. Exact run logs and build provenance
 are retained in the untracked artifact directory.
 
+`PreparedFockPlan` now owns the shared views and existing sources. Independent
+CUDA single/fleet replays retain it per item, with exact immutable-input and
+backend-variant compatibility checks and transactional replacement. CPU SCF
+preserves its transient ERI lifetime. Reuse tests cover unchanged requests,
+changed geometry/coefficient/auxiliary/cutoff/device identity and failed
+replacement, alongside the original spin/pair numerical endpoints.
+
 Remaining: public independent choices and diagnostics, available XC
-integration, retained independent fleet plans, full prepared identity checks,
-and matched endpoint overhead evidence. The sections below preserve the
+integration, public prepared identity checks and matched endpoint overhead evidence. The sections below preserve the
 baseline audit; they describe the coupling before these implementation changes.
 
 ## Existing mathematical contract
