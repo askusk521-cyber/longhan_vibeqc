@@ -249,15 +249,25 @@ def evaluate_df_primitive(kernel: DFComponentKernel, exponents, centers) -> floa
     return prefactor * kernel.graph.evaluate(kernel.value, variables)
 
 
-def build_df_axis_moment(a: int, b: int, c: int) -> tuple[Graph, Expr]:
+def build_df_axis_moment(
+    a: int, b: int, c: int, *, internal_derivative: bool = False
+) -> tuple[Graph, Expr]:
     """Build one-axis Gaussian moments used by a bounded Rys value schedule.
 
     The first two powers refer to the same electronic coordinate relative to
     the two orbital centers. The last power refers to the auxiliary electronic
     coordinate. For M, b=0. Means and the two-coordinate covariance are external
     root-dependent inputs; recurrence pruning visits only ancestors of (a,b,c).
+    Internal first derivatives may raise one orbital power to four. This is
+    recurrence scratch, not an extension of public orbital/auxiliary families.
     """
-    if any(type(n) is not int or not 0 <= n <= 3 for n in (a, b, c)):
+    powers = (a, b, c)
+    maximum = 4 if internal_derivative else 3
+    if (
+        any(type(n) is not int or not 0 <= n <= maximum for n in powers)
+        or c > 3
+        or sum(n == 4 for n in powers) > 1
+    ):
         raise ValueError("DF axis powers must lie within s/p/d/f")
     graph = Graph()
     means = tuple(graph.variable(f"mean_{i}") for i in range(3))

@@ -136,10 +136,25 @@ struct DensityFittingUhfGradient {
 [[nodiscard]] std::vector<double> density_fitting_metric_pseudoinverse(
     const integrals::DensityFittingIntegralData& integrals, double relative_threshold = 1.0e-10);
 
-/** Construct d(M+) for one coordinate of a density-fitting metric. */
+/** Apply the self-adjoint Frechet derivative of the spectrally truncated inverse.
+ * For a forward response, response is dM and the result is d(M+). In reverse,
+ * response is an external bar_(M+) and the result is bar_M. Matrices are full
+ * row-major; the symmetric metric uses the symmetric part of response.
+ * Retained/discarded mixing uses (f(lambda_i)-f(lambda_j))/(lambda_i-lambda_j),
+ * including nonzero discarded eigenvalues. No eigenvector gauge is differentiated.
+ * A positive relative_threshold verifies the supplied inverse's active subspace
+ * and rejects numerically unresolved rank crossings at its scaled cutoff.
+ * Zero preserves legacy callers' inferred active mask; it cannot diagnose the
+ * distance to an unknown threshold. Neither mode changes the value-side rank.
+ */
+[[nodiscard]] std::vector<double> density_fitting_metric_inverse_response(
+    const std::vector<double>& metric, const std::vector<double>& inverse,
+    const std::vector<double>& response, std::size_t dimension, double relative_threshold = 0.0);
+
+/** Construct d(M+) for one coordinate, with optional explicit rank-crossing checks. */
 [[nodiscard]] std::vector<double> density_fitting_metric_pseudoinverse_derivative(
     const integrals::DensityFittingIntegralData& integrals, const std::vector<double>& inverse,
-    std::size_t coordinate);
+    std::size_t coordinate, double relative_threshold = 0.0);
 
 /**
  * Assemble a complete RHF analytic force vector for a DF two-electron

@@ -977,8 +977,8 @@ void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matri
         const std::size_t derivative_elements = data.raw.ncoord * metric_elements;
         std::vector<double> inverse_derivative(derivative_elements, 0.0);
         for (std::size_t coordinate = 0; coordinate < data.raw.ncoord; ++coordinate) {
-          const std::vector<double> response =
-              density_fitting_metric_pseudoinverse_derivative(data.raw, inverse, coordinate);
+          const std::vector<double> response = density_fitting_metric_pseudoinverse_derivative(
+              data.raw, inverse, coordinate, options.density_fitting_relative_threshold);
           std::copy(response.begin(), response.end(),
                     inverse_derivative.begin() + coordinate * metric_elements);
         }
@@ -1131,8 +1131,8 @@ void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matri
         const std::size_t metric_elements = data.raw.naux * data.raw.naux;
         std::vector<double> inverse_derivative(data.raw.ncoord * metric_elements, 0.0);
         for (std::size_t coordinate = 0; coordinate < data.raw.ncoord; ++coordinate) {
-          const std::vector<double> response =
-              density_fitting_metric_pseudoinverse_derivative(data.raw, inverse, coordinate);
+          const std::vector<double> response = density_fitting_metric_pseudoinverse_derivative(
+              data.raw, inverse, coordinate, options.density_fitting_relative_threshold);
           std::copy(response.begin(), response.end(),
                     inverse_derivative.begin() + coordinate * metric_elements);
         }

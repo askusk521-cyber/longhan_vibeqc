@@ -265,99 +265,11 @@ std::vector<double> metric_pseudoinverse(const integrals::DensityFittingIntegral
 
 std::vector<double> metric_pseudoinverse_derivative(
     const integrals::DensityFittingIntegralData& data, const std::vector<double>& inverse,
-    const double* metric_derivative) {
-  const std::size_t naux = data.naux;
-  std::vector<double> symmetric_metric(naux * naux, 0.0);
-  std::vector<double> symmetric_derivative(naux * naux, 0.0);
-  for (std::size_t row = 0; row < naux; ++row) {
-    for (std::size_t column = 0; column < naux; ++column) {
-      symmetric_metric[index(row, column, naux)] =
-          0.5 * (data.metric[index(row, column, naux)] + data.metric[index(column, row, naux)]);
-      symmetric_derivative[index(row, column, naux)] =
-          0.5 * (metric_derivative[index(row, column, naux)] +
-                 metric_derivative[index(column, row, naux)]);
-    }
-  }
-
-  // For a fixed-rank symmetric positive-semidefinite metric, the derivative
-  // of the Moore-Penrose inverse is
-  //   dM+ = -M+ dM M+ + M+^2 dM (I-MM+) + (I-M+M) dM M+^2.
-  // The projector terms are essential when the thresholded null space mixes
-  // with retained auxiliary directions; the common -M+ dM M+ shortcut is
-  // correct only for a strictly full-rank metric.
-  std::vector<double> metric_inverse_squared(naux * naux, 0.0);
-  std::vector<double> left_null_projector(naux * naux, 0.0);
-  std::vector<double> right_null_projector(naux * naux, 0.0);
-  for (std::size_t row = 0; row < naux; ++row) {
-    for (std::size_t column = 0; column < naux; ++column) {
-      double inverse_squared = 0.0;
-      double metric_times_inverse = 0.0;
-      double inverse_times_metric = 0.0;
-      for (std::size_t item = 0; item < naux; ++item) {
-        inverse_squared += inverse[index(row, item, naux)] * inverse[index(item, column, naux)];
-        metric_times_inverse +=
-            symmetric_metric[index(row, item, naux)] * inverse[index(item, column, naux)];
-        inverse_times_metric +=
-            inverse[index(row, item, naux)] * symmetric_metric[index(item, column, naux)];
-      }
-      metric_inverse_squared[index(row, column, naux)] = inverse_squared;
-      left_null_projector[index(row, column, naux)] =
-          (row == column ? 1.0 : 0.0) - metric_times_inverse;
-      right_null_projector[index(row, column, naux)] =
-          (row == column ? 1.0 : 0.0) - inverse_times_metric;
-    }
-  }
-
-  // Evaluate the three matrix products as O(naux^3) contractions.  The
-  // original four-index expansion is algebraically identical but becomes a
-  // dominant cost for realistic auxiliary bases (and is unnecessary because
-  // all factors are dense square matrices).
-  const auto multiply_square = [&](const std::vector<double>& first,
-                                   const std::vector<double>& second) {
-    std::vector<double> product(naux * naux, 0.0);
-    for (std::size_t row = 0; row < naux; ++row) {
-      for (std::size_t item = 0; item < naux; ++item) {
-        const double value = first[index(row, item, naux)];
-        if (value == 0.0) continue;
-        for (std::size_t column = 0; column < naux; ++column) {
-          product[index(row, column, naux)] += value * second[index(item, column, naux)];
-        }
-      }
-    }
-    return product;
-  };
-  const std::vector<double> inverse_derivative_left =
-      multiply_square(inverse, symmetric_derivative);
-  const std::vector<double> first_term = multiply_square(inverse_derivative_left, inverse);
-  const std::vector<double> squared_derivative_left =
-      multiply_square(metric_inverse_squared, symmetric_derivative);
-  const std::vector<double> second_term =
-      multiply_square(squared_derivative_left, left_null_projector);
-  const std::vector<double> null_derivative_left =
-      multiply_square(right_null_projector, symmetric_derivative);
-  const std::vector<double> third_term =
-      multiply_square(null_derivative_left, metric_inverse_squared);
-
-  std::vector<double> derivative(naux * naux, 0.0);
-  for (std::size_t row = 0; row < naux; ++row) {
-    for (std::size_t column = 0; column < naux; ++column) {
-      const std::size_t item = index(row, column, naux);
-      derivative[item] = -first_term[item] + second_term[item] + third_term[item];
-    }
-  }
-  // Symmetry is an invariant of the Coulomb metric and its Moore-Penrose
-  // inverse. Enforce it explicitly so tiny eigensolver/BLAS roundoff cannot
-  // leak a skew component into the subsequent quadratic contraction.
-  for (std::size_t row = 0; row < naux; ++row) {
-    for (std::size_t column = row + 1; column < naux; ++column) {
-      const double symmetric =
-          0.5 * (derivative[index(row, column, naux)] + derivative[index(column, row, naux)]);
-      derivative[index(row, column, naux)] = symmetric;
-      derivative[index(column, row, naux)] = symmetric;
-    }
-  }
-  require_finite(derivative, "DF metric pseudoinverse derivative is non-finite");
-  return derivative;
+    const double* metric_derivative, double relative_threshold = 0.0) {
+  const std::size_t elements = data.naux * data.naux;
+  return density_fitting_metric_inverse_response(
+      data.metric, inverse, std::vector<double>(metric_derivative, metric_derivative + elements),
+      data.naux, relative_threshold);
 }
 
 void validate_gradient_density(const std::vector<double>& density, std::size_t nbf,
@@ -532,7 +444,7 @@ std::vector<double> density_fitting_metric_pseudoinverse(
 
 std::vector<double> density_fitting_metric_pseudoinverse_derivative(
     const integrals::DensityFittingIntegralData& integrals, const std::vector<double>& inverse,
-    std::size_t coordinate) {
+    std::size_t coordinate, double relative_threshold) {
   validate_density_fitting_derivative_data(integrals);
   if (inverse.size() != integrals.naux * integrals.naux) {
     throw std::invalid_argument("DF metric pseudoinverse dimensions are inconsistent");
@@ -542,7 +454,87 @@ std::vector<double> density_fitting_metric_pseudoinverse_derivative(
   }
   const std::size_t metric_elements = integrals.naux * integrals.naux;
   return metric_pseudoinverse_derivative(
-      integrals, inverse, integrals.metric_derivative.data() + coordinate * metric_elements);
+      integrals, inverse, integrals.metric_derivative.data() + coordinate * metric_elements,
+      relative_threshold);
+}
+
+std::vector<double> density_fitting_metric_inverse_response(const std::vector<double>& metric,
+                                                            const std::vector<double>& inverse,
+                                                            const std::vector<double>& response,
+                                                            std::size_t n,
+                                                            double relative_threshold) {
+  const auto elements = checked_matrix_elements(n, "DF metric response dimension is invalid");
+  if (metric.size() != elements || inverse.size() != elements || response.size() != elements ||
+      !std::isfinite(relative_threshold) || relative_threshold < 0.0 || relative_threshold >= 1.0)
+    throw std::invalid_argument("DF metric response dimensions or threshold are inconsistent");
+  require_finite(metric, "DF metric response requires a finite metric");
+  require_finite(inverse, "DF metric response requires a finite inverse");
+  require_finite(response, "DF metric response requires finite weights");
+  std::vector<double> symmetric(elements), weights(elements);
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = 0; j < n; ++j) {
+      symmetric[i * n + j] = 0.5 * (metric[i * n + j] + metric[j * n + i]);
+      weights[i * n + j] = 0.5 * (response[i * n + j] + response[j * n + i]);
+    }
+  const auto eigen = symmetric_eigen(std::move(symmetric), n);
+  const auto& q = eigen.vectors;
+  const double largest = eigen.values.back();
+  if (!(largest > 0.0)) throw std::runtime_error("DF metric has no positive response subspace");
+  const double cutoff = relative_threshold * largest;
+  // Match the eigensolver's relative resolution. A cutoff inside this interval
+  // cannot define a reproducible derivative even if this call chooses a rank.
+  const double resolution = 128 * std::numeric_limits<double>::epsilon() * largest;
+  std::vector<bool> retained(n);
+  std::vector<double> temp(elements, 0.0), transformed(elements, 0.0);
+  for (std::size_t i = 0; i < n; ++i) {
+    double inverse_eigenvalue = 0.0;
+    for (std::size_t row = 0; row < n; ++row)
+      for (std::size_t column = 0; column < n; ++column)
+        inverse_eigenvalue += q[row * n + i] * inverse[row * n + column] * q[column * n + i];
+    retained[i] = eigen.values[i] * inverse_eigenvalue > 0.5;
+    if (relative_threshold > 0.0) {
+      if (std::abs(eigen.values[i] - cutoff) <= resolution)
+        throw std::runtime_error("DF metric rank crossing: eigenvalue is unresolved at the cutoff");
+      if (retained[i] != (eigen.values[i] > cutoff))
+        throw std::invalid_argument("DF metric inverse active subspace differs from its threshold");
+    }
+  }
+  if (std::none_of(retained.begin(), retained.end(), [](bool keep) { return keep; }))
+    throw std::invalid_argument("DF metric inverse retains no positive subspace");
+  // Q^T E Q and Q (L .* Ehat) Q^T are four cubic matrix products. The divided
+  // differences handle subspace motion, including finite discarded eigenvalues.
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = 0; j < n; ++j)
+      for (std::size_t k = 0; k < n; ++k) temp[i * n + j] += weights[i * n + k] * q[k * n + j];
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = 0; j < n; ++j) {
+      for (std::size_t k = 0; k < n; ++k) transformed[i * n + j] += q[k * n + i] * temp[k * n + j];
+      double divided = 0.0;
+      if (retained[i] && retained[j]) {
+        divided = -1.0 / (eigen.values[i] * eigen.values[j]);
+      } else if (retained[i] != retained[j]) {
+        const double gap = eigen.values[i] - eigen.values[j];
+        if (std::abs(gap) <= resolution)
+          throw std::runtime_error("DF metric retained/discarded subspaces are unresolved");
+        divided = ((retained[i] ? 1.0 / eigen.values[i] : 0.0) -
+                   (retained[j] ? 1.0 / eigen.values[j] : 0.0)) /
+                  gap;
+      }
+      transformed[i * n + j] *= divided;
+    }
+  std::fill(temp.begin(), temp.end(), 0.0);
+  std::vector<double> result(elements, 0.0);
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = 0; j < n; ++j)
+      for (std::size_t k = 0; k < n; ++k) temp[i * n + j] += q[i * n + k] * transformed[k * n + j];
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = 0; j < n; ++j)
+      for (std::size_t k = 0; k < n; ++k) result[i * n + j] += temp[i * n + k] * q[j * n + k];
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = i + 1; j < n; ++j)
+      result[i * n + j] = result[j * n + i] = 0.5 * (result[i * n + j] + result[j * n + i]);
+  require_finite(result, "DF metric inverse response is non-finite");
+  return result;
 }
 
 DensityFittingMetricFactor factor_density_fitting_metric(const std::vector<double>& metric,
@@ -685,7 +677,7 @@ DensityFittingRhfGradient build_density_fitting_rhf_gradient(
     const double* three_center_derivative =
         integrals.three_center_derivative.data() + coordinate * three_center_elements;
     const std::vector<double> inverse_derivative =
-        metric_pseudoinverse_derivative(integrals, inverse, metric_derivative);
+        metric_pseudoinverse_derivative(integrals, inverse, metric_derivative, relative_threshold);
     const double coulomb = coulomb_quadratic_derivative(
         integrals, density, inverse, inverse_derivative, three_center_derivative);
     const double exchange = exchange_quadratic_derivative(
@@ -727,7 +719,7 @@ DensityFittingUhfGradient build_density_fitting_uhf_gradient(
     const double* three_center_derivative =
         integrals.three_center_derivative.data() + coordinate * three_center_elements;
     const std::vector<double> inverse_derivative =
-        metric_pseudoinverse_derivative(integrals, inverse, metric_derivative);
+        metric_pseudoinverse_derivative(integrals, inverse, metric_derivative, relative_threshold);
     const double coulomb = coulomb_quadratic_derivative(
         integrals, total_density, inverse, inverse_derivative, three_center_derivative);
     const double alpha_exchange = exchange_quadratic_derivative(
