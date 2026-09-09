@@ -134,6 +134,7 @@ endif()
 add_library(vibeqc SHARED
   src/api/c_api_batch.cpp
   src/api/c_api_calculation.cpp
+  src/api/c_api_fock.cpp
   src/api/c_api_one_electron_gradient.cpp
   src/api/c_api_projection.cpp
   src/api/c_api_df_gradient.cpp
@@ -539,6 +540,10 @@ if(VIBEQC_BUILD_TESTS)
   target_link_libraries(vibeqc_fock_provider_tests PRIVATE vibeqc)
   target_include_directories(vibeqc_fock_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   add_test(NAME vibeqc_fock_provider_tests COMMAND vibeqc_fock_provider_tests)
+  add_executable(vibeqc_fock_api_tests tests/native/test_fock_api.cpp)
+  target_link_libraries(vibeqc_fock_api_tests PRIVATE vibeqc)
+  # CPU by default; invoke the explicit CUDA argument only inside a GPU job.
+  add_test(NAME vibeqc_fock_api_tests COMMAND vibeqc_fock_api_tests)
 
   add_executable(vibeqc_native_tests tests/native/test_rhf.cpp)
   target_link_libraries(vibeqc_native_tests PRIVATE vibeqc)

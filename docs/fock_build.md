@@ -3,8 +3,94 @@
 The internal C++ boundaries in `src/scf/fock_build.hpp` and
 `src/scf/fock_provider.hpp` separate a mathematical J/K request from its
 resolved execution strategy and prepared integral sources. CPU and CUDA
-providers can be selected independently; the public C/Python method descriptors retain their
-legacy density-fitting defaults while the rest of #202 is integrated.
+providers can be selected independently. The additive public `vibeqc/fock.h`
+and Python `FockPlan` interfaces expose these choices while the legacy method
+descriptors retain their density-fitting defaults.
+
+## Public prepared API
+
+`FockPlan` owns normalized geometry, orbital/auxiliary data and native sources.
+Create a new plan when those inputs or mathematical coefficients change:
+
+```python
+from vibeqc import FockBuildSpec, FockPlan
+from vibeqc_compiler.dft import NativeAO
+
+atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]  # Bohr
+spec = FockBuildSpec.hf(coulomb="density_fitted", exchange="exact")
+with NativeAO(atoms, basis="sto-3g") as basis:
+    with FockPlan(basis, spec, device="cpu") as plan:
+        result = plan.solve()
+        replay = plan.solve(initial_density=result.density, compute_forces=False)
+        fixed = plan.evaluate(result.density, derivative=True)
+        diagnostics = plan.diagnostics
+```
+
+`solve` uses the shared SCF iteration/finalization driver for the declared J/K
+energy. It includes no XC. Its forces are complete negative geometric energy
+derivatives in Hartree/Bohr, including one-electron, nuclear and Pulay terms.
+The optional warm density must satisfy the existing overlap-metric occupation,
+Hermiticity and electron/spin trace checks; it is never silently normalized.
+Every solve starts fresh DIIS history. Sources persist across replay, and a
+failed solve cannot replace another result or retain a failed iterate.
+`compute_forces=False` skips response execution and works on either value-only
+or derivative-capable plans. The latter retain their already prepared response
+data. Use `FockBuildSpec.hf(derivative_order=0)` to avoid preparing that data.
+
+`evaluate` returns unscaled J/K, Fock matrices including Hcore, one- and
+two-electron energies and nuclear repulsion. Its optional `gradient` is only
+the fixed-density **two-electron** geometric derivative, not a complete force.
+Restricted inputs have shape `[AO,AO]`; unrestricted inputs have shape
+`[2,AO,AO]`. Returned NumPy arrays own immutable storage. Input densities are
+snapshotted once for native execution and result identity.
+
+The plan's mathematical `identity` includes the normalized basis, effective
+auxiliary basis, canonical terms, derivative capability, screening, DF metric
+cutoff and FP64 precision. Unused auxiliary and absent-term metadata are
+canonicalized away. `execution_identity` additionally records the requested
+specification, native source hash, backend/device, source mappings and buffer
+policy. Result identity includes both identities and the evaluated density;
+SCF identity also includes seed, convergence controls and output selection.
+These identities do not use or extend the legacy HF checkpoint format.
+
+`diagnostics` distinguishes the resolver's preferred standard-HF schedule from
+the actual independent plan's source schedule. On CUDA, the public plan uses
+CUDA integral/J/K/response consumers with host DIIS and eigensolves. Standard
+`Calculator` HF continues to use the established fused CUDA solvers. CUDA
+device-byte diagnostics cover explicit source buffers and exclude modules,
+driver/library-private storage and recurrence stacks.
+
+The C API offers the same ownership and output rules through
+`vibeqc_fock_plan_create`, `evaluate`, `solve`, `diagnostic`, `last_error` and
+`destroy`. Context and system handles may be destroyed after creation.
+Descriptors are versioned and caller-owned output buffers must be disjoint.
+Publication is transactional, including SCF nonconvergence. C callers must
+serialize calls and destruction; Python serializes them with a per-plan lock.
+
+## Fixed-density semilocal consumer
+
+`FixedDensityMeanField` combines a native unit-Coulomb, absent-exchange request
+with the existing `FixedDensityXC` integrator:
+
+```python
+from vibeqc import FixedDensityMeanField, FockBuildSpec, FockTerm
+from vibeqc_compiler.xc import FixedDensityXC, functional
+
+spec = FockBuildSpec(
+    derivative_order=0, coulomb=FockTerm(), exchange=FockTerm(present=False)
+)
+with NativeAO(atoms) as basis, FockPlan(basis, spec) as plan:
+    consumer = FixedDensityMeanField(plan, FixedDensityXC(functional("PBE")))
+    combined = consumer.integrate(grid, density)
+```
+
+Here `grid` is a compatible molecular grid and `density` uses the plan's spin
+layout. The result contains full fixed-density energy (including nuclear
+repulsion) and Fock matrix. Both consumers use one owned density snapshot;
+the J/K contraction is implemented only in the native provider. LDA and PBE
+are checked against the independent pinned XC integration fixtures and
+density-direction energy variations. This is not DFT SCF and supplies no
+geometric XC forces; those remain with #162/#165.
 
 ## Densities, operators, and coefficients
 
@@ -145,8 +231,10 @@ all exact/DF/absent pairs, both spins, signed responses and separate batch items
 against CPU integrals. It checks resident and regenerated DF storage with a
 truncated metric, and complete SCF/replay/changed-geometry force endpoints.
 
-This slice does not complete #202: public independent choices and diagnostics,
-an available XC consumer, the public prepared interface and final
-end-to-end identity/overhead evidence remain.
+`tests/python/test_fock.py` exercises public independent choices, transactional
+failure, identity, source lifetime, SCF/replay/force consistency and semilocal XC
+composition. `vibeqc_fock_api_tests` exercises the public C lifecycle after
+context/system destruction and is also run with CUDA under the scheduler.
+Final end-to-end overhead evidence remains before completing #202.
 Performance conclusions require matched, synchronized endpoint measurements
 on explicitly identified hardware. No complete DFT SCF method is advertised.

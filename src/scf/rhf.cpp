@@ -1614,7 +1614,15 @@ static ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions&
 ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOptions& options,
                                      const std::vector<double>* initial_density) {
   const auto strategy = fock_strategy_for_execution(options);
-  if (strategy != plan.strategy())
+  // A source prepared with first derivatives also owns all value data. An
+  // energy-only replay may reuse it without evaluating a response, but no
+  // other semantic or execution change can reuse this immutable owner.
+  auto required = plan.strategy().spec;
+  required.derivative_order = strategy.spec.derivative_order;
+  if (strategy.spec.derivative_order > plan.strategy().spec.derivative_order ||
+      strategy != resolve_fock_build(required, plan.strategy().backend,
+                                     plan.strategy().screening_tolerance,
+                                     plan.strategy().metric_relative_threshold))
     throw std::invalid_argument("prepared Fock execution controls changed");
   const auto& system = plan.system();
   if (strategy.spec.spin == FockSpin::Restricted &&

@@ -1,8 +1,8 @@
 # Fock provider dispatch audit
 
 Audit baseline: `3da58410bb02a903ea6341a7caac0afc9314355b` (after #239).
-This records the existing implementation and the remaining #202 migration;
-it does not advertise an executable mixed-provider or DFT SCF method.
+The implementation progress below supersedes the baseline audit. Mixed
+provider SCF is executable; a complete DFT SCF method is not registered.
 
 ## Implementation progress after the audit
 
@@ -53,8 +53,15 @@ preserves its transient ERI lifetime. Reuse tests cover unchanged requests,
 changed geometry/coefficient/auxiliary/cutoff/device identity and failed
 replacement, alongside the original spin/pair numerical endpoints.
 
-Remaining: public independent choices and diagnostics, available XC
-integration, public prepared identity checks and matched endpoint overhead evidence. The sections below preserve the
+The additive C `fock.h` and Python `FockPlan` expose independent choices,
+fixed-density values/responses, complete native SCF, explicit warm replay and
+requested/resolved/actual-source diagnostics. Mathematical identity remains
+separate from execution/source identity. `FixedDensityMeanField` connects
+native unit J and absent K to the executable semilocal XC integrator; LDA and
+PBE retain independent fixed-density fixture and energy-variation checks.
+See [the public contract](fock_build.md) for ownership and output semantics.
+
+Remaining: matched endpoint overhead evidence. The sections below preserve the
 baseline audit; they describe the coupling before these implementation changes.
 
 ## Existing mathematical contract
