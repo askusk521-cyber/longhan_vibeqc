@@ -19,6 +19,25 @@
 
 using vibeqc::posthf::RawSource;
 namespace {
+/**
+ * Own one bounded CUDA DF source and its streamed RHF J/K plan.
+ *
+ * The public post-HF bridge owns this object across many density-response
+ * actions.  Destroying it releases both the transferred integral source and
+ * the plan exactly once, including on partial construction failure.
+ */
+struct PostHfRhfJkPlan {
+  std::size_t nbf{};
+  std::size_t naux{};
+  vibeqc::scf::CudaDensityFittingIntegralSource* source{};
+  vibeqc::scf::CudaDensityFittingJkPlan* plan{};
+
+  ~PostHfRhfJkPlan() {
+    if (plan) vibeqc::scf::destroy_cuda_density_fitting_jk_plan(plan);
+    if (source) vibeqc::scf::destroy_cuda_density_fitting_integral_source(source);
+  }
+};
+
 template <class F>
 int guarded(char* error, std::size_t size, F&& fn) noexcept {
   try {
@@ -112,7 +131,6 @@ int vibeqc_posthf_rhf_density_v1(void* source, int backend, int device, unsigned
     scalars[3] = result.iterations;
   });
 }
-
 /** Opt-in small-system NUM01 diagnostic execution using the existing HF source.
  * Unlike a converged post-HF export, this preserves failed-solve scalar records.
  * RHF density has one spin-summed block; UHF has alpha then beta. It neither
@@ -285,5 +303,83 @@ int vibeqc_scf_solve_v1(void* source, int method, int multiplicity, int df, unsi
     if (result.forces.size() == force_elements)
       std::copy(result.forces.begin(), result.forces.end(), forces);
   });
+}
+/**
+ * Prepare a reusable streamed CUDA DF RHF J/K plan.
+ *
+ * This is a development bridge for response operators.  The source must own
+ * an auxiliary basis; a missing auxiliary basis fails closed instead of
+ * silently switching to a different Hamiltonian.
+ */
+int vibeqc_posthf_rhf_jk_plan_create_v1(void* source, int device, double threshold, void** out,
+                                        double* diagnostics, char* error, std::size_t size) {
+  return guarded(error, size, [&] {
+    if (!source || !out || !diagnostics)
+      throw std::invalid_argument("invalid RHF J/K plan request");
+    *out = nullptr;
+    if (!(threshold > 0.0) || !(threshold < 1.0) || !std::isfinite(threshold))
+      throw std::invalid_argument("RHF J/K metric threshold must be in (0,1)");
+    const auto& raw = *static_cast<RawSource*>(source);
+    if (raw.naux() == 0U) throw std::runtime_error("CUDA DF response requires an auxiliary basis");
+    auto prepared = std::make_unique<PostHfRhfJkPlan>();
+    std::vector<vibeqc::core::System> orbital_systems{raw.orbital()};
+    std::vector<vibeqc::core::System> auxiliary_systems{raw.auxiliary()};
+    std::vector<double> metrics;
+    std::size_t nbf = 0U;
+    std::size_t naux = 0U;
+    std::string detail;
+    vibeqc_status status = vibeqc::scf::create_cuda_density_fitting_integral_source(
+        device, orbital_systems, auxiliary_systems, &prepared->source, metrics, nbf, naux, detail);
+    if (status != VIBEQC_STATUS_SUCCESS)
+      throw std::runtime_error(detail.empty() ? "CUDA DF source preparation failed" : detail);
+    std::vector<vibeqc::scf::CudaDensityFittingMetricDiagnostic> plan_diagnostics;
+    status = vibeqc::scf::create_cuda_density_fitting_jk_plan_from_source(
+        device, &prepared->source, 1U, nbf, naux, metrics, threshold, 0U, 0U, &prepared->plan,
+        plan_diagnostics, detail);
+    if (status != VIBEQC_STATUS_SUCCESS)
+      throw std::runtime_error(detail.empty() ? "CUDA DF J/K plan preparation failed" : detail);
+    prepared->nbf = nbf;
+    prepared->naux = naux;
+    diagnostics[0] = static_cast<double>(nbf);
+    diagnostics[1] = static_cast<double>(naux);
+    diagnostics[2] = plan_diagnostics.empty()
+                         ? 0.0
+                         : static_cast<double>(plan_diagnostics.front().device_resident_bytes);
+    diagnostics[3] = plan_diagnostics.empty()
+                         ? 0.0
+                         : static_cast<double>(plan_diagnostics.front().peak_device_bytes);
+    diagnostics[4] = plan_diagnostics.empty()
+                         ? 0.0
+                         : static_cast<double>(plan_diagnostics.front().host_resident_bytes);
+    diagnostics[5] = threshold;
+    *out = prepared.release();
+  });
+}
+
+int vibeqc_posthf_rhf_jk_plan_execute_v1(void* plan, const double* density, std::size_t elements,
+                                         double* coulomb, double* exchange, char* error,
+                                         std::size_t size) {
+  return guarded(error, size, [&] {
+    auto* prepared = static_cast<PostHfRhfJkPlan*>(plan);
+    if (!prepared || !prepared->plan || !density || !coulomb || !exchange ||
+        elements != prepared->nbf * prepared->nbf)
+      throw std::invalid_argument("invalid RHF J/K plan execution request");
+    std::vector<double> density_vector(density, density + elements);
+    std::vector<double> coulomb_vector;
+    std::vector<double> exchange_vector;
+    std::string detail;
+    const vibeqc_status status = vibeqc::scf::execute_cuda_density_fitting_rhf_jk(
+        prepared->plan, density_vector, coulomb_vector, exchange_vector, detail);
+    if (status != VIBEQC_STATUS_SUCCESS)
+      throw std::runtime_error(detail.empty() ? "CUDA DF J/K execution failed" : detail);
+    if (coulomb_vector.size() != elements || exchange_vector.size() != elements)
+      throw std::runtime_error("CUDA DF J/K output size mismatch");
+    std::copy(coulomb_vector.begin(), coulomb_vector.end(), coulomb);
+    std::copy(exchange_vector.begin(), exchange_vector.end(), exchange);
+  });
+}
+
+void vibeqc_posthf_rhf_jk_plan_destroy_v1(void* plan) {
+  delete static_cast<PostHfRhfJkPlan*>(plan);
 }
 }

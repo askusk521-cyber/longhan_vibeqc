@@ -121,6 +121,8 @@ class PreparedCCSD:
             raise TypeError("options must be SolverOptions")
         if not isinstance(snapshot, ReferenceSnapshot):
             raise TypeError("CCSD requires a validated RHF ReferenceSnapshot")
+        if snapshot.algorithm != "RHF":
+            raise ValueError("CCSD requires an RHF reference")
         if not isinstance(provider, ConventionalProvider) or provider.backend != "cpu":
             raise ValueError("CCSD requires a conventional CPU integral provider")
         if snapshot.identity != provider.snapshot.identity:
