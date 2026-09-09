@@ -24,6 +24,19 @@ from vibeqc_compiler.integral.cuda import CudaEmitter, format_constant
 from vibeqc_compiler.integral.expr import Graph
 
 
+def test_deep_associative_regions_preserve_multiplicity_and_canonical_order():
+    """Large shell contractions must not depend on Python's call-stack limit."""
+    graph = Graph()
+    variables = [graph.variable(f"v{i}") for i in range(17)]
+    terms = [variables[i % len(variables)] for i in range(4096)]
+    left, (left_root,) = graph.canonicalize_associative((graph.sum(terms),))
+    right, (right_root,) = graph.canonicalize_associative((graph.sum(reversed(terms)),))
+    values = {f"v{i}": float(i) for i in range(17)}
+    assert left.evaluate(left_root, values) == sum(i % 17 for i in range(4096))
+    assert right.evaluate(right_root, values) == left.evaluate(left_root, values)
+    assert left.nodes == right.nodes
+
+
 def test_ssa_analysis_records_shared_last_uses_and_peak_liveness():
     """Count a shared operand through its final consumer and root output."""
 

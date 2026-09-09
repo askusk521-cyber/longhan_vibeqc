@@ -13,6 +13,7 @@ from enum import Enum
 from math import isfinite
 
 from .blocks import RawBlock, WeightedDerivative
+from .range_separation import CoulombKernel, CoulombKernelFamily
 from .shell_signature import ShellSignature, checked_index
 from .shell_spec import ShellClassSpec
 
@@ -33,6 +34,21 @@ class OperatorFamily(str, Enum):
     COULOMB_METRIC = "coulomb_metric"
     THREE_CENTER_ERI = "three_center_eri"
     FOUR_CENTER_ERI = "four_center_eri"
+    LONG_RANGE_ERI = "long_range_eri"
+    SHORT_RANGE_ERI = "short_range_eri"
+
+
+_FOUR_CENTER_FAMILIES = frozenset(
+    (
+        OperatorFamily.FOUR_CENTER_ERI,
+        OperatorFamily.LONG_RANGE_ERI,
+        OperatorFamily.SHORT_RANGE_ERI,
+    )
+)
+_RANGE_FAMILIES = {
+    OperatorFamily.LONG_RANGE_ERI: CoulombKernelFamily.LONG_RANGE,
+    OperatorFamily.SHORT_RANGE_ERI: CoulombKernelFamily.SHORT_RANGE,
+}
 
 
 class DensityModel(str, Enum):
@@ -154,16 +170,26 @@ class NuclearCenter:
 
 @dataclass(frozen=True, slots=True)
 class OperatorSpec:
-    """Operator family, mathematical centers, and exact invariants."""
+    """Operator family, mathematical centers, invariants and fixed range parameter.
+
+    Range-separated four-center families carry omega in inverse bohr. The
+    distinct family tags make existing full-Coulomb executors fail closed;
+    accepting the IR does not imply that a legacy backend consumes omega.
+    """
 
     family: OperatorFamily | str
     centers: tuple[int, ...]
     invariants: tuple[TranslationInvariant, ...] = ()
     external_centers: tuple[NuclearCenter, ...] = ()
     permutations: tuple[tuple[int, ...], ...] = ()
+    omega: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "family", OperatorFamily(self.family))
+        kernel = CoulombKernel(
+            _RANGE_FAMILIES.get(self.family, "full_range"), self.omega
+        )
+        object.__setattr__(self, "omega", kernel.omega)
         object.__setattr__(self, "centers", tuple(self.centers))
         object.__setattr__(self, "invariants", tuple(self.invariants))
         object.__setattr__(self, "external_centers", tuple(self.external_centers))
@@ -202,7 +228,7 @@ class OperatorSpec:
             raise ValueError("operator contains duplicate permutations")
         n = len(self.basis_roles)
         allowed = {tuple(range(n)), (1, 0, *range(2, n))}
-        if self.family == OperatorFamily.FOUR_CENTER_ERI:
+        if self.family in _FOUR_CENTER_FAMILIES:
             allowed = {
                 (0, 1, 2, 3),
                 (1, 0, 2, 3),
@@ -228,9 +254,21 @@ class OperatorSpec:
             return ("auxiliary", "auxiliary")
         if self.family == OperatorFamily.THREE_CENTER_ERI:
             return ("orbital", "orbital", "auxiliary")
-        if self.family == OperatorFamily.FOUR_CENTER_ERI:
+        if self.family in _FOUR_CENTER_FAMILIES:
             return ("orbital",) * 4
         return ("orbital", "orbital")
+
+    @property
+    def range_separated(self) -> bool:
+        """Whether the family requires an explicit radial range parameter."""
+        return self.family in _RANGE_FAMILIES
+
+    @property
+    def coulomb_kernel(self) -> CoulombKernel:
+        """Expose normalized radial semantics for a four-center primitive."""
+        if self.family not in _FOUR_CENTER_FAMILIES:
+            raise ValueError("radial ERI semantics require a four-center operator")
+        return CoulombKernel(_RANGE_FAMILIES.get(self.family, "full_range"), self.omega)
 
     def nuclear_derivative(
         self,
@@ -347,6 +385,23 @@ FOUR_CENTER_ERI_OPERATOR = OperatorSpec(
     invariants=(TranslationInvariant(),),
 )
 
+
+def four_center_eri_operator(kernel: CoulombKernel | None = None) -> OperatorSpec:
+    """Declare the shared four-center symmetry with explicit LR/SR semantics."""
+    if kernel is None:
+        return FOUR_CENTER_ERI_OPERATOR
+    if not isinstance(kernel, CoulombKernel):
+        raise TypeError("expected explicit CoulombKernel semantics")
+    family = {
+        CoulombKernelFamily.FULL_RANGE: OperatorFamily.FOUR_CENTER_ERI,
+        CoulombKernelFamily.LONG_RANGE: OperatorFamily.LONG_RANGE_ERI,
+        CoulombKernelFamily.SHORT_RANGE: OperatorFamily.SHORT_RANGE_ERI,
+    }[kernel.family]
+    return OperatorSpec(
+        family, (0, 1, 2, 3), (TranslationInvariant(),), omega=kernel.omega
+    )
+
+
 _DENSITY_MODELS = frozenset(DensityModel)
 _CONTRACTION_BY_CONSUMER = {
     KernelConsumer.FOCK: ContractionSpec(
@@ -440,6 +495,14 @@ class IntegralIR:
             # let a new label imply support for an unimplemented ERI/DF route.
             raise ValueError(
                 "Hermite recurrence currently requires a one-electron operator"
+            )
+
+        if self.operator.range_separated and (
+            self.recurrence != "subset_wick"
+            or (self.derivative is not None and self.derivative.order != 1)
+        ):
+            raise ValueError(
+                "range-separated IR currently supports subset_wick values/first derivatives"
             )
 
         force_requested = any(

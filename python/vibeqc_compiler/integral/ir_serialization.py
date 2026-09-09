@@ -12,6 +12,7 @@ from .ir import (
     IntegralIR,
     NuclearCenter,
     NuclearCoordinates,
+    OperatorFamily,
     OperatorSpec,
     TranslationInvariant,
 )
@@ -19,6 +20,7 @@ from .shell_signature import BasisShell, CenterBinding, ShellSignature
 from .shell_spec import ShellClassSpec
 
 INTEGRAL_SCHEMA_VERSION = 1
+RANGE_INTEGRAL_SCHEMA_VERSION = 2
 INTEGRAL_SCHEMA = "vibeqc.integral_ir"
 
 
@@ -160,7 +162,9 @@ def integral_to_payload(integral: IntegralIR) -> dict[str, object]:
     derivative = integral.derivative
     return {
         "schema": INTEGRAL_SCHEMA,
-        "schema_version": INTEGRAL_SCHEMA_VERSION,
+        "schema_version": RANGE_INTEGRAL_SCHEMA_VERSION
+        if operator.range_separated
+        else INTEGRAL_SCHEMA_VERSION,
         "spec": spec,
         "operator": {
             "family": operator.family.value,
@@ -171,6 +175,7 @@ def integral_to_payload(integral: IntegralIR) -> dict[str, object]:
                 for c in operator.external_centers
             ],
             "permutations": [list(p) for p in operator.permutations],
+            **({"omega": operator.omega} if operator.range_separated else {}),
         },
         "derivative": None
         if derivative is None
@@ -203,7 +208,8 @@ def integral_from_payload(payload: dict[str, object]) -> IntegralIR:
     if (
         payload["schema"] != INTEGRAL_SCHEMA
         or type(payload["schema_version"]) is not int
-        or payload["schema_version"] != INTEGRAL_SCHEMA_VERSION
+        or payload["schema_version"]
+        not in (INTEGRAL_SCHEMA_VERSION, RANGE_INTEGRAL_SCHEMA_VERSION)
     ):
         raise ValueError("unsupported integral IR schema")
     s = payload["spec"]
@@ -227,10 +233,20 @@ def integral_from_payload(payload: dict[str, object]) -> IntegralIR:
         spec = ShellSignature(shells, bindings, s["legacy_class"])
     else:
         raise ValueError("unknown shell specification kind")
+    ranged = payload["schema_version"] == RANGE_INTEGRAL_SCHEMA_VERSION
     o = _record(
         payload["operator"],
-        ("family", "centers", "invariants", "external_centers", "permutations"),
+        ("family", "centers", "invariants", "external_centers", "permutations")
+        + (("omega",) if ranged else ()),
     )
+    # v1 stays byte-compatible for existing operators, and cannot silently
+    # decode a range family with a missing/defaulted scientific parameter.
+    if ranged != (
+        o["family"] in (OperatorFamily.LONG_RANGE_ERI, OperatorFamily.SHORT_RANGE_ERI)
+    ):
+        raise ValueError(
+            "range-separated operators require integral IR schema version 2"
+        )
     operator = OperatorSpec(
         o["family"],
         tuple(o["centers"]),
@@ -240,6 +256,7 @@ def integral_from_payload(payload: dict[str, object]) -> IntegralIR:
             for c in o["external_centers"]
         ),
         tuple(tuple(p) for p in o["permutations"]),
+        omega=o["omega"] if ranged else 0.0,
     )
     d = payload["derivative"]
     derivative = None
