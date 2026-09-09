@@ -14,6 +14,10 @@ from tools.vibeqc_codegen.one_electron_cuda import (
     emit_one_electron_values_cuda,
     one_electron_program_inventory,
 )
+from tools.vibeqc_codegen.one_electron_derivatives_cuda import (
+    emit_one_electron_derivatives_cuda,
+    one_electron_derivative_inventory,
+)
 
 
 def main():
@@ -21,12 +25,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--inventory", type=Path)
+    parser.add_argument("--derivatives", action="store_true")
     args = parser.parse_args()
-    source = emit_one_electron_values_cuda()
+    source = (
+        emit_one_electron_derivatives_cuda()
+        if args.derivatives
+        else emit_one_electron_values_cuda()
+    )
     write_if_changed(args.output, source)
     if args.inventory:
         payload = {
-            **one_electron_program_inventory(),
+            **(
+                one_electron_derivative_inventory()
+                if args.derivatives
+                else one_electron_program_inventory()
+            ),
             "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         }
         write_if_changed(

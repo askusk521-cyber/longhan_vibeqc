@@ -20,8 +20,10 @@
 #include "posthf/raw_source.hpp"
 #include "runtime/resource_ledger.hpp"
 #include "runtime/resource_usage.hpp"
+#include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
+#include "scf/cuda_one_electron_gradient.hpp"
 #include "scf/density_fitting.hpp"
 #include "scf/fock_build.hpp"
 #include "scf/proposals.hpp"
@@ -794,6 +796,41 @@ DensityFittingScfData assemble_density_fitting_data(integrals::IntegralData one_
   return data;
 }
 
+/** Bind a per-geometry fused response only when AO derivative tensors were omitted. */
+void bind_generated_one_electron(DensityFittingScfData& data, const core::System& system,
+                                 int device_id, std::size_t budget) {
+#if VIBEQC_HAS_CUDA
+  if (device_id >= 0 && data.one_electron.overlap_derivative.empty()) {
+    data.one_electron_gradient_system = system;
+    data.one_electron_gradient_device = device_id;
+    data.one_electron_gradient_mapping = cuda_policy::one_electron_derivative_mapping_requested();
+    data.one_electron_gradient_budget = budget ? budget : 128U * 1024U * 1024U;
+  }
+#else
+  (void)data;
+  (void)system;
+  (void)device_id;
+  (void)budget;
+#endif
+}
+
+/** Cached DF response state must follow policy and budget changes on replay. */
+[[maybe_unused]] bool one_electron_response_policy_matches(const DensityFittingScfData& data,
+                                                           std::size_t requested_budget) {
+#if VIBEQC_HAS_CUDA
+  const bool generated = cuda_policy::generated_one_electron_derivatives_requested();
+  const auto effective_budget = requested_budget ? requested_budget : 128U * 1024U * 1024U;
+  return data.one_electron_gradient_system.has_value() == generated &&
+         (!generated || (data.one_electron_gradient_mapping ==
+                             cuda_policy::one_electron_derivative_mapping_requested() &&
+                         data.one_electron_gradient_budget == effective_budget));
+#else
+  (void)data;
+  (void)requested_budget;
+  return true;
+#endif
+}
+
 DensityFittingScfData prepare_density_fitting_data(const core::System& system,
                                                    const core::System& auxiliary_system,
                                                    double relative_threshold,
@@ -816,7 +853,8 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
     integrals::IntegralData cartesian_one_electron;
     std::string one_electron_detail;
     const vibeqc_status one_electron_status = build_cuda_one_electron_integrals(
-        cuda_device_id, system, cartesian_one_electron, one_electron_detail);
+        cuda_device_id, system, cartesian_one_electron, one_electron_detail,
+        !cuda_policy::generated_one_electron_derivatives_requested());
     if (one_electron_status != VIBEQC_STATUS_SUCCESS) {
       throw std::runtime_error(one_electron_detail.empty()
                                    ? "CUDA one-electron integral generation failed"
@@ -834,7 +872,9 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
       metadata.nbf = molecule::ao_count(system);
       metadata.naux = molecule::ao_count(auxiliary_system);
       metadata.ncoord = system.atoms.size() * 3U;
-      return assemble_density_fitting_metadata(std::move(data.one_electron), std::move(metadata));
+      data = assemble_density_fitting_metadata(std::move(data.one_electron), std::move(metadata));
+      bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
+      return data;
     }
 
     integrals::DensityFittingIntegralData cartesian;
@@ -858,8 +898,10 @@ DensityFittingScfData prepare_density_fitting_data(const core::System& system,
   data.one_electron = integrals::build_integrals(system);
   data.raw = integrals::build_density_fitting_integrals(system, auxiliary_system);
 #endif
-  return assemble_density_fitting_data(std::move(data.one_electron), std::move(data.raw),
+  data = assemble_density_fitting_data(std::move(data.one_electron), std::move(data.raw),
                                        relative_threshold);
+  bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
+  return data;
 }
 
 Matrix build_density_fitting_rhf_fock(const Matrix& hcore,
@@ -885,6 +927,46 @@ std::pair<Matrix, Matrix> build_density_fitting_uhf_focks(
     beta_fock[element] += jk.coulomb[element] - jk.beta_exchange[element];
   }
   return {std::move(alpha_fock), std::move(beta_fock)};
+}
+
+/** Adapt stationary RHF/UHF weights to the shared external-weight derivative.
+ * D and energy-weighted D already contain their proper occupation factors.
+ * UHF sums both spin channels; no additional factor of two belongs here.
+ */
+Matrix generated_one_electron_hf_gradient(const DensityFittingScfData& data, const Matrix& density,
+                                          const Matrix& weighted,
+                                          const Matrix* beta_density = nullptr,
+                                          const Matrix* beta_weighted = nullptr) {
+  Matrix gradient;
+#if VIBEQC_HAS_CUDA
+  if (!data.one_electron_gradient_system) return gradient;
+  Matrix total_density, total_weighted;
+  std::span<const double> d = density, w = weighted;
+  if (beta_density) {
+    total_density = density;
+    total_weighted = weighted;
+    for (std::size_t i = 0; i < density.size(); ++i) {
+      total_density[i] += (*beta_density)[i];
+      total_weighted[i] += (*beta_weighted)[i];
+    }
+    d = total_density;
+    w = total_weighted;
+  }
+  std::string detail;
+  const auto status = execute_cuda_one_electron_gradient(
+      data.one_electron_gradient_device, *data.one_electron_gradient_system, w, d, d,
+      data.one_electron_gradient_mapping, data.one_electron_gradient_budget, gradient, detail,
+      nullptr, -1.0);
+  if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+  if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
+#else
+  (void)data;
+  (void)density;
+  (void)weighted;
+  (void)beta_density;
+  (void)beta_weighted;
+#endif
+  return gradient;
 }
 
 void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matrix& orthogonalizer,
@@ -962,6 +1044,9 @@ void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matri
   result.energy = electronic_energy(density, data.one_electron.hcore, final_fock) +
                   data.one_electron.nuclear_repulsion;
   const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
+  // Run before the legacy response fallback guard: a requested generated
+  // failure must propagate, never silently switch integral implementations.
+  const Matrix generated_one_electron = generated_one_electron_hf_gradient(data, density, weighted);
   bool device_force_response = false;
 #if VIBEQC_HAS_CUDA
   if (cuda_plan != nullptr) {
@@ -990,6 +1075,12 @@ void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matri
         result.forces.assign(data.raw.ncoord, 0.0);
         const std::size_t matrix_elements = data.raw.nbf * data.raw.nbf;
         for (std::size_t coordinate = 0; coordinate < data.raw.ncoord; ++coordinate) {
+          if (!generated_one_electron.empty()) {
+            result.forces[coordinate] =
+                -(generated_one_electron[coordinate] + two_electron_derivative[coordinate] +
+                  data.one_electron.nuclear_repulsion_derivative[coordinate]);
+            continue;
+          }
           const double* overlap_derivative =
               data.one_electron.overlap_derivative.data() + coordinate * matrix_elements;
           const double* hcore_derivative =
@@ -1011,6 +1102,10 @@ void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matri
   }
 #endif
   if (!device_force_response) {
+    if (!generated_one_electron.empty()) {
+      throw std::runtime_error(
+          "CUDA DF response failed with generated one-electron gradients selected");
+    }
     if (data.raw.three_center.empty()) {
       throw std::runtime_error(
           "CUDA DF source-backed force response failed after tensor storage was released");
@@ -1116,6 +1211,8 @@ void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matri
       alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
   const Matrix beta_weighted =
       energy_weighted_density(beta_orbitals.vectors, beta_orbitals.values, n, beta_occupied, 1.0);
+  const Matrix generated_one_electron = generated_one_electron_hf_gradient(
+      data, alpha_density, alpha_weighted, &beta_density, &beta_weighted);
   bool device_force_response = false;
 #if VIBEQC_HAS_CUDA
   if (cuda_plan != nullptr) {
@@ -1145,6 +1242,12 @@ void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matri
         result.forces.assign(data.raw.ncoord, 0.0);
         const std::size_t matrix_elements = data.raw.nbf * data.raw.nbf;
         for (std::size_t coordinate = 0; coordinate < data.raw.ncoord; ++coordinate) {
+          if (!generated_one_electron.empty()) {
+            result.forces[coordinate] =
+                -(generated_one_electron[coordinate] + two_electron_derivative[coordinate] +
+                  data.one_electron.nuclear_repulsion_derivative[coordinate]);
+            continue;
+          }
           const double* overlap_derivative =
               data.one_electron.overlap_derivative.data() + coordinate * matrix_elements;
           const double* hcore_derivative =
@@ -1167,6 +1270,10 @@ void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matri
   }
 #endif
   if (!device_force_response) {
+    if (!generated_one_electron.empty()) {
+      throw std::runtime_error(
+          "CUDA DF response failed with generated one-electron gradients selected");
+    }
     if (data.raw.three_center.empty()) {
       throw std::runtime_error(
           "CUDA DF source-backed force response failed after tensor storage was released");
@@ -1932,8 +2039,9 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
                                              : VIBEQC_STATUS_SUCCESS;
       const vibeqc_status one_electron_batch_status =
           batch_status == VIBEQC_STATUS_SUCCESS
-              ? build_cuda_one_electron_integrals_batch(device_id, orbital_chunk,
-                                                        one_electron_batch, detail)
+              ? build_cuda_one_electron_integrals_batch(
+                    device_id, orbital_chunk, one_electron_batch, detail,
+                    !cuda_policy::generated_one_electron_derivatives_requested())
               : batch_status;
       if (batch_status == VIBEQC_STATUS_SUCCESS &&
           one_electron_batch_status == VIBEQC_STATUS_SUCCESS &&
@@ -1992,8 +2100,9 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
                                           : VIBEQC_STATUS_SUCCESS;
             const vibeqc_status retry_one_electron_status =
                 retry_raw_status == VIBEQC_STATUS_SUCCESS
-                    ? build_cuda_one_electron_integrals_batch(device_id, single_orbital,
-                                                              single_one_electron, retry_detail)
+                    ? build_cuda_one_electron_integrals_batch(
+                          device_id, single_orbital, single_one_electron, retry_detail,
+                          !cuda_policy::generated_one_electron_derivatives_requested())
                     : retry_raw_status;
             if (retry_raw_status == VIBEQC_STATUS_SUCCESS &&
                 retry_one_electron_status == VIBEQC_STATUS_SUCCESS &&
@@ -2040,7 +2149,8 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
           }
           integrals::IntegralData cartesian_one_electron;
           const vibeqc_status one_electron_status = build_cuda_one_electron_integrals(
-              device_id, systems[source], cartesian_one_electron, item_detail);
+              device_id, systems[source], cartesian_one_electron, item_detail,
+              !cuda_policy::generated_one_electron_derivatives_requested());
           if (one_electron_status != VIBEQC_STATUS_SUCCESS) {
             statuses[source] = one_electron_status;
             continue;
@@ -2063,6 +2173,16 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
           statuses[source] = VIBEQC_STATUS_NUMERICAL_FAILURE;
         }
       }
+    }
+  }
+  for (std::size_t source = 0; source < count; ++source) {
+    if (!prepared[source]) continue;
+    try {
+      bind_generated_one_electron(*prepared[source], systems[source], device_id,
+                                  output_budget_bytes);
+    } catch (const std::bad_alloc&) {
+      prepared[source].reset();
+      statuses[source] = VIBEQC_STATUS_OUT_OF_MEMORY;
     }
   }
   return prepared;
@@ -2337,10 +2457,20 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
 
   std::vector<vibeqc_status> preparation_status;
   std::vector<std::optional<DensityFittingScfData>> batched_prepared;
-  const bool cached_data_complete = prepared_cache != nullptr &&
-                                    prepared_cache->size() == systems.size() &&
-                                    std::all_of(prepared_cache->begin(), prepared_cache->end(),
-                                                [](const auto& item) { return item.has_value(); });
+  const bool cached_data_complete =
+      prepared_cache != nullptr && prepared_cache->size() == systems.size() &&
+      std::all_of(prepared_cache->begin(), prepared_cache->end(), [&options](const auto& item) {
+        return item.has_value() && one_electron_response_policy_matches(
+                                       *item, options.density_fitting_memory_budget_bytes);
+      });
+  if (prepared_cache != nullptr && !cached_data_complete && cached_plan != nullptr &&
+      *cached_plan != nullptr) {
+    // A budget change can switch resident tensors to a source-backed plan.
+    // Rebuild both cache layers together so the new response data and plan
+    // share the same storage contract and allocation limit.
+    destroy_cuda_density_fitting_jk_plan(*cached_plan);
+    *cached_plan = nullptr;
+  }
   if (device_id >= 0 && !cached_data_complete) {
     batched_prepared = prepare_cuda_density_fitting_batch(
         systems, auxiliary_template, options.density_fitting_relative_threshold,
@@ -2690,10 +2820,20 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
   } cache_guard{prepared_cache, &data};
   std::vector<vibeqc_status> preparation_status;
   std::vector<std::optional<DensityFittingScfData>> batched_prepared;
-  const bool cached_data_complete = prepared_cache != nullptr &&
-                                    prepared_cache->size() == systems.size() &&
-                                    std::all_of(prepared_cache->begin(), prepared_cache->end(),
-                                                [](const auto& item) { return item.has_value(); });
+  const bool cached_data_complete =
+      prepared_cache != nullptr && prepared_cache->size() == systems.size() &&
+      std::all_of(prepared_cache->begin(), prepared_cache->end(), [&options](const auto& item) {
+        return item.has_value() && one_electron_response_policy_matches(
+                                       *item, options.density_fitting_memory_budget_bytes);
+      });
+  if (prepared_cache != nullptr && !cached_data_complete && cached_plan != nullptr &&
+      *cached_plan != nullptr) {
+    // A budget change can switch resident tensors to a source-backed plan.
+    // Rebuild both cache layers together so the new response data and plan
+    // share the same storage contract and allocation limit.
+    destroy_cuda_density_fitting_jk_plan(*cached_plan);
+    *cached_plan = nullptr;
+  }
   if (device_id >= 0 && !cached_data_complete) {
     batched_prepared = prepare_cuda_density_fitting_batch(
         systems, auxiliary_template, options.density_fitting_relative_threshold,
