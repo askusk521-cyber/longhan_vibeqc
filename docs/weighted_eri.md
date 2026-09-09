@@ -32,7 +32,7 @@ are historical and are not claimed as current candidate results.
 
 ## Weight and permutation contracts
 
-`tools/vibeqc_codegen/eri_weights.py` exposes three explicit adapters:
+`python/vibeqc_compiler/integral/eri_weights.py` exposes three explicit adapters:
 
 - `fold_dense_eri_weight` sums every *distinct* ordered weight in the eightfold
   ERI orbit. Same AO indices and same pairs reduce the orbit size. Multiplying

@@ -4,6 +4,14 @@ Run inside Slurm with the explicitly allocated RTX 5090. This is an expression
 and runtime smoke gate, not an OpenCL HF provider or a domestic-GPU claim.
 """
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import ctypes as c
 import hashlib
@@ -23,21 +31,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import numpy as np
-
-from tools.vibeqc_codegen.artifact_cache import LocalArtifactCache
-from tools.vibeqc_codegen.cache import integral_cache_key
-from tools.vibeqc_codegen.df_values import (
+from vibeqc_compiler.integral.artifact_cache import LocalArtifactCache
+from vibeqc_compiler.integral.cache import integral_cache_key
+from vibeqc_compiler.integral.df_values import (
     _reference_boys,
     build_df_component_kernel,
     build_df_value_ir,
 )
-from tools.vibeqc_codegen.expr import Graph
-from tools.vibeqc_codegen.opencl_lowering import ScalarKernel, emit_opencl, source_hash
-from tools.vibeqc_codegen.opencl_runtime import OpenCLRuntime
-from tools.vibeqc_codegen.runtime_backend import (
+from vibeqc_compiler.integral.expr import Graph
+from vibeqc_compiler.integral.opencl_lowering import (
+    ScalarKernel,
+    emit_opencl,
+    source_hash,
+)
+from vibeqc_compiler.integral.opencl_runtime import OpenCLRuntime
+from vibeqc_compiler.integral.runtime_backend import (
     CompiledArtifactIdentity,
     ExecutionShape,
 )
+
 from tools.vibeqc_validation.df_values import make_df_value_fixture
 from tools.vibeqc_validation.schema import block_error, canonical_hash
 
@@ -288,7 +300,7 @@ def main():
                     for path in sorted(
                         {
                             Path(__file__).resolve(),
-                            *ROOT.glob("tools/vibeqc_codegen/*.py"),
+                            *ROOT.glob("python/vibeqc_compiler/integral/*.py"),
                             *ROOT.glob("tools/vibeqc_validation/*.py"),
                         }
                     )

@@ -1,5 +1,13 @@
 """Native HF->CCSD acceptance with independent same-Hamiltonian final residuals."""
 
+# Source-tree CLI bootstrap for transitive compiler clients.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import platform
@@ -43,7 +51,11 @@ def run(output):
     records = []
     sources = {
         str(p.relative_to(ROOT)).replace("\\", "/"): file_hash(p)
-        for folder in ("tools/vibeqc_cc", "tools/vibeqc_tensor", "tools/vibeqc_posthf")
+        for folder in (
+            "tools/vibeqc_cc",
+            "python/vibeqc_compiler/tensor",
+            "tools/vibeqc_posthf",
+        )
         for p in sorted((ROOT / folder).glob("*.py"))
     }
     sources["tools/validate_cc_solver.py"] = file_hash(__file__)

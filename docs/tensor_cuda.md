@@ -24,11 +24,11 @@ site's scheduler and preserve its assigned device visibility.
 
 ```python
 from pathlib import Path
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor.cuda_plan import plan_cuda, Reservations
-from tools.vibeqc_tensor.cuda_execute import compile_cuda, PreparedCuda
-from tools.vibeqc_tensor.examples import example_cases
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor.cuda_plan import plan_cuda, Reservations
+from vibeqc_compiler.tensor.cuda_execute import compile_cuda, PreparedCuda
+from vibeqc_compiler.tensor.examples import example_cases
 
 case = example_cases()[1]
 target = cuda_target_info("sm_120")  # choose the actual allocated architecture

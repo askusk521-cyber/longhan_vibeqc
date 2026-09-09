@@ -5,6 +5,14 @@ gates. Each kernel reads identical runtime geometry/weights and writes all
 thirteen results, so dead outputs cannot hide register or spill costs.
 """
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import subprocess
@@ -15,13 +23,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tools.vibeqc_codegen.shell_class import build_weighted_shell_contraction_kernel
-from tools.vibeqc_codegen.shell_spec import PSSS_SPEC
-from tools.vibeqc_codegen.weighted_eri import (
+from vibeqc_compiler.integral.shell_class import build_weighted_shell_contraction_kernel
+from vibeqc_compiler.integral.shell_spec import PSSS_SPEC
+from vibeqc_compiler.integral.weighted_eri import (
     build_weighted_eri_ir,
     build_weighted_eri_kernel,
 )
-from tools.vibeqc_codegen.weighted_eri_cuda import emit_psss_weighted_header
+from vibeqc_compiler.integral.weighted_eri_cuda import emit_psss_weighted_header
+
 from tools.vibeqc_validation.schema import file_hash
 
 

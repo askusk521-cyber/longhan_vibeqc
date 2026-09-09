@@ -1,5 +1,13 @@
 """Run the separate source and release-compile tiers of the f-shell matrix."""
 
+# Source-tree CLI bootstrap for transitive compiler clients.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import shutil

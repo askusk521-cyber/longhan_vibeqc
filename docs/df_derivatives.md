@@ -35,7 +35,7 @@ calling thread's CUDA device after stream cleanup.
 
 ## Mathematical generation
 
-`tools/vibeqc_codegen/df_derivatives.py` differentiates the physical value DAG
+`python/vibeqc_compiler/integral/df_derivatives.py` differentiates the physical value DAG
 introduced by the generated DF value implementation. The interpreter covers
 the prefactor, Gaussian decay, shifts, and Boys argument; differentiating a
 Boys node uses `dF_m(T)/dT = -F_(m+1)(T)`.

@@ -53,7 +53,7 @@ def source_identity(source: Path) -> str:
         paths.update(p for p in (source / directory).rglob("*") if p.is_file())
     paths.update((source / "python/vibeqc").rglob("*.py"))
     for pattern in ("*.py", "*.json"):
-        paths.update((source / "tools/vibeqc_codegen").rglob(pattern))
+        paths.update((source / "python/vibeqc_compiler").rglob(pattern))
     text = "".join(
         f"{p.relative_to(source).as_posix()}:{file_hash(p)}\n"
         for p in sorted(paths, key=lambda p: p.relative_to(source).as_posix())
@@ -289,21 +289,38 @@ def _native_kernel_paths(build, architecture, name):
 def run(args) -> dict:
     """Tune measured hotspots; publish only complete accepted endpoint replacements."""
     source = args.source_dir.resolve()
-    if not (source / "tools/vibeqc_codegen/autotune.py").is_file():
+    if not (source / "python/vibeqc_compiler/integral/autotune.py").is_file():
         raise ValueError(
             "autotuning needs the matching VibeQC source checkout; pass --source-dir"
         )
     sys.path.insert(0, str(source))
+    sys.path.insert(0, str(source / "python"))
     # Fail early with an actionable missing-dependency message before compiling.
     import pyscf
+    from vibeqc_compiler.common.paths import source_hashes
 
-    from tools.vibeqc_codegen.autotune import (
+    # A wheel is a valid tuning frontend for a byte-identical checkout. Check
+    # the complete loaded compiler inventory: changing sys.path cannot replace
+    # an already imported parent package, and loading both would split IR types.
+    loaded_sources = source_hashes("common", "integral", "tensor", "xc", "dft")
+    checkout_sources = {
+        path.relative_to(source).as_posix(): file_hash(path)
+        for pattern in ("*.py", "*.json")
+        for path in (source / "python/vibeqc_compiler").rglob(pattern)
+    }
+    if loaded_sources != checkout_sources:
+        raise ValueError(
+            "loaded compiler differs from --source-dir; install the matching checkout"
+        )
+
+    from vibeqc_compiler.integral.autotune import (
         _run_autotune,
         argument_parser,
         supported_schedule_trials,
     )
-    from tools.vibeqc_codegen.cuda_target import cuda_target_info
-    from tools.vibeqc_codegen.shell_spec import FUSED_SHELL_SPEC_BY_NAME
+    from vibeqc_compiler.integral.cuda_target import cuda_target_info
+    from vibeqc_compiler.integral.shell_spec import FUSED_SHELL_SPEC_BY_NAME
+
     from tools.vibeqc_validation.local_tuning import validate_schedule
 
     nvcc = args.nvcc or find_nvcc()
@@ -324,7 +341,9 @@ def run(args) -> dict:
         )
     architecture = f"sm_{device['major']}{device['minor']}"
     official = json.loads(
-        (source / "tools/vibeqc_codegen/production_shell_classes.json").read_text()
+        (
+            source / "python/vibeqc_compiler/integral/production_shell_classes.json"
+        ).read_text()
     )
     abi_profile = (
         official["architectures"].get(architecture)

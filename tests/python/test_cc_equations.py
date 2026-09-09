@@ -2,10 +2,10 @@
 
 import numpy as np
 import pytest
+from vibeqc_compiler.tensor import Program, execute, optimize
 
 from tools.vibeqc_cc import amplitude_layouts, build_program
 from tools.vibeqc_cc.oracle import DeterminantOracle, dense_feeds, random_case
-from tools.vibeqc_tensor import Program, execute, optimize
 
 
 def check(actual, expected):
@@ -68,7 +68,7 @@ def test_missing_disconnected_terms_and_exchange_factors_are_detected():
     # Mutate the actual DAG by removing each original contribution. This is
     # not a negative check against a separately fabricated formula.
     original = build_program(2, 2)
-    from tools.vibeqc_tensor import add
+    from vibeqc_compiler.tensor import add
 
     for key, target, ref in (
         ("energy_t1t1", "correlation_energy", e),

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from math import prod
 
-from tools.vibeqc_codegen.shell_signature import checked_index
+from vibeqc_compiler.integral.shell_signature import checked_index
 
 from .sources import CPU_SOURCE_SCRATCH
 

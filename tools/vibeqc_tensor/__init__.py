@@ -1,91 +1,25 @@
-"""Development TensorIR: typed equations, CPU execution, replay, and AD.
+"""Compatibility forwarding only; see docs/compiler_architecture.md.
 
-Integral operators remain in vibeqc_codegen.  This package supplies primitive
-JVP/VJP rules, demand-driven derivative programs, packed-layout adjoints, and
-plans for the existing CUDA lowering path; it supplies no CCSD method or
-complete solver.
+Remove after downstream callers have migrated for one release and the legacy
+import compatibility tests are the only repository users. No duplicate IR,
+class definitions or cache implementation belongs here.
 """
 
-from .ad_program import (
-    GENERATION_VERSION,
-    JVPProgram,
-    VJPProgram,
-    linearize,
-    transpose_program,
-)
-from .autodiff import (
-    AD_PRIMITIVES,
-    AD_RULE_VERSION,
-    AD_RULES,
-    DotTestResult,
-    JVPResult,
-    VJPResult,
-    capabilities,
-    dot_test,
-    jvp,
-    vjp,
-)
-from .interpreter import Execution, execute
-from .ir import (
-    PRIMITIVES,
-    Node,
-    add,
-    broadcast,
-    constant,
-    divide,
-    einsum,
-    gather,
-    input_tensor,
-    multiply,
-    reduce_sum,
-    reshape,
-    slice_tensor,
-    transpose,
-)
-from .optimize import PASSES, optimize, rewrite
-from .packing import PackedLayout
-from .program import Program
-from .types import Index, IndexSpace, Symmetry, TensorSpec
+import sys
+from pathlib import Path
 
-__all__ = [
-    "AD_PRIMITIVES",
-    "AD_RULES",
-    "AD_RULE_VERSION",
-    "GENERATION_VERSION",
-    "PASSES",
-    "PRIMITIVES",
-    "DotTestResult",
-    "Execution",
-    "Index",
-    "IndexSpace",
-    "JVPProgram",
-    "JVPResult",
-    "Node",
-    "PackedLayout",
-    "Program",
-    "Symmetry",
-    "TensorSpec",
-    "VJPProgram",
-    "VJPResult",
-    "add",
-    "broadcast",
-    "capabilities",
-    "constant",
-    "divide",
-    "dot_test",
-    "einsum",
-    "execute",
-    "gather",
-    "input_tensor",
-    "jvp",
-    "linearize",
-    "multiply",
-    "optimize",
-    "reduce_sum",
-    "reshape",
-    "rewrite",
-    "slice_tensor",
-    "transpose",
-    "transpose_program",
-    "vjp",
-]
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+from importlib import import_module
+
+_target = import_module("vibeqc_compiler.tensor")
+__all__ = list(
+    getattr(_target, "__all__", [n for n in vars(_target) if not n.startswith("_")])
+)
+
+
+def __getattr__(name):
+    return getattr(_target, name)
+
+
+def __dir__():
+    return sorted(set(globals()) | set(dir(_target)))

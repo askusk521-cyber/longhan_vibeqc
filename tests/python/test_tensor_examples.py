@@ -7,8 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-
-from tools.vibeqc_codegen.blocks import (
+from vibeqc_compiler.integral.blocks import (
     BlockRequest,
     RawBlock,
     ShellTile,
@@ -19,13 +18,13 @@ from tools.vibeqc_codegen.blocks import (
     assemble_raw_block,
     contract_weighted_derivative,
 )
-from tools.vibeqc_codegen.ir import IntegralIR, OperatorSpec, TranslationInvariant
-from tools.vibeqc_codegen.shell_signature import (
+from vibeqc_compiler.integral.ir import IntegralIR, OperatorSpec, TranslationInvariant
+from vibeqc_compiler.integral.shell_signature import (
     BasisShell,
     CenterBinding,
     ShellSignature,
 )
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Program,
@@ -34,6 +33,7 @@ from tools.vibeqc_tensor import (
     execute,
     input_tensor,
 )
+
 from tools.vibeqc_validation.schema import validate_evidence
 
 

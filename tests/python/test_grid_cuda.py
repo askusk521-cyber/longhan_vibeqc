@@ -6,13 +6,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from vibeqc_compiler.dft import GridSpec, NativeAO
+from vibeqc_compiler.dft.cuda import CudaGrid, compile_cuda
+from vibeqc_compiler.dft.fixtures import NAMES, basis_arguments, load_fixture
+from vibeqc_compiler.dft.prepared import PreparedGrid, PreparedGridBatch
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
 
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_dft import GridSpec, NativeAO
-from tools.vibeqc_dft.cuda import CudaGrid, compile_cuda
-from tools.vibeqc_dft.fixtures import NAMES, basis_arguments, load_fixture
-from tools.vibeqc_dft.prepared import PreparedGrid, PreparedGridBatch
 from tools.vibeqc_validation.schema import block_error
 
 pytestmark = pytest.mark.skipif(

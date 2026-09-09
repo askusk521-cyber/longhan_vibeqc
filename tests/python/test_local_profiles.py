@@ -347,11 +347,12 @@ def test_installed_cli_help_and_show_need_no_native_library(tmp_path):
 
 
 def test_generic_numerical_driver_supports_tuned_s_and_p_consumers():
-    from tools.vibeqc_codegen.autotune import supported_schedule_trials
-    from tools.vibeqc_codegen.benchmark import emit_shell_class_resource_cuda
-    from tools.vibeqc_codegen.fused_schedule import build_fused_shell_plan
-    from tools.vibeqc_codegen.ir import KernelConsumer
-    from tools.vibeqc_codegen.shell_spec import FUSED_SHELL_SPEC_BY_NAME
+    from vibeqc_compiler.integral.autotune import supported_schedule_trials
+    from vibeqc_compiler.integral.benchmark import emit_shell_class_resource_cuda
+    from vibeqc_compiler.integral.fused_schedule import build_fused_shell_plan
+    from vibeqc_compiler.integral.ir import KernelConsumer
+    from vibeqc_compiler.integral.shell_spec import FUSED_SHELL_SPEC_BY_NAME
+
     from tools.vibeqc_validation.f_shell_cuda import emit_numerical_driver
 
     for name in ("ssss", "pppp"):

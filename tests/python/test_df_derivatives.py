@@ -7,19 +7,19 @@ from itertools import product
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.df_derivatives import (
+from vibeqc_compiler.integral.df_derivatives import (
     axis_polynomial,
     build_df_derivative_ir,
     build_df_derivative_kernel,
     evaluate_df_derivative,
 )
-from tools.vibeqc_codegen.df_values import (
+from vibeqc_compiler.integral.df_values import (
     build_df_component_kernel,
     build_df_value_ir,
     evaluate_df_primitive,
 )
-from tools.vibeqc_codegen.shell_spec import cartesian_components
+from vibeqc_compiler.integral.shell_spec import cartesian_components
+
 from tools.vibeqc_validation.df_derivatives import make_df_derivative_fixture
 
 SIGNATURES = [
@@ -100,7 +100,7 @@ def test_derivative_domain_layout_and_internal_moments():
 @pytest.fixture(scope="module")
 def emitted_library(tmp_path_factory):
     """Compile the actual bounded CUDA arithmetic as ordinary host C++."""
-    from tools.vibeqc_codegen.df_derivatives_cuda import emit_df_derivatives_cuda
+    from vibeqc_compiler.integral.df_derivatives_cuda import emit_df_derivatives_cuda
 
     compiler = shutil.which("c++")
     if compiler is None:

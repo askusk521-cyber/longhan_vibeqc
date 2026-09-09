@@ -2,9 +2,8 @@
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     PackedLayout,
@@ -30,7 +29,7 @@ from tools.vibeqc_tensor import (
     transpose_program,
     vjp,
 )
-from tools.vibeqc_tensor.cuda_plan import TensorSchedule, plan_cuda
+from vibeqc_compiler.tensor.cuda_plan import TensorSchedule, plan_cuda
 
 RNG = np.random.default_rng(1151)
 TARGET = cuda_target_info("sm_80")

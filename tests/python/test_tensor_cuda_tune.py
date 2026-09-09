@@ -2,9 +2,8 @@
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_tensor.cuda_resources import parse_resources
-from tools.vibeqc_tensor.cuda_tune import endpoint_gate
+from vibeqc_compiler.tensor.cuda_resources import parse_resources
+from vibeqc_compiler.tensor.cuda_tune import endpoint_gate
 
 
 def test_endpoint_gate_accepts_clear_gain_and_rejects_noise_or_regression():

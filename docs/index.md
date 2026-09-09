@@ -27,6 +27,8 @@ cover all quantum-chemistry methods through a coherent batched interface.
 ## Developers
 
 - [Architecture](architecture.md): scientific and runtime design decisions.
+- [Scientific compiler ownership](compiler_architecture.md): package boundaries,
+  source generation, compatibility and dependency checks.
 - [Experimental OpenCL contracts](opencl_backend.md): optional compiler/runtime
   execution, queried capabilities and the boundary before native HF integration.
 - [Shared Fock construction](fock_build.md): method-neutral J/K requests, exact

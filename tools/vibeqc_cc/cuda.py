@@ -5,9 +5,9 @@ and output transfers are suitable for equation validation, not a resident CC
 iteration. Equations are constructed only by the audited #148 frontend.
 """
 
-from tools.vibeqc_tensor import Program
-from tools.vibeqc_tensor.cuda_execute import PreparedCuda, compile_cuda
-from tools.vibeqc_tensor.cuda_plan import plan_cuda
+from vibeqc_compiler.tensor import Program
+from vibeqc_compiler.tensor.cuda_execute import PreparedCuda, compile_cuda
+from vibeqc_compiler.tensor.cuda_plan import plan_cuda
 
 from .doubles import build_ccsd_program
 

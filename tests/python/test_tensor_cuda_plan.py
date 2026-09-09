@@ -3,9 +3,8 @@
 from dataclasses import replace
 
 import pytest
-
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Program,
@@ -18,7 +17,7 @@ from tools.vibeqc_tensor import (
     reduce_sum,
     transpose,
 )
-from tools.vibeqc_tensor.cuda_plan import (
+from vibeqc_compiler.tensor.cuda_plan import (
     ALIGNMENT,
     Reservations,
     TensorSchedule,

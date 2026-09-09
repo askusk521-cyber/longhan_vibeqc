@@ -8,9 +8,8 @@ from pathlib import Path
 
 import numpy as np
 from vibeqc.profiles import file_hash
-
-from tools.vibeqc_codegen.native_runtime import compile_runtime
-from tools.vibeqc_tensor.cuda_execute import _PREPARATION_LOCK, _Metrics
+from vibeqc_compiler.integral.native_runtime import compile_runtime
+from vibeqc_compiler.tensor.cuda_execute import _PREPARATION_LOCK, _Metrics
 
 from .reference import immutable
 from .sources import _DOUBLE, _SIZE, pointer

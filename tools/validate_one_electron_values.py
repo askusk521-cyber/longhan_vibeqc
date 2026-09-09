@@ -5,6 +5,14 @@ The numerical runner requests a finite Slurm allocation unless --local is used
 inside an existing allocation. These isolated timings do not promote HF paths.
 """
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -19,10 +27,13 @@ sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import pyscf
+from vibeqc_compiler.integral.cuda_adapter import (
+    CudaBenchmarkExecutor,
+    CudaCompilerAdapter,
+)
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.integral.one_electron_cuda import emit_one_electron_values_cuda
 
-from tools.vibeqc_codegen.cuda_adapter import CudaBenchmarkExecutor, CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_codegen.one_electron_cuda import emit_one_electron_values_cuda
 from tools.vibeqc_validation.f_shell import cuobjdump_resources
 from tools.vibeqc_validation.one_electron_cuda import emit_one_electron_value_driver
 from tools.vibeqc_validation.one_electron_values import one_electron_value_matrix
@@ -47,9 +58,10 @@ def main():
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     if args.derivatives:
-        from tools.vibeqc_codegen.one_electron_derivatives_cuda import (
+        from vibeqc_compiler.integral.one_electron_derivatives_cuda import (
             emit_one_electron_derivatives_cuda,
         )
+
         from tools.vibeqc_validation.one_electron_derivatives import (
             one_electron_derivative_matrix,
         )

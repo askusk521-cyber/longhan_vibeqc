@@ -9,10 +9,9 @@ from itertools import product
 from math import exp, pi, prod, sqrt
 
 import numpy as np
-
-from tools.vibeqc_codegen.fused_schedule import evaluate_fused_shell_observables
-from tools.vibeqc_codegen.rys import boys_values
-from tools.vibeqc_codegen.shell_spec import FUSED_SHELL_SPEC_BY_NAME
+from vibeqc_compiler.integral.fused_schedule import evaluate_fused_shell_observables
+from vibeqc_compiler.integral.rys import boys_values
+from vibeqc_compiler.integral.shell_spec import FUSED_SHELL_SPEC_BY_NAME
 
 
 def _geometry(exponents, centers):

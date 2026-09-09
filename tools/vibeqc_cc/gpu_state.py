@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 import numpy as np
+from vibeqc_compiler.tensor import Program, add, divide, execute, input_tensor
+from vibeqc_compiler.tensor.cuda_plan import INT_MAX, Reservations, aligned, plan_cuda
+from vibeqc_compiler.tensor.types import checked_size
 
 from tools.vibeqc_posthf.reference import ReferenceSnapshot, immutable
-from tools.vibeqc_tensor import Program, add, divide, execute, input_tensor
-from tools.vibeqc_tensor.cuda_plan import INT_MAX, Reservations, aligned, plan_cuda
-from tools.vibeqc_tensor.types import checked_size
 
 from .doubles import build_ccsd_program
 from .equations import amplitude_specs

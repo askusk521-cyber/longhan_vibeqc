@@ -5,6 +5,14 @@ warm samples reuse the fixed-geometry plan and converged density. These timings
 are reported separately so cached work cannot masquerade as integral speedup.
 """
 
+# Source-tree CLI bootstrap for transitive compiler clients.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os

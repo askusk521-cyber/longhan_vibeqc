@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
 
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
 from tools.vibeqc_posthf.conventions import MOBlock
 from tools.vibeqc_posthf.cuda import compile_cuda
 from tools.vibeqc_posthf.df import DFProvider, MetricFactor

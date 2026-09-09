@@ -7,6 +7,14 @@ This records initial interface costs, not an automatic performance promotion.
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -21,9 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "python")]
 import numpy as np
 from vibeqc.profiles import probe_device
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
 
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
 from tools.vibeqc_posthf.conventions import MOBlock
 from tools.vibeqc_posthf.cuda import compile_cuda
 from tools.vibeqc_posthf.df import DFProvider, MetricFactor

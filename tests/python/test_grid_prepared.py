@@ -4,11 +4,10 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_dft import GridSpec, NativeAO
-from tools.vibeqc_dft.fixtures import basis_arguments, load_fixture
-from tools.vibeqc_dft.plan import plan_tiles
-from tools.vibeqc_dft.prepared import PreparedGrid, PreparedGridBatch
+from vibeqc_compiler.dft import GridSpec, NativeAO
+from vibeqc_compiler.dft.fixtures import basis_arguments, load_fixture
+from vibeqc_compiler.dft.plan import plan_tiles
+from vibeqc_compiler.dft.prepared import PreparedGrid, PreparedGridBatch
 
 
 def arguments(name="h2"):

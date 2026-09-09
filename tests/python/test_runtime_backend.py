@@ -3,9 +3,8 @@
 from dataclasses import replace
 
 import pytest
-
-from tools.vibeqc_codegen.backend import TargetInfo, TargetScheduleShape
-from tools.vibeqc_codegen.runtime_backend import (
+from vibeqc_compiler.integral.backend import TargetInfo, TargetScheduleShape
+from vibeqc_compiler.integral.runtime_backend import (
     CompiledArtifactIdentity,
     ExecutionShape,
     LibraryRequest,
@@ -114,8 +113,7 @@ def test_atomic_local_executable_cache_rejects_corruption_and_wrong_identity(
     import json
 
     from vibeqc import profiles
-
-    from tools.vibeqc_codegen.artifact_cache import LocalArtifactCache
+    from vibeqc_compiler.integral.artifact_cache import LocalArtifactCache
 
     cache = LocalArtifactCache(tmp_path / "private")
     identity = CompiledArtifactIdentity(
@@ -159,7 +157,7 @@ def test_atomic_local_executable_cache_rejects_corruption_and_wrong_identity(
 
 
 def test_cache_rejects_shared_write_directories_and_symlink_records(tmp_path):
-    from tools.vibeqc_codegen.artifact_cache import LocalArtifactCache
+    from vibeqc_compiler.integral.artifact_cache import LocalArtifactCache
 
     shared = tmp_path / "shared"
     shared.mkdir(mode=0o777)

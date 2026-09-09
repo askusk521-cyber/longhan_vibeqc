@@ -11,9 +11,8 @@ from vibeqc.resources import (
     ResourceRequest,
     plan_resources,
 )
-
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Program,
@@ -22,7 +21,7 @@ from tools.vibeqc_tensor import (
     input_tensor,
     reduce_sum,
 )
-from tools.vibeqc_tensor.resources import tensor_resource_choices
+from vibeqc_compiler.tensor.resources import tensor_resource_choices
 
 
 def fragment():

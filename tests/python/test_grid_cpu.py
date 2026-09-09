@@ -5,8 +5,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_dft import (
+from vibeqc_compiler.dft import (
     ExplicitGrid,
     GridSpec,
     MolecularGrid,
@@ -16,7 +15,8 @@ from tools.vibeqc_dft import (
     orbital_features,
     partition_weights,
 )
-from tools.vibeqc_dft.fixtures import NAMES, ROOT, basis_arguments, load_fixture
+from vibeqc_compiler.dft.fixtures import NAMES, ROOT, basis_arguments, load_fixture
+
 from tools.vibeqc_validation.schema import block_error
 
 

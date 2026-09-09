@@ -6,6 +6,14 @@ describes grid/AO/density primitives, not DFT energies or nuclear gradients.
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -20,13 +28,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "python")]
 import numpy as np
+from vibeqc_compiler.dft import GridSpec, MolecularGrid, NativeAO, density_features
+from vibeqc_compiler.dft.cuda import CudaGrid, compile_cuda
+from vibeqc_compiler.dft.fixtures import NAMES, basis_arguments, load_fixture
+from vibeqc_compiler.dft.prepared import PreparedGrid, PreparedGridBatch
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
 
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_dft import GridSpec, MolecularGrid, NativeAO, density_features
-from tools.vibeqc_dft.cuda import CudaGrid, compile_cuda
-from tools.vibeqc_dft.fixtures import NAMES, basis_arguments, load_fixture
-from tools.vibeqc_dft.prepared import PreparedGrid, PreparedGridBatch
 from tools.vibeqc_validation.schema import (
     block_error,
     canonical_hash,
@@ -181,7 +189,7 @@ def main():
     source = canonical_hash(
         {
             str(p.relative_to(ROOT)): file_hash(p)
-            for pattern in ("src/dft/*", "tools/vibeqc_dft/*.py")
+            for pattern in ("src/dft/*", "python/vibeqc_compiler/dft/*.py")
             for p in ROOT.glob(pattern)
         }
     )

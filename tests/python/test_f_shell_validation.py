@@ -8,8 +8,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from vibeqc_compiler.integral.cuda_adapter import CudaCompileResult
 
-from tools.vibeqc_codegen.cuda_adapter import CudaCompileResult
 from tools.vibeqc_validation import f_shell
 from tools.vibeqc_validation.f_shell_cuda import emit_numerical_driver
 from tools.vibeqc_validation.f_shell_numerics import contract_reference, eri_orbit

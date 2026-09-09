@@ -9,8 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_codegen.blocks import (
+from vibeqc_compiler.integral.blocks import (
     BlockRequest,
     BlockStatus,
     RawBlock,
@@ -23,10 +22,10 @@ from tools.vibeqc_codegen.blocks import (
     contract_weighted_derivative,
     unsupported_block_response,
 )
-from tools.vibeqc_codegen.cache import integral_cache_key
-from tools.vibeqc_codegen.capabilities import query_integral_capability
-from tools.vibeqc_codegen.cuda_schedule import CudaKernelIR, schedule_candidates
-from tools.vibeqc_codegen.ir import (
+from vibeqc_compiler.integral.cache import integral_cache_key
+from vibeqc_compiler.integral.capabilities import query_integral_capability
+from vibeqc_compiler.integral.cuda_schedule import CudaKernelIR, schedule_candidates
+from vibeqc_compiler.integral.ir import (
     ContractionOutput,
     IntegralIR,
     NuclearCenter,
@@ -36,16 +35,16 @@ from tools.vibeqc_codegen.ir import (
     TranslationInvariant,
     build_integral_ir,
 )
-from tools.vibeqc_codegen.ir_serialization import (
+from vibeqc_compiler.integral.ir_serialization import (
     integral_from_payload,
     integral_to_payload,
 )
-from tools.vibeqc_codegen.shell_signature import (
+from vibeqc_compiler.integral.shell_signature import (
     BasisShell,
     CenterBinding,
     ShellSignature,
 )
-from tools.vibeqc_codegen.shell_spec import FUSED_SHELL_SPECS, PSPS_SPEC
+from vibeqc_compiler.integral.shell_spec import FUSED_SHELL_SPECS, PSPS_SPEC
 
 
 def request_ir(family, *, derivative=False, atoms=None, angular=None):
@@ -493,12 +492,12 @@ def test_serialized_examples_are_reproducible_and_report_unavailable_lowering(tm
 
 def test_production_artifacts_and_catalog_are_byte_identical_to_baseline(tmp_path):
     """Pin the legacy registry/shard contract across this semantic refactor."""
-    from tools.vibeqc_codegen.production import write_production_bundles
+    from vibeqc_compiler.integral.production import write_production_bundles
 
     baseline = json.loads(
         Path("tests/reference_data/integral_ir_legacy_artifacts.json").read_text()
     )
-    manifest = Path("tools/vibeqc_codegen/production_shell_classes.json")
+    manifest = Path("python/vibeqc_compiler/integral/production_shell_classes.json")
     assert (
         hashlib.sha256(manifest.read_bytes()).hexdigest() == baseline["manifest_sha256"]
     )
@@ -518,10 +517,12 @@ def test_production_artifacts_and_catalog_are_byte_identical_to_baseline(tmp_pat
 
 
 def test_incompatible_production_profiles_are_rejected(tmp_path):
-    from tools.vibeqc_codegen.production import resolve_production_profile
+    from vibeqc_compiler.integral.production import resolve_production_profile
 
     manifest = json.loads(
-        Path("tools/vibeqc_codegen/production_shell_classes.json").read_text()
+        Path(
+            "python/vibeqc_compiler/integral/production_shell_classes.json"
+        ).read_text()
     )
     manifest["architectures"]["sm_120"]["generator_abi"] = 0
     path = tmp_path / "incompatible.json"

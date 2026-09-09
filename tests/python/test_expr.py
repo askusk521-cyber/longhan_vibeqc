@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from fractions import Fraction
 
-from tools.vibeqc_codegen import (
+from vibeqc_compiler.integral import (
     PSSS_SPEC,
     AlgebraForm,
     AlgebraFusion,
@@ -20,8 +20,8 @@ from tools.vibeqc_codegen import (
     build_psss_kernel,
     build_weighted_shell_contraction_kernel,
 )
-from tools.vibeqc_codegen.cuda import CudaEmitter, format_constant
-from tools.vibeqc_codegen.expr import Graph
+from vibeqc_compiler.integral.cuda import CudaEmitter, format_constant
+from vibeqc_compiler.integral.expr import Graph
 
 
 def test_ssa_analysis_records_shared_last_uses_and_peak_liveness():

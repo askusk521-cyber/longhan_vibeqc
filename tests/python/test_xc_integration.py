@@ -6,19 +6,18 @@ from functools import lru_cache
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_dft import (
+from vibeqc_compiler.dft import (
     ExplicitGrid,
     GridSpec,
     MolecularGrid,
     NativeAO,
     density_features,
 )
-from tools.vibeqc_dft.fixtures import basis_arguments
-from tools.vibeqc_xc import FixedDensityXC, UnsupportedXC, functional
-from tools.vibeqc_xc.integration_fixtures import CASES
-from tools.vibeqc_xc.integration_fixtures import load_integration_fixture as fixture
-from tools.vibeqc_xc.potential import assemble_potential
+from vibeqc_compiler.dft.fixtures import basis_arguments
+from vibeqc_compiler.xc import FixedDensityXC, UnsupportedXC, functional
+from vibeqc_compiler.xc.integration_fixtures import CASES
+from vibeqc_compiler.xc.integration_fixtures import load_integration_fixture as fixture
+from vibeqc_compiler.xc.potential import assemble_potential
 
 
 def check(actual, expected):
@@ -232,7 +231,7 @@ def test_unsupported_domain_invalid_density_and_empty_grid_are_explicit():
 
 @pytest.mark.parametrize("fault", ["double_weight", "spin_factor", "double_potential"])
 def test_independent_gate_rejects_deliberate_factor_faults(monkeypatch, fault):
-    from tools.vibeqc_xc import integration
+    from vibeqc_compiler.xc import integration
 
     meta, data, grid = fixture("water")
     if fault == "double_weight":

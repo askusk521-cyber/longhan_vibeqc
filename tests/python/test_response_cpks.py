@@ -5,9 +5,11 @@ from fractions import Fraction
 
 import numpy as np
 import pytest
+from vibeqc_compiler.dft import NativeAO
+from vibeqc_compiler.dft.fixtures import basis_arguments
+from vibeqc_compiler.xc import FixedDensityXC, UnsupportedXC, functional
+from vibeqc_compiler.xc.integration_fixtures import load_integration_fixture
 
-from tools.vibeqc_dft import NativeAO
-from tools.vibeqc_dft.fixtures import basis_arguments
 from tools.vibeqc_posthf.fixtures import fixture_snapshot, load_fixture
 from tools.vibeqc_response import (
     CPKSResponseOperator,
@@ -16,8 +18,6 @@ from tools.vibeqc_response import (
     ResponseUnsupported,
     solve,
 )
-from tools.vibeqc_xc import FixedDensityXC, UnsupportedXC, functional
-from tools.vibeqc_xc.integration_fixtures import load_integration_fixture
 
 
 def test_fixed_density_xc_hessian_matches_potential_finite_difference():

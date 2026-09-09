@@ -109,13 +109,13 @@ measured library usage or minimum physical GPU requirements.
 
 ## Composing HF with TensorIR
 
-`tensor_resource_choices` in `tools.vibeqc_tensor.resources` adapts the existing
+`tensor_resource_choices` in `vibeqc_compiler.tensor.resources` adapts the existing
 TensorIR planner. Its `request` joins an HF request in the same global plan;
 `choices.selected(plan)` returns the corresponding exact TensorIR plan.
 
 ```python
 from vibeqc import ResourceSession, plan_resources
-from tools.vibeqc_tensor.resources import tensor_resource_choices
+from vibeqc_compiler.tensor.resources import tensor_resource_choices
 
 # program, compiler and cache are ordinary TensorIR objects/paths.
 budget = ResourceBudget(host_bytes=1 << 30, device_bytes=1 << 30)

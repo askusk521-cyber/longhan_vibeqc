@@ -1,6 +1,6 @@
 # Audited semilocal XC expressions (DFT02)
 
-`tools.vibeqc_xc` represents LDA exchange, PW92 correlation (ordinary and modified
+`vibeqc_compiler.xc` represents LDA exchange, PW92 correlation (ordinary and modified
 parameters), PBE exchange and PBE correlation. `LDA_XC_PW` and `PBE` are exact
 component sums. This is an explicit scientific tooling API, not a public DFT
 method or a promoted kernel schedule. There is no Hartree, nuclear or exact

@@ -86,8 +86,8 @@ contraction of the error curve. No favorable step is selected or hidden.
 ## Interface, identities and resource scope
 
 ```python
-from tools.vibeqc_dft import ExplicitGrid, NativeAO
-from tools.vibeqc_xc import FixedDensityXC, functional
+from vibeqc_compiler.dft import ExplicitGrid, NativeAO
+from vibeqc_compiler.xc import FixedDensityXC, functional
 
 xc = FixedDensityXC(functional("PBE", spin="unpolarized"))
 grid = ExplicitGrid.read("my-explicit-grid.json")

@@ -9,8 +9,7 @@ from fractions import Fraction
 
 import numpy as np
 import pytest
-
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Node,
@@ -31,8 +30,8 @@ from tools.vibeqc_tensor import (
     slice_tensor,
     transpose,
 )
-from tools.vibeqc_tensor.examples import example_cases
-from tools.vibeqc_tensor.types import SPACE_KINDS
+from vibeqc_compiler.tensor.examples import example_cases
+from vibeqc_compiler.tensor.types import SPACE_KINDS
 
 
 def tensor(name="x", *, size=3, kind="occupied", spin=None, role="input", **kwargs):
@@ -105,7 +104,7 @@ def test_order_and_provenance_do_not_change_equation_identity():
 
 def test_hash_is_stable_across_python_hash_seeds():
     source = """
-from tools.vibeqc_tensor.examples import example_cases
+from vibeqc_compiler.tensor.examples import example_cases
 for case in example_cases():
     print(case.program.logical_hash)
 """

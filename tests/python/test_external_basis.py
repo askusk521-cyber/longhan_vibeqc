@@ -22,8 +22,8 @@ from vibeqc import (
 from vibeqc.basis import NORMALIZATION, decimal_text, read_local_json
 from vibeqc.elements import SYMBOLS
 from vibeqc.profiles import canonical_hash, file_hash
+from vibeqc_compiler.dft import GridSpec, MolecularGrid, NativeAO
 
-from tools.vibeqc_dft import GridSpec, MolecularGrid, NativeAO
 from tools.vibeqc_posthf.sources import NativeSource
 from tools.vibeqc_validation.schema import block_error
 

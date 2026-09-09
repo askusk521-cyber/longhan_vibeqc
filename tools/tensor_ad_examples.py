@@ -10,6 +10,14 @@ GPU modes must run inside the caller's finite Slurm allocation.
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -25,10 +33,9 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from vibeqc.profiles import find_nvcc
-
-from tools.vibeqc_codegen.cuda_adapter import CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_tensor import (
+from vibeqc_compiler.integral.cuda_adapter import CudaCompilerAdapter
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.tensor import (
     Index,
     IndexSpace,
     Program,
@@ -43,12 +50,13 @@ from tools.vibeqc_tensor import (
     transpose_program,
     vjp,
 )
-from tools.vibeqc_tensor.cuda_execute import (
+from vibeqc_compiler.tensor.cuda_execute import (
     PreparedCuda,
     compile_cuda,
     tensor_source_identity,
 )
-from tools.vibeqc_tensor.cuda_plan import TensorSchedule, plan_cuda
+from vibeqc_compiler.tensor.cuda_plan import TensorSchedule, plan_cuda
+
 from tools.vibeqc_validation.schema import (
     GATES,
     block_error,

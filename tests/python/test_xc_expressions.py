@@ -7,12 +7,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 from vibeqc.profiles import file_hash
-
-from tools.vibeqc_codegen.cuda import CudaEmitter
-from tools.vibeqc_codegen.expr import AlgebraForm, Graph, Node
-from tools.vibeqc_dft.features import density_features
-from tools.vibeqc_validation.schema import block_error
-from tools.vibeqc_xc import (
+from vibeqc_compiler.dft.features import density_features
+from vibeqc_compiler.integral.cuda import CudaEmitter
+from vibeqc_compiler.integral.expr import AlgebraForm, Graph, Node
+from vibeqc_compiler.xc import (
     FunctionalSpec,
     UnsupportedXC,
     build_program,
@@ -20,13 +18,15 @@ from tools.vibeqc_xc import (
     pack_grid_features,
     validate_features,
 )
-from tools.vibeqc_xc.capabilities import query_capability
-from tools.vibeqc_xc.cuda import plan_tiles
-from tools.vibeqc_xc.cuda_emit import XCSchedule, emit_cuda
-from tools.vibeqc_xc.fixtures import load_fixture
-from tools.vibeqc_xc.potential import potential_coefficients
-from tools.vibeqc_xc.reference import exchange_reference
-from tools.vibeqc_xc.spec import CATALOG
+from vibeqc_compiler.xc.capabilities import query_capability
+from vibeqc_compiler.xc.cuda import plan_tiles
+from vibeqc_compiler.xc.cuda_emit import XCSchedule, emit_cuda
+from vibeqc_compiler.xc.fixtures import load_fixture
+from vibeqc_compiler.xc.potential import potential_coefficients
+from vibeqc_compiler.xc.reference import exchange_reference
+from vibeqc_compiler.xc.spec import CATALOG
+
+from tools.vibeqc_validation.schema import block_error
 
 
 def check(actual, expected, *, atol=1e-11, rtol=1e-10):
@@ -360,8 +360,9 @@ def test_functional_spec_rejects_mutable_or_unidentified_composition():
 def test_capability_cannot_relabel_cpu_or_failed_blocks_as_cuda_validation(tmp_path):
     from types import SimpleNamespace
 
+    from vibeqc_compiler.xc.cuda import XCArtifact
+
     from tools.vibeqc_validation.schema import new_evidence, outcome
-    from tools.vibeqc_xc.cuda import XCArtifact
 
     program = build_program(functional("LDA_X"))
     _, contract, _ = emit_cuda(program)

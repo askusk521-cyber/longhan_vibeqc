@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import platform
@@ -14,8 +22,9 @@ import numpy as np
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.vibeqc_tensor import PASSES, Program, execute, optimize, rewrite
-from tools.vibeqc_tensor.examples import example_cases
+from vibeqc_compiler.tensor import PASSES, Program, execute, optimize, rewrite
+from vibeqc_compiler.tensor.examples import example_cases
+
 from tools.vibeqc_validation.schema import (
     GATES,
     block_error,
@@ -48,7 +57,7 @@ def run_examples(*, seed: int = 145, equations_dir: Path | None = None) -> list[
     """
     source_files = {
         str(path.relative_to(ROOT)): file_hash(path)
-        for path in sorted((ROOT / "tools/vibeqc_tensor").glob("*.py"))
+        for path in sorted((ROOT / "python/vibeqc_compiler/tensor").glob("*.py"))
     }
     source_files[str(Path(__file__).resolve().relative_to(ROOT))] = file_hash(__file__)
     revision = subprocess.check_output(

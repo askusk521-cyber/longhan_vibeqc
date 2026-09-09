@@ -11,8 +11,7 @@ from math import prod
 import numpy as np
 from vibeqc import Atom, Calculator, _native
 from vibeqc.profiles import canonical_hash
-
-from tools.vibeqc_codegen.blocks import (
+from vibeqc_compiler.integral.blocks import (
     BlockRequest,
     BlockResponse,
     BlockStatus,
@@ -20,8 +19,8 @@ from tools.vibeqc_codegen.blocks import (
     ShellTile,
     TensorLayout,
 )
-from tools.vibeqc_codegen.ir import IntegralIR, OperatorSpec
-from tools.vibeqc_codegen.shell_signature import (
+from vibeqc_compiler.integral.ir import IntegralIR, OperatorSpec
+from vibeqc_compiler.integral.shell_signature import (
     BasisShell,
     CenterBinding,
     ShellSignature,
@@ -421,7 +420,7 @@ class NativeSource:
         begin = self.global_offsets(request)
         values = self._read(kind, begin, request.tile.shape)
         # Honor the request layout/sign, including padded physical storage.
-        from tools.vibeqc_codegen.blocks import assemble_raw_block
+        from vibeqc_compiler.integral.blocks import assemble_raw_block
 
         return assemble_raw_block(request, values.ravel())
 

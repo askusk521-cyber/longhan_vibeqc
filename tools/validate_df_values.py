@@ -5,6 +5,14 @@ benchmark adapter request the finite GPU allocation. Isolated fixture timings
 do not promote a production DF source or establish endpoint improvement.
 """
 
+# Source-tree CLI bootstrap; importing the compiler needs no native runtime.
+import sys as _compiler_sys
+from pathlib import Path as _CompilerPath
+
+_compiler_sys.path.insert(
+    0, str(_CompilerPath(__file__).resolve().parents[1] / "python")
+)
+
 import argparse
 import json
 import os
@@ -19,10 +27,13 @@ sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import pyscf
+from vibeqc_compiler.integral.cuda_adapter import (
+    CudaBenchmarkExecutor,
+    CudaCompilerAdapter,
+)
+from vibeqc_compiler.integral.cuda_target import cuda_target_info
+from vibeqc_compiler.integral.df_cuda import df_program_inventory, emit_df_values_cuda
 
-from tools.vibeqc_codegen.cuda_adapter import CudaBenchmarkExecutor, CudaCompilerAdapter
-from tools.vibeqc_codegen.cuda_target import cuda_target_info
-from tools.vibeqc_codegen.df_cuda import df_program_inventory, emit_df_values_cuda
 from tools.vibeqc_validation.df_values import df_value_matrix, make_df_value_fixture
 from tools.vibeqc_validation.df_values_cuda import emit_df_value_driver
 from tools.vibeqc_validation.f_shell import cuobjdump_resources
@@ -49,10 +60,11 @@ def main():
     if args.derivatives:
         from itertools import product
 
-        from tools.vibeqc_codegen.df_derivatives_cuda import (
+        from vibeqc_compiler.integral.df_derivatives_cuda import (
             df_derivative_inventory,
             emit_df_derivatives_cuda,
         )
+
         from tools.vibeqc_validation.df_derivatives import make_df_derivative_fixture
         from tools.vibeqc_validation.df_derivatives_cuda import (
             emit_df_derivative_driver,
