@@ -82,3 +82,7 @@ Run the opt-in tests with `VIBEQC_BASIS_CUDA_TEST=1`, selecting
 allocation. Preserve Slurm's `CUDA_VISIBLE_DEVICES`. See
 [the basis contract](../../../docs/external_basis.md) for normalization,
 provenance, capability and future higher-l/ECP integration requirements.
+
+Routine log/XML files named in this historical account are now represented in
+[the retention audit](../retention-238/migration.json), with extracted measurements,
+diagnostic conclusions, and exact original Git/checksum identities.

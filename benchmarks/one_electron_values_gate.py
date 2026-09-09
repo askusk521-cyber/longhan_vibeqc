@@ -53,7 +53,11 @@ def main():
         default=0,
         help="replace each explicit shell's radial contraction with this many primitives",
     )
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/benchmarks/one_electron_values_gate.json"),
+    )
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID"):
         parser.error("run this real-GPU gate inside Slurm")

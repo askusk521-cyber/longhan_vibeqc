@@ -306,7 +306,11 @@ def main() -> int:
     parser.add_argument(
         "--profile-side", choices=("baseline", "candidate"), default="candidate"
     )
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/benchmarks/f_shell_endpoints.json"),
+    )
     args = parser.parse_args()
     if args.batch < 1 or args.repeats < 2:
         parser.error("positive batch and at least two ABBA repeats are required")

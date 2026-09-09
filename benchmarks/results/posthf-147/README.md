@@ -111,3 +111,7 @@ runs split the conventional and generated DF tests; together they cover all
 `ci-python-summary.log` links the clean scientific-revision CI run. Native
 adapter behavior is exercised through Python ctypes; those executions are
 outside the separate C++ coverage instrumentation reported by Codecov.
+
+Routine log/XML files named in this historical account are now represented in
+[the retention audit](../retention-238/migration.json), with extracted measurements,
+diagnostic conclusions, and exact original Git/checksum identities.

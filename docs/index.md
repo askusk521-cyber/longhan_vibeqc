@@ -66,3 +66,5 @@ compact user entry point.
 - [Fixed-density LDA/PBE XC integration and AO potentials](xc_integration.md)
 
 - [Fixed-amplitude GPU RCCSD validation](rccsd_gpu.md)
+
+- [Scientific evidence retention and publication](evidence_retention.md)

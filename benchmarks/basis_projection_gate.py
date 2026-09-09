@@ -48,7 +48,11 @@ def main():
     parser.add_argument("--case", choices=CASES, default="h2-rhf-small-large")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--repeats", type=int, default=5)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/benchmarks/basis_projection_gate.json"),
+    )
     args = parser.parse_args()
     if args.device == "cuda" and not os.environ.get("SLURM_JOB_ID"):
         parser.error("real GPU benchmarks require a finite Slurm allocation")

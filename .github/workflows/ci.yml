@@ -216,6 +216,15 @@ jobs:
         run: >-
           .venv/bin/python -m pytest tests/python -q --cov
           --cov-report=xml:coverage-python.xml
+      - name: Preserve transient benchmark/debug artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: benchmark-debug-${{ github.run_id }}
+          path: .artifacts/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Preserve Python coverage for the upload-only job
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

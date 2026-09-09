@@ -102,7 +102,11 @@ def read_trace(path: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/benchmarks/f_shell_device_time.json"),
+    )
     args = parser.parse_args()
     result = read_trace(args.trace)
     args.output.parent.mkdir(parents=True, exist_ok=True)

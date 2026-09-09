@@ -71,6 +71,11 @@ srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
   --points 8192 --tile-points 256 --repeats 5 --output /tmp/xc161-final-evidence
 ```
 
-Each case archives `report.json`, `contract.json` and `compiler.log`. Source is
+Each case retains `report.json` and `contract.json`; compiler resource diagnostics
+are extracted into the retention audit. Source is
 deterministically regenerated from the contract and scientific revision rather
 than duplicated here. `manifest.json` hashes every raw archived file.
+
+Routine log/XML files named in this historical account are now represented in
+[the retention audit](../retention-238/migration.json), with extracted measurements,
+diagnostic conclusions, and exact original Git/checksum identities.

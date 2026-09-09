@@ -138,3 +138,7 @@ GPU tests use the same finite Slurm form with `VIBEQC_GRID_CUDA_TEST=1` and
 `compute-sanitizer --tool memcheck --leak-check full --error-exitcode 99` to
 the Python command. All raw reports are included. No numerical GPU command
 overrides the visibility assigned by Slurm.
+
+Routine log/XML files named in this historical account are now represented in
+[the retention audit](../retention-238/migration.json), with extracted measurements,
+diagnostic conclusions, and exact original Git/checksum identities.

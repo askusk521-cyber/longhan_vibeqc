@@ -10,11 +10,19 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json
-      - id: check-added-large-files
-        args: ["--maxkb=1024", "--enforce-all"]
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-toml
+  - repo: local
+    hooks:
+      - id: evidence-retention
+        # Replaces the blind file-size ban with an all-file review guard and
+        # exact-content exceptions for scientifically necessary references.
+        name: Check tracked evidence retention and review size
+        entry: python3 tools/evidence.py check
+        language: system
+        pass_filenames: false
+        always_run: true
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.6
     hooks:
