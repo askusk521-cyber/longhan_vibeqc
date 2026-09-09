@@ -13,7 +13,8 @@ RESULTS = Path(__file__).resolve().parents[2] / "benchmarks/results"
 
 
 @pytest.mark.parametrize(
-    "name", ["rccsd-148-a", "rccsd-148-b", "rccsd-148-c", "xc-integration-162"]
+    "name",
+    ["rccsd-148-a", "rccsd-148-b", "rccsd-148-c", "rccsd-149-a", "xc-integration-162"],
 )
 def test_committed_evidence_restores_exact_bytes(name, tmp_path):
     directory = RESULTS / name

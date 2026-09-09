@@ -426,3 +426,6 @@ allocation that owns exactly one GPU.
 The [issue #169 external basis contracts](external-basis-169/README.md) archive
 offline data provenance, independent overlap/kinetic and HF gates, supported
 synthetic Fe ions, explicit high-l/ECP rejection, and CPU/CUDA prepared endpoints.
+
+The [fixed-amplitude GPU RCCSD record](rccsd-149-a/README.md) preserves
+#149 A validation and frozen sources in a verified lossless archive.

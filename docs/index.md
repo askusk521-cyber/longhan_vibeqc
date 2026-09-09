@@ -52,3 +52,5 @@ compact user entry point.
 - [Shared orbital response and bounded Krylov solves](response.md)
 - [Atom-centered grids and spatial AO/density jets](dft_grid.md)
 - [Fixed-density LDA/PBE XC integration and AO potentials](xc_integration.md)
+
+- [Fixed-amplitude GPU RCCSD validation](rccsd_gpu.md)
