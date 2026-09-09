@@ -91,6 +91,13 @@ Rank-deficient RHS blocks are diagnosed. The workspace accounting includes the
 retained Arnoldi/block basis and solver vectors. A small `max_workspace_bytes`
 returns `workspace_limit` before applying the operator.
 
+`SolveResult.relative_residual` is `||r|| / ||b||`; a zero RHS is defined as
+`0` for an exactly zero residual and `inf` otherwise, never as an absolute
+residual just because `||b|| < 1`. In the recycled strategy the budget sums the
+retained result arrays, the independent recycle-space vectors, the
+initial-guess projection temporary and the next solve workspace, so a solve
+that would exceed the bound fails before applying the operator.
+
 ## CPKS boundary
 
 `FixedDensityXCDerivativeKernel` evaluates the audited semilocal feature

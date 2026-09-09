@@ -40,7 +40,7 @@ the default, and recycling is retained as an explicitly measured option.
 
 ```text
 python -m pytest tests/python -q
-1196 passed, 189 skipped
+1200 passed, 189 skipped
 
 ctest --test-dir build --output-on-failure
 12/12 passed

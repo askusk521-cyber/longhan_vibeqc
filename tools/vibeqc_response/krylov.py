@@ -17,6 +17,19 @@ def _vector_norm(value):
     return float(np.linalg.norm(np.asarray(value, dtype=np.float64)))
 
 
+def _relative_residual(residual_norm, rhs_norm):
+    """Return ``||r|| / ||b||`` with an explicit zero-RHS convention.
+
+    A zero RHS has no scale, so its relative residual is zero for an exactly
+    zero residual and ``inf`` otherwise.  This keeps the public diagnostic
+    aligned with the convergence test instead of falling back to an absolute
+    residual whenever ``||b|| < 1``.
+    """
+    if rhs_norm > 0.0:
+        return float(residual_norm) / float(rhs_norm)
+    return 0.0 if residual_norm == 0.0 else float("inf")
+
+
 def _orthonormal_basis(matrix, *, tolerance=1e-12, max_columns=None):
     """Return an orthonormal basis for the finite column range of ``matrix``."""
     value = np.asarray(matrix, dtype=np.float64)
@@ -315,14 +328,14 @@ def _solve_single(
         residual = b.copy()
     beta = _vector_norm(residual)
     history.append(beta)
-    scale = max(_vector_norm(b), 1.0)
-    target = max(options.atol, options.rtol * _vector_norm(b))
+    rhs_norm = _vector_norm(b)
+    target = max(options.atol, options.rtol * rhs_norm)
     if beta <= target:
         return SolveResult(
             immutable(x),
             True,
             beta,
-            beta / scale,
+            _relative_residual(beta, rhs_norm),
             0,
             "initial_residual",
             tuple(history),
@@ -400,7 +413,7 @@ def _solve_single(
                         immutable(best_x),
                         True,
                         best_residual,
-                        best_residual / scale,
+                        _relative_residual(best_residual, rhs_norm),
                         total_steps,
                         "converged",
                         tuple(history),
@@ -426,7 +439,7 @@ def _solve_single(
                         immutable(best_x),
                         False,
                         best_residual,
-                        best_residual / scale,
+                        _relative_residual(best_residual, rhs_norm),
                         total_steps,
                         "stagnation",
                         tuple(history),
@@ -443,7 +456,7 @@ def _solve_single(
                 immutable(candidate_x),
                 True,
                 candidate_residual,
-                candidate_residual / scale,
+                _relative_residual(candidate_residual, rhs_norm),
                 total_steps,
                 "converged",
                 tuple(history),
@@ -463,7 +476,7 @@ def _solve_single(
                 immutable(best_x),
                 False,
                 best_residual,
-                best_residual / scale,
+                _relative_residual(best_residual, rhs_norm),
                 total_steps,
                 "breakdown" if best_residual > 0 else "singular",
                 tuple(history),
@@ -484,7 +497,7 @@ def _solve_single(
         immutable(best_x),
         False,
         best_residual,
-        best_residual / scale,
+        _relative_residual(best_residual, rhs_norm),
         total_steps,
         reason,
         tuple(history),
@@ -525,6 +538,23 @@ class KrylovRecycleSpace:
                 "vectors": [hashlib_sha(v) for v in self._vectors],
             }
         )
+
+    @property
+    def storage_bytes(self):
+        """Bytes held by the independently retained immutable vectors."""
+        return sum(vector.nbytes for vector in self._vectors)
+
+    def projection_bytes(self, dimension):
+        """Conservative temporary bytes for a recycled initial guess.
+
+        ``initial_guess`` column-stacks the retained vectors and forms an
+        orthonormal basis.  The multi-RHS budget must reserve both the stacked
+        input and the returned basis, so this bound is charged additively with
+        the retained result arrays instead of taking their maximum.
+        """
+        if type(dimension) is not int or dimension < 1:
+            raise ValueError("dimension must be a positive integer")
+        return 2 * dimension * len(self._vectors) * 8
 
     def assert_compatible(self, problem):
         """Fail closed on a changed reference/model/operator/layout."""
@@ -682,7 +712,7 @@ def _block_solve(operator, rhs, options):
                     immutable(np.zeros(n)),
                     converged,
                     norm,
-                    norm / max(norm, 1.0),
+                    _relative_residual(norm, norm),
                     0,
                     "zero_rhs" if converged else "rank_deficient_rhs",
                     (norm,),
@@ -780,7 +810,7 @@ def _block_solve(operator, rhs, options):
                 immutable(solution[:, column]),
                 converged,
                 norm,
-                norm / max(float(np.linalg.norm(b[:, column])), 1.0),
+                _relative_residual(norm, float(np.linalg.norm(b[:, column]))),
                 iterations,
                 reason,
                 tuple(history),
@@ -829,14 +859,25 @@ def solve_many(
             rank_deficient,
         )
     else:
-        if strategy == "recycled" and recycle is None:
+        use_recycle = strategy == "recycled"
+        if use_recycle and recycle is None:
             recycle = KrylovRecycleSpace(operator.problem)
         results = []
         actions = 0
         peak = 0
-        retained = 0
+        retained_results = 0
         rank_deficient = False
         for column in range(values.shape[1]):
+            # Retained result arrays and recycle-space vectors coexist, and a
+            # recycled solve also stacks/orthonormalizes those vectors into an
+            # initial guess.  Charge all three additively so the next solve is
+            # rejected before operator application if the live storage would
+            # exceed the declared budget.
+            recycle_bytes = recycle.storage_bytes if use_recycle else 0
+            projection_bytes = (
+                recycle.projection_bytes(values.shape[0]) if use_recycle else 0
+            )
+            retained = retained_results + recycle_bytes + projection_bytes
             remaining = options.max_workspace_bytes - retained
             if remaining <= 0:
                 results.extend(
@@ -857,12 +898,8 @@ def solve_many(
             )
             results.append(result)
             actions += result.operator_actions
-            retained += result.solution.nbytes + result.basis.nbytes
-            if recycle is not None:
-                retained = max(
-                    retained,
-                    sum(vector.nbytes for vector in recycle._vectors),
-                )
+            retained_results += result.solution.nbytes + result.basis.nbytes
+            retained = retained_results + (recycle.storage_bytes if use_recycle else 0)
             peak = max(peak, retained + result.workspace_bytes)
         answer = MultiRHSResult(
             tuple(results),

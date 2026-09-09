@@ -217,6 +217,78 @@ def test_sequential_workspace_budget_charges_retained_results():
     assert result.peak_workspace_bytes >= single.workspace_bytes
 
 
+def test_recycled_workspace_budget_sums_results_recycle_and_projection():
+    operator = _MatrixOperator(np.eye(4), 4)
+    rhs = np.column_stack((np.ones(4), np.arange(1.0, 5.0)))
+    options = GMRESOptions(rtol=1e-12, restart=2, max_iterations=4)
+    probe_space = KrylovRecycleSpace(operator.problem, max_vectors=4)
+    probe = solve_many(
+        operator,
+        rhs[:, :1],
+        strategy="recycled",
+        recycle=probe_space,
+        options=options,
+    )
+    assert probe.converged
+    probe_result = probe.results[0]
+    retained = probe_result.solution.nbytes + probe_result.basis.nbytes
+    recycle_bytes = probe_space.storage_bytes
+    projection_bytes = probe_space.projection_bytes(operator.dimension)
+    # One byte below the additive live-storage bound: the next recycled solve
+    # must be rejected before it applies the operator.
+    budget = (
+        probe_result.workspace_bytes + retained + recycle_bytes + projection_bytes - 1
+    )
+    space = KrylovRecycleSpace(operator.problem, max_vectors=4)
+    result = solve_many(
+        operator,
+        rhs,
+        strategy="recycled",
+        recycle=space,
+        options=replace(options, max_workspace_bytes=budget),
+    )
+    assert result.results[0].converged
+    assert result.results[1].reason == "workspace_limit"
+    assert result.results[1].operator_actions == 0
+    assert result.operator_actions == result.results[0].operator_actions
+
+
+def test_relative_residual_is_relative_for_sub_unit_rhs_norms():
+    singular = _MatrixOperator(np.zeros((2, 2)), 2)
+    rhs = np.array([1e-13, 0.0])
+    scalar = solve(
+        singular,
+        rhs,
+        options=GMRESOptions(rtol=1e-10, atol=0.0, restart=2, max_iterations=4),
+    )
+    assert not scalar.converged
+    assert scalar.relative_residual == pytest.approx(1.0)
+
+    blocked = solve_many(
+        singular,
+        np.column_stack((rhs, np.zeros(2))),
+        strategy="blocked",
+        options=GMRESOptions(rtol=1e-10, atol=0.0, restart=2, max_iterations=4),
+    )
+    assert blocked.results[0].relative_residual == pytest.approx(1.0)
+    assert blocked.results[1].relative_residual == 0.0
+
+
+def test_zero_rhs_relative_residual_convention():
+    identity = _MatrixOperator(np.eye(2), 2)
+    exact = solve(identity, np.zeros(2))
+    assert exact.converged
+    assert exact.relative_residual == 0.0
+    nonzero_residual = solve(
+        identity,
+        np.zeros(2),
+        initial_guess=np.ones(2),
+        options=GMRESOptions(rtol=1e-10, atol=0.0, restart=2, max_iterations=1),
+    )
+    assert not nonzero_residual.converged
+    assert nonzero_residual.relative_residual == float("inf")
+
+
 def test_true_residual_checkpoint_at_restart_and_iteration_limit():
     operator = _MatrixOperator(np.diag([1.0, 2.0]), 2)
     result = solve(

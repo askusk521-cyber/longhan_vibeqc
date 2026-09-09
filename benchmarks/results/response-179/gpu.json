@@ -165,7 +165,7 @@
       "converged": true,
       "seconds": 2.232008231803775,
       "operator_actions": 84,
-      "peak_workspace_bytes": 11528,
+      "peak_workspace_bytes": 12168,
       "rhs_rank": 4,
       "rank_deficient_rhs": false,
       "solutions": [
