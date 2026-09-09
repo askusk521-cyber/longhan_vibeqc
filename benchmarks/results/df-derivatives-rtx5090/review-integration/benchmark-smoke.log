@@ -1,0 +1,44 @@
+SLURM_JOB_ID=9106 CUDA_VISIBLE_DEVICES=0 REVIEW_DIR=/tmp/vibeqc-df-9106-smoke
+{
+  "ao_count": null,
+  "batch_size": 1,
+  "benchmark": "profile_one_electron_force",
+  "case": "sp8",
+  "cuda_visible_devices": "0",
+  "density_tolerance": 1e-10,
+  "df_budget": 1048576,
+  "df_response": null,
+  "energies_hartree": [
+    -0.32391758928052117
+  ],
+  "energy_tolerance": 1e-12,
+  "fitted": true,
+  "maximum_absolute_force_hartree_per_bohr": 0.3631744888072572,
+  "mode": "generated_thread",
+  "repeats": 1,
+  "schema_version": 1,
+  "screening_tolerance": 1e-14,
+  "slurm_job_id": "9106",
+  "warm_median_seconds": 0.03392432909458876,
+  "warm_minimum_seconds": 0.03392432909458876,
+  "warm_samples": [
+    {
+      "iterations": [
+        2
+      ],
+      "repeat": 0,
+      "seconds": 0.03392432909458876
+    }
+  ]
+}
+Benchmark smoke passed: inherited selector cleared and simulated RSS failure retained evidence.
+SLURM_JOB_ID=9106 CUDA_VISIBLE_DEVICES=0
+OUTPUT_DIR=/tmp/vibeqc-df-9106-memory
+{"case": "sp8", "selection": "reference", "df_budget": 0, "process_peak_host_bytes": 1135394816}
+{"case": "sp8", "selection": "generated", "df_budget": 0, "process_peak_host_bytes": 1137348608}
+{"case": "sp8", "selection": "reference", "df_budget": 1048576, "process_peak_host_bytes": 1132642304}
+{"case": "sp8", "selection": "generated", "df_budget": 1048576, "process_peak_host_bytes": 1131847680}
+{"case": "sp8", "selection": "reference", "df_budget": 4194304, "process_peak_host_bytes": 1132244992}
+{"case": "sp8", "selection": "generated", "df_budget": 4194304, "process_peak_host_bytes": 1131859968}
+{"case": "sdf18-direct", "selection": "reference", "df_budget": 4194304, "process_peak_host_bytes": 1124769792}
+{"case": "sdf18-direct", "selection": "generated", "df_budget": 4194304, "process_peak_host_bytes": 1123995648}

@@ -158,12 +158,17 @@ both RHF and UHF with the previous response and independent PySCF, including
 energy finite differences, auxiliary-only atom motion, replay, and rank
 crossing diagnostics.
 
-Final integration on Slurm job 9104 passes all 13 native CUDA tests and 116
+Initial complete integration on Slurm job 9104 passes all 13 native CUDA tests and 116
 Python GPU tests: 27 DF response, 29 one-electron response, 41 checkpoint,
 14 resource-budget and 5 basis-projection cases. The matching CPU build passes
 13 native tests and 156 Python tests. No enabled tier skips tests. Exact
 source and binary hashes, logs and XML reports are recorded under
 `benchmarks/results/df-derivatives-rtx5090/integration/`.
+After review fixes, Slurm job 9107 passes 13 native CUDA tests and 118 Python
+GPU tests, including both accepted selector aliases in 16 resource tests.
+The 131 affected DF/XC/CPKS tests also pass under Python 3.11 with coverage.
+These final reports and exact identities are in `review-integration/`; the
+generated CUDA derivative header is unchanged by the iterative DAG-clone fix.
 
 Reproduction scripts resolve their checkout relative to their own location.
 Set `PYTHON` and optionally `CUDA_HOME`, `NSYS`, `CXX`, and `VIBEQC_LIBRARY` for
