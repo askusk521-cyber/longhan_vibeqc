@@ -36,6 +36,7 @@ def test_cuda_df_matrix_free_rhf_response_matches_explicit_and_solves():
             source,
             metric_threshold=metric.relative_threshold,
             hamiltonian_id=metric.hamiltonian_id,
+            metric=metric,
         ) as backend:
             problem = RHFResponseOperator.build_problem(snapshot, backend)
             operator = RHFResponseOperator(problem, backend)

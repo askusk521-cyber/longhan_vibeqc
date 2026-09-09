@@ -54,8 +54,11 @@ A x       = (eps_virt - eps_occ) x + C^T Delta F_ao C
 
 `NativeJKBackend` streams the existing native shell-tile ERI source and forms
 only the O(N^2) Coulomb and exchange responses. `DenseAOResponseBackend` is a
-tiny independent oracle used only by tests. `RHFResponseOperator.apply` is the
-JVP, `apply_transpose` is the VJP entry point, and `dot_identity` checks the
+tiny independent oracle used only by tests. The CUDA DF backend validates its
+metric against the source auxiliary basis, geometry, and execution threshold;
+a caller-supplied Hamiltonian label must match that metric. Supplying the
+exporter's `metric` avoids rebuilding it during backend preparation.
+`RHFResponseOperator.apply` is the JVP, `apply_transpose` is the VJP entry point, and `dot_identity` checks the
 Euclidean transpose identity.
 
 `explicit_rhf_response_matrix` independently assembles the tiny MO matrix
@@ -94,9 +97,13 @@ returns `workspace_limit` before applying the operator.
 `SolveResult.relative_residual` is `||r|| / ||b||`; a zero RHS is defined as
 `0` for an exactly zero residual and `inf` otherwise, never as an absolute
 residual just because `||b|| < 1`. In the recycled strategy the budget sums the
-retained result arrays, the independent recycle-space vectors, the
-initial-guess projection temporary and the next solve workspace, so a solve
-that would exceed the bound fails before applying the operator.
+shared immutable RHS copy, previously retained result arrays, independent
+recycle-space vectors, projection and bounded replacement temporaries, and the
+next solve workspace. The single-RHS API applies the same recycle reservation
+before projection or operator application. A successful peak is a conservative
+bound within the requested budget; a workspace rejection reports the required
+bound. Operator/preconditioner storage and Python interpreter bookkeeping are
+outside this solver numeric-buffer budget and require separate accounting.
 
 ## CPKS boundary
 

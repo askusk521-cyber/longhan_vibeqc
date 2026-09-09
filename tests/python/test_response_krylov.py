@@ -205,7 +205,7 @@ def test_sequential_workspace_budget_charges_retained_results():
     options = GMRESOptions(rtol=1e-12, restart=2, max_iterations=4)
     single = solve(operator, rhs[:, 0], options=options)
     retained = single.solution.nbytes + single.basis.nbytes
-    budget = single.workspace_bytes + retained - 1
+    budget = rhs.nbytes + single.workspace_bytes + retained - 1
     result = solve_many(
         operator,
         rhs,
@@ -423,3 +423,85 @@ def test_stale_recycle_space_fails_closed_and_explicit_transport_works():
         space.assert_compatible(changed)
     transported = space.transport(changed, lambda vector: vector)
     transported.assert_compatible(changed)
+
+
+def test_direct_recycling_rejects_storage_before_projection(monkeypatch):
+    """The scalar API must enforce the same reservation as solve_many."""
+    operator = _MatrixOperator(np.eye(100), 100)
+    space = KrylovRecycleSpace(operator.problem, max_vectors=100)
+    space._vectors = [column.copy() for column in np.eye(100)]
+
+    def unexpected_projection(*args):
+        pytest.fail("projection ran before the recycle storage preflight")
+
+    monkeypatch.setattr(space, "initial_guess", unexpected_projection)
+    result = solve(
+        operator,
+        np.ones(100),
+        recycle=space,
+        options=GMRESOptions(restart=1, max_iterations=1, max_workspace_bytes=8000),
+    )
+    assert result.reason == "workspace_limit"
+    assert result.workspace_bytes > space.storage_bytes > 8000
+    assert result.operator_actions == 0
+    assert operator.statistics["actions"] == 0
+
+
+def test_recycle_replacement_is_reserved_before_solving(monkeypatch):
+    """An empty recycle space still needs capacity to publish its replacement."""
+    operator = _MatrixOperator(np.eye(100), 100)
+    rhs = np.ones(100)
+    options = GMRESOptions(restart=1, max_iterations=1)
+    scalar = solve(operator, rhs, options=options)
+    space = KrylovRecycleSpace(operator.problem, max_vectors=8)
+    result = solve(
+        operator,
+        rhs,
+        recycle=space,
+        options=replace(options, max_workspace_bytes=scalar.workspace_bytes),
+    )
+    assert result.reason == "workspace_limit"
+    assert result.operator_actions == 0
+    assert space.generation == 0
+    assert space.storage_bytes == 0
+
+
+@pytest.mark.parametrize("strategy", ["sequential", "blocked", "recycled"])
+def test_successful_peak_fits_exact_budget(strategy):
+    operator = _MatrixOperator(np.diag([1.0, 2.0, 3.0, 4.0]), 4)
+    rhs = np.column_stack((np.ones(4), np.arange(1.0, 5.0)))
+    options = GMRESOptions(restart=4, max_iterations=8)
+    probe = solve_many(operator, rhs, strategy=strategy, options=options)
+    assert probe.converged
+    exact = solve_many(
+        operator,
+        rhs,
+        strategy=strategy,
+        options=replace(options, max_workspace_bytes=probe.peak_workspace_bytes),
+    )
+    assert exact.converged
+    assert exact.peak_workspace_bytes <= probe.peak_workspace_bytes
+    np.testing.assert_allclose(
+        exact.solution, np.linalg.solve(operator.matrix, rhs), atol=1e-12
+    )
+    below = solve_many(
+        operator,
+        rhs,
+        strategy=strategy,
+        options=replace(options, max_workspace_bytes=probe.peak_workspace_bytes - 1),
+    )
+    assert not below.converged
+    assert any(result.reason == "workspace_limit" for result in below.results)
+
+
+def test_sequential_peak_counts_current_result_once():
+    operator = _MatrixOperator(np.eye(100), 100)
+    rhs = np.ones((100, 1))
+    options = GMRESOptions(restart=1, max_iterations=1)
+    single = solve(operator, rhs[:, 0], options=options)
+    budget = single.workspace_bytes + rhs.nbytes
+    result = solve_many(
+        operator, rhs, options=replace(options, max_workspace_bytes=budget)
+    )
+    assert result.converged
+    assert result.peak_workspace_bytes == budget

@@ -8,6 +8,14 @@ recorded here is the CPU native shell-tile matrix-free RHF J/K operator.  The
 CUDA record is generated only inside a Slurm GPU allocation; the optional CUDA
 MO-block explicit control is not substituted for the matrix-free result.
 
+The JSON records below predate the final review fixes to scalar/multi-RHS
+workspace reservations and bounded recycle replacement. Their timings and
+workspace figures remain historical measurements. Current solves reserve the
+shared RHS, all retained results, recycle projection/replacement and numeric
+solver temporaries; successful reported peaks fit the requested budget.
+The CUDA DF backend also verifies the source/metric/threshold identity before
+creating its plan. Reproduction commands generate results for the current code.
+
 ## CPU numerical evidence
 
 Command:

@@ -1,7 +1,10 @@
 #ifndef VIBEQC_SCF_TYPES_HPP
 #define VIBEQC_SCF_TYPES_HPP
 
+#include <optional>
 #include <vector>
+
+#include "scf/fock_build.hpp"
 
 namespace vibeqc::scf {
 
@@ -20,6 +23,8 @@ struct ScfOptions {
   double density_fitting_relative_threshold{1.0e-10};
   /** Byte budget for bounded DF plan/integral work; zero means implementation default. */
   std::size_t density_fitting_memory_budget_bytes{};
+  /** Resolved once; old internal callers may leave this unset for direct HF. */
+  std::optional<ResolvedFockBuild> resolved_fock_build;
   /** Explicit synchronous CPU proposal/trace opt-in; null has no snapshot work. */
   ScfHooks* hooks{};
   /** Diagnostic proposal bridge rejects malformed seeds instead of normalizing them. */

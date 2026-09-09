@@ -151,3 +151,27 @@ def test_native_rhf_multirhs_residuals_permutation_and_recycling():
             )
     finally:
         source.close()
+
+
+@pytest.mark.parametrize("mismatch", ["threshold", "auxiliary", "label"])
+def test_cuda_df_metric_preflight_rejects_stale_identity_without_device(mismatch):
+    """Metric identity errors must fail even with a CPU-only native library."""
+    from tools.vibeqc_posthf.df import MetricFactor
+    from tools.vibeqc_response import CudaDFJKBackend
+
+    meta, _ = load_fixture("h2")
+    try:
+        source = NativeSource(**source_arguments(meta))
+    except (OSError, FileNotFoundError, AttributeError) as error:
+        pytest.skip(f"native post-HF library unavailable: {error}")
+    with source:
+        metric = MetricFactor.from_source(source)
+        kwargs = {"metric": metric, "hamiltonian_id": metric.hamiltonian_id}
+        if mismatch == "threshold":
+            kwargs["metric_threshold"] = metric.relative_threshold * 10
+        elif mismatch == "auxiliary":
+            kwargs["metric"] = replace(metric, auxiliary_hash="another-auxiliary-basis")
+        else:
+            kwargs["hamiltonian_id"] = "density-fitting:another-metric"
+        with pytest.raises(ValueError, match="metric.*mismatch|metric mismatch"):
+            CudaDFJKBackend(source, **kwargs)

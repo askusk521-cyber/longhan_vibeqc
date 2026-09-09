@@ -88,37 +88,45 @@ def _initial_block_basis(matrix, *, tolerance):
 
 
 def _single_workspace_bytes(n, options):
-    """Conservative simultaneous live-buffer bound for one scalar GMRES."""
-    restart = options.restart
-    returned_basis = min(n, restart)
-    return (
-        (restart + 1) * n * 8
-        + (restart + 1) * restart * 8
-        + 6 * n * 8
-        + n * returned_basis * 8
-        + n * 8
-        + (options.max_iterations + 1) * 8
+    """Bound solver-owned numeric buffers, including publication and LAPACK work.
+
+    Reserve Arnoldi storage, overlapping old/new/immutable basis copies,
+    residual/iterate temporaries and conservative small least-squares scratch.
+    Operator and preconditioner storage have their own independent budgets.
+    """
+    restart = min(n, options.restart, options.max_iterations)
+    return 8 * (
+        (restart + 1) * n
+        + 4 * n * restart
+        + 20 * n
+        + 8 * (restart + 1) ** 2
+        + 4 * (options.max_iterations + 2)
     )
 
 
 def _block_workspace_bytes(n, nrhs, options, max_columns):
-    """Conservative bound including per-RHS retained basis copies."""
-    return (
-        3 * n * max_columns * 8
-        + max_columns * max_columns * 8
-        + 2 * max_columns * nrhs * 8
-        + 3 * n * nrhs * 8
-        + nrhs * n * max_columns * 8
-        + nrhs * n * 8
-        + (options.max_iterations + 1) * 8
+    """Bound live Arnoldi/SVD buffers and every published per-RHS basis.
+
+    SVD and least-squares input/output arrays can coexist with the old basis,
+    new basis, operator-image columns and stacked arrays. Reserve their full
+    dimensions before constructing the initial block.
+    """
+    return 8 * (
+        12 * n * max_columns
+        + 12 * max_columns**2
+        + 8 * max_columns * nrhs
+        + 12 * n * nrhs
+        + nrhs * n * max_columns
+        + 4 * (options.max_iterations + nrhs + 1)
     )
 
 
 def _workspace_failure(n, nrhs, required, *, reason="workspace_limit"):
     """Explicit nonconverged results for a preflight workspace rejection."""
+    zero = immutable(np.zeros(n))
     return tuple(
         SolveResult(
-            immutable(np.zeros(n)),
+            zero,
             False,
             float("inf"),
             float("inf"),
@@ -351,7 +359,7 @@ def _solve_single(
     best_x = x.copy()
     best_residual = beta
     best_basis = np.empty((n, 0))
-    restart = options.restart
+    restart = min(n, options.restart, options.max_iterations)
     while total_steps < options.max_iterations:
         v = np.zeros((n, restart + 1))
         h = np.zeros((restart + 1, restart))
@@ -545,16 +553,20 @@ class KrylovRecycleSpace:
         return sum(vector.nbytes for vector in self._vectors)
 
     def projection_bytes(self, dimension):
-        """Conservative temporary bytes for a recycled initial guess.
-
-        ``initial_guess`` column-stacks the retained vectors and forms an
-        orthonormal basis.  The multi-RHS budget must reserve both the stacked
-        input and the returned basis, so this bound is charged additively with
-        the retained result arrays instead of taking their maximum.
-        """
+        """Reserve the output guess and one scaled retained-vector temporary."""
         if type(dimension) is not int or dimension < 1:
             raise ValueError("dimension must be a positive integer")
-        return 2 * dimension * len(self._vectors) * 8
+        return 2 * dimension * 8
+
+    def update_bytes(self, dimension):
+        """Bound replacement vectors and Gram-Schmidt publication temporaries.
+
+        Existing vectors are charged separately by ``storage_bytes``. The
+        update builds at most the destination capacity, without stacking or
+        taking an SVD of the complete old/result basis.
+        """
+        capacity = min(self.max_vectors, dimension, self.max_bytes // (dimension * 8))
+        return (capacity + 3) * dimension * 8
 
     def assert_compatible(self, problem):
         """Fail closed on a changed reference/model/operator/layout."""
@@ -564,36 +576,44 @@ class KrylovRecycleSpace:
             )
 
     def initial_guess(self, problem, rhs):
-        """Project the RHS onto retained vectors without assuming compatibility."""
+        """Project one RHS onto the already orthonormal retained vectors."""
         self.assert_compatible(problem)
         b = np.asarray(rhs, dtype=np.float64)
-        if b.ndim == 1:
-            b = b[:, None]
-        if not self._vectors:
-            return np.zeros(b.shape[0])
-        basis, _ = _orthonormal_basis(np.column_stack(self._vectors))
-        return (basis @ np.linalg.lstsq(basis, b, rcond=None)[0]).reshape(-1)
+        if b.ndim != 1 or not np.isfinite(b).all():
+            raise ValueError("recycled RHS must be a finite vector")
+        guess = np.zeros(b.size)
+        for vector in self._vectors:
+            if vector.shape != b.shape:
+                raise ValueError("recycled vector dimension mismatch")
+            guess += vector * np.dot(vector, b)
+        return guess
 
     def update(self, problem, result):
-        """Retain a bounded orthonormal set of recently useful Krylov vectors."""
+        """Publish a bounded orthonormal replacement after a successful solve."""
         self.assert_compatible(problem)
-        candidates = [np.asarray(result.solution, dtype=np.float64)]
-        basis = np.asarray(result.basis, dtype=np.float64)
-        if basis.ndim == 2 and basis.shape[1]:
-            candidates.extend(basis[:, column] for column in range(basis.shape[1]))
-        combined = (
-            np.column_stack(self._vectors + candidates)
-            if self._vectors
-            else np.column_stack(candidates)
-        )
-        orthonormal, _ = _orthonormal_basis(combined, max_columns=self.max_vectors)
-        while orthonormal.shape[1] > 1 and orthonormal.nbytes > self.max_bytes:
-            orthonormal = orthonormal[:, :-1]
-        if orthonormal.nbytes > self.max_bytes:
-            orthonormal = np.empty((orthonormal.shape[0], 0))
-        self._vectors = [
-            immutable(orthonormal[:, column]) for column in range(orthonormal.shape[1])
-        ]
+        if not result.converged:
+            return self
+        n = result.solution.size
+        capacity = min(self.max_vectors, n, self.max_bytes // (n * 8))
+        replacement = []
+        # Retain the old space first, matching the existing reuse policy. Stop
+        # as soon as capacity is reached; no full candidate matrix is created.
+        candidates = (*self._vectors, result.solution, *result.basis.T)
+        for candidate in candidates:
+            if len(replacement) == capacity:
+                break
+            work = np.asarray(candidate, dtype=np.float64).copy()
+            if work.shape != (n,) or not np.isfinite(work).all():
+                raise ValueError("invalid recycle candidate")
+            original_norm = _vector_norm(work)
+            for _ in range(2):
+                for vector in replacement:
+                    work -= np.dot(vector, work) * vector
+            norm = _vector_norm(work)
+            if norm > 1e-12 * max(1.0, original_norm):
+                work /= norm
+                replacement.append(immutable(work))
+        self._vectors = replacement
         self.generation += 1
         return self
 
@@ -656,25 +676,55 @@ def solve(
 ):
     """Solve one RHS with bounded true-residual GMRES."""
     options = GMRESOptions() if options is None else options
+    b = np.asarray(rhs)
+    if (
+        b.shape != (operator.dimension,)
+        or np.iscomplexobj(b)
+        or not np.isfinite(b).all()
+    ):
+        raise ValueError("GMRES RHS must be a finite real vector of operator dimension")
+    if initial_guess is not None:
+        guess = np.asarray(initial_guess)
+        if (
+            guess.shape != b.shape
+            or np.iscomplexobj(guess)
+            or not np.isfinite(guess).all()
+        ):
+            raise ValueError(
+                "initial guess must be a finite real vector of operator dimension"
+            )
+    reservation = 0
+    recycled_vectors = 0
     if recycle is not None:
         recycle.assert_compatible(operator.problem)
-        if initial_guess is None:
+        recycled_vectors = len(recycle._vectors)
+        reservation = (
+            recycle.storage_bytes
+            + recycle.projection_bytes(operator.dimension)
+            + recycle.update_bytes(operator.dimension)
+        )
+    required = _single_workspace_bytes(operator.dimension, options) + reservation
+    if required > options.max_workspace_bytes:
+        # This preflight owns the whole public solve, including projection and
+        # replacement. Direct callers receive the same bound as solve_many.
+        result = _workspace_failure(operator.dimension, 1, required)[0]
+    else:
+        if recycle is not None and initial_guess is None:
             initial_guess = recycle.initial_guess(operator.problem, rhs)
-    result = _solve_single(
-        operator,
-        rhs,
-        options,
-        initial_guess=initial_guess,
-        preconditioner=preconditioner,
+        result = _solve_single(
+            operator,
+            rhs,
+            replace(
+                options, max_workspace_bytes=options.max_workspace_bytes - reservation
+            ),
+            initial_guess=initial_guess,
+            preconditioner=preconditioner,
+        )
+        if recycle is not None and result.converged:
+            recycle.update(operator.problem, result)
+    result = replace(
+        result, recycled_vectors=recycled_vectors, workspace_bytes=required
     )
-    result = SolveResult(
-        **{
-            **result.__dict__,
-            "recycled_vectors": 0 if recycle is None else len(recycle._vectors),
-        }
-    )
-    if recycle is not None and result.converged:
-        recycle.update(operator.problem, result)
     if raise_on_failure:
         result.require_converged()
     return result
@@ -847,14 +897,30 @@ def solve_many(
     options = GMRESOptions() if options is None else options
     values = operator.problem.validate_rhs(rhs)
     started = time.perf_counter()
-    if strategy == "blocked":
-        results, actions, peak, rank_deficient = _block_solve(operator, values, options)
+    # validate_rhs publishes an owned immutable array for real ResponseProblems.
+    # Charge it even when a test/custom operator happens to return a view.
+    input_bytes = values.nbytes
+    available = options.max_workspace_bytes - input_bytes
+    if available <= 0:
+        answer = MultiRHSResult(
+            _workspace_failure(values.shape[0], values.shape[1], input_bytes),
+            strategy,
+            time.perf_counter() - started,
+            0,
+            input_bytes,
+            0,
+            False,
+        )
+    elif strategy == "blocked":
+        results, actions, peak, rank_deficient = _block_solve(
+            operator, values, replace(options, max_workspace_bytes=available)
+        )
         answer = MultiRHSResult(
             tuple(results),
             strategy,
             time.perf_counter() - started,
             actions,
-            peak,
+            input_bytes + peak,
             results[0].rank if results else 0,
             rank_deficient,
         )
@@ -862,53 +928,69 @@ def solve_many(
         use_recycle = strategy == "recycled"
         if use_recycle and recycle is None:
             recycle = KrylovRecycleSpace(operator.problem)
+        # Rank diagnostics use a value-only SVD. Reserve its input/workspace
+        # separately; it is released before the first Krylov solve starts.
+        n, nrhs = values.shape
+        rank_workspace = 8 * (4 * n * nrhs + 8 * min(n, nrhs) ** 2)
+        if use_recycle:
+            recycle.assert_compatible(operator.problem)
+            rank_workspace += recycle.storage_bytes
+        if rank_workspace > available:
+            answer = MultiRHSResult(
+                _workspace_failure(n, nrhs, input_bytes + rank_workspace),
+                strategy,
+                time.perf_counter() - started,
+                0,
+                input_bytes + rank_workspace,
+                0,
+                False,
+            )
+            if raise_on_failure:
+                answer.require_converged()
+            return answer
+        rank = int(np.linalg.matrix_rank(values, tol=1e-12)) if nrhs else 0
         results = []
         actions = 0
-        peak = 0
+        peak = input_bytes + rank_workspace
         retained_results = 0
-        rank_deficient = False
         for column in range(values.shape[1]):
-            # Retained result arrays and recycle-space vectors coexist, and a
-            # recycled solve also stacks/orthonormalizes those vectors into an
-            # initial guess.  Charge all three additively so the next solve is
-            # rejected before operator application if the live storage would
-            # exceed the declared budget.
-            recycle_bytes = recycle.storage_bytes if use_recycle else 0
-            projection_bytes = (
-                recycle.projection_bytes(values.shape[0]) if use_recycle else 0
-            )
-            retained = retained_results + recycle_bytes + projection_bytes
+            # solve owns all recycle reservations. Only earlier results and the
+            # shared RHS copy remain outside it; the current result is already
+            # included in solve's bound and must not be counted a second time.
+            retained = input_bytes + retained_results
             remaining = options.max_workspace_bytes - retained
             if remaining <= 0:
                 results.extend(
                     _workspace_failure(
-                        values.shape[0],
-                        values.shape[1] - column,
-                        options.max_workspace_bytes,
+                        values.shape[0], values.shape[1] - column, retained
                     )
                 )
+                peak = max(peak, retained)
                 break
-            local_options = replace(options, max_workspace_bytes=remaining)
             result = solve(
                 operator,
                 values[:, column],
-                options=local_options,
-                recycle=recycle if strategy == "recycled" else None,
+                options=replace(options, max_workspace_bytes=remaining),
+                recycle=recycle if use_recycle else None,
                 preconditioner=preconditioner,
             )
+            peak = max(peak, retained + result.workspace_bytes)
             results.append(result)
             actions += result.operator_actions
+            if result.reason == "workspace_limit":
+                # No later column can gain capacity. Share the immutable failure
+                # result rather than allocating a zero solution for every RHS.
+                results.extend([result] * (values.shape[1] - column - 1))
+                break
             retained_results += result.solution.nbytes + result.basis.nbytes
-            retained = retained_results + (recycle.storage_bytes if use_recycle else 0)
-            peak = max(peak, retained + result.workspace_bytes)
         answer = MultiRHSResult(
             tuple(results),
             strategy,
             time.perf_counter() - started,
             actions,
             peak,
-            int(np.linalg.matrix_rank(values, tol=1e-12)),
-            rank_deficient,
+            rank,
+            rank < values.shape[1],
         )
     if raise_on_failure:
         answer.require_converged()

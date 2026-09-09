@@ -9,6 +9,7 @@ import time
 import numpy as np
 from vibeqc.profiles import canonical_hash
 
+from tools.vibeqc_posthf.df import MetricFactor
 from tools.vibeqc_posthf.reference import immutable
 from tools.vibeqc_posthf.sources import _DOUBLE, pointer
 
@@ -190,6 +191,7 @@ class CudaDFJKBackend:
         device_id=0,
         metric_threshold=1e-10,
         hamiltonian_id=None,
+        metric=None,
     ):
         if type(device_id) is not int or device_id < 0:
             raise ValueError("device_id must be a nonnegative integer")
@@ -200,7 +202,25 @@ class CudaDFJKBackend:
         self.source = source
         self.device_id = device_id
         self.metric_threshold = float(metric_threshold)
-        self.hamiltonian_id = hamiltonian_id
+        source._check_open()
+        # A label alone cannot certify the Hamiltonian of the native plan.
+        # Reuse the exporter's checked metric when supplied, or construct one
+        # from this source before any CUDA plan/device setup occurs.
+        if metric is None:
+            metric = MetricFactor.from_source(
+                source, relative_threshold=self.metric_threshold
+            )
+        if (
+            not isinstance(metric, MetricFactor)
+            or metric.geometry_hash != source.geometry_hash
+            or metric.auxiliary_hash != source.auxiliary_hash
+            or metric.inverse_square_root.shape != (source.naux, source.naux)
+            or metric.relative_threshold != self.metric_threshold
+        ):
+            raise ValueError("CUDA DF backend/source/metric mismatch")
+        if hamiltonian_id is not None and hamiltonian_id != metric.hamiltonian_id:
+            raise ValueError("CUDA DF backend/metric Hamiltonian identity mismatch")
+        self.hamiltonian_id = metric.hamiltonian_id
         self._handle = ct.c_void_p()
         library = source._library
         library.vibeqc_posthf_rhf_jk_plan_create_v1.argtypes = [

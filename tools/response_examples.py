@@ -92,6 +92,7 @@ def _context(args, meta, arrays):
             device_id=args.device_id,
             metric_threshold=metric.relative_threshold,
             hamiltonian_id=metric.hamiltonian_id,
+            metric=metric,
         )
         provider = DFProvider(
             snapshot,
