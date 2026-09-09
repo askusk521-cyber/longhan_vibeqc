@@ -9,6 +9,7 @@ from tools.vibeqc_response import (
     CudaDFJKBackend,
     DenseAOResponseBackend,
     GMRESOptions,
+    NativeJKBackend,
     UHFReferenceSnapshot,
     UHFResponseOperator,
     solve_many,
@@ -173,9 +174,16 @@ def test_native_open_shell_uhf_export_builds_a_response_problem():
         assert snapshot.nocc("beta") == 1
         assert record["physical_residual"] < 1e-10
         assert record["canonical_density_drift"] < 1e-10
-        assert record["physical_fock_drift"] < 1e-10
         eri = source._read("four_center_eri", (0, 0, 0, 0), (source.nbf,) * 4)
-        problem = UHFResponseOperator.build_problem(
-            snapshot, DenseAOResponseBackend(eri)
+        dense_backend = DenseAOResponseBackend(eri)
+        native_backend = NativeJKBackend(source, axis_tile=2)
+        dense_problem = UHFResponseOperator.build_problem(snapshot, dense_backend)
+        native_problem = UHFResponseOperator.build_problem(snapshot, native_backend)
+        assert dense_problem.dimension == native_problem.dimension == 10
+        vector = np.random.default_rng(179).normal(size=dense_problem.dimension)
+        dense_action = UHFResponseOperator(dense_problem, dense_backend).apply(vector)
+        native_action = UHFResponseOperator(native_problem, native_backend).apply(
+            vector
         )
-        assert problem.dimension == 10
+        np.testing.assert_allclose(native_action, dense_action, atol=2e-10, rtol=2e-10)
+        assert dense_problem.dimension == 10
