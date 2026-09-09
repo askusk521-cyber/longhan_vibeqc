@@ -511,12 +511,12 @@
     "sm_90/vibeqc_generated_shell_sm90_shard_1.cu": "6317922732a5d7a6c03d19c1482ed05119d2008f87b3ec76573ce92acf2ad809",
     "sm_90/vibeqc_generated_shell_sm90_shard_2.cu": "6317922732a5d7a6c03d19c1482ed05119d2008f87b3ec76573ce92acf2ad809",
     "sm_90/vibeqc_generated_shell_sm90_shard_3.cu": "6317922732a5d7a6c03d19c1482ed05119d2008f87b3ec76573ce92acf2ad809",
-    "sm_120/vibeqc_generated_shell_sm120_shard_0.cu": "bfaf56ba29f38c56ac00aa9be3f21ce072a8e7a781c507910af059f026d69a70",
-    "sm_120/vibeqc_generated_shell_sm120_shard_1.cu": "f89d4c4434a7ab30a293f73e7216e0f867cf7905031fedfd4a3b457ffa5a4a3c",
-    "sm_120/vibeqc_generated_shell_sm120_shard_2.cu": "d48f885f4b638b8d3cbd1a19929e761e3bec5d15f911daeb8182f3dcc09b29b5",
-    "sm_120/vibeqc_generated_shell_sm120_shard_3.cu": "f6286679c397fd22171aaf3e0dbe0db6bdea4734457c403f7243cb03565733e6",
+    "sm_120/vibeqc_generated_shell_sm120_shard_0.cu": "105a887ac9df47f9365f8bd8c7b822757029a16eeb0ea5898be24f8104a97bf2",
+    "sm_120/vibeqc_generated_shell_sm120_shard_1.cu": "431aee70d4cd1765d80515f1fbc2b3c22e3cd807559fbdeedb11dbd1ba838430",
+    "sm_120/vibeqc_generated_shell_sm120_shard_2.cu": "c1b4fb292de92db453e2449b0251058c3e68ec5eb09920a602f909981b52e888",
+    "sm_120/vibeqc_generated_shell_sm120_shard_3.cu": "576a7b4cb9ad4abb0e157872c75860dc3f572e9b39afab9ef5f77a40fddf0507",
     "vibeqc_generated_shell_registry.hpp": "930aecf979b40f243af6fabd1b1513b072197acdab02f7ccad59e6a3738b4753",
-    "vibeqc_generated_shell_registry.cu": "88a008840696b251d652ac043115cad8a872060fe3009a6ed2c66ce325a347de"
+    "vibeqc_generated_shell_registry.cu": "e71b4fa1f946a9b6af26e81f9803c920c96aa844b983769d7993478c0c47d287"
   },
   "artifact_corrections": [
     {
@@ -525,6 +525,18 @@
       "paths": [
         "sm_120/vibeqc_generated_shell_sm120_shard_0.cu",
         "sm_120/vibeqc_generated_shell_sm120_shard_1.cu"
+      ]
+    },
+    {
+      "issue": 174,
+      "source_revision": "2193132a8eb6ae1ec9ab2f511cb10db7c490a592",
+      "reason": "Profiling-only FP64/FP32 quartet counters extend the generated streaming launch parameters. The four sm_120 shards and launch registry change; the shell catalog, manifest, portable sm_90 shards, and public registry header remain identical.",
+      "paths": [
+        "sm_120/vibeqc_generated_shell_sm120_shard_0.cu",
+        "sm_120/vibeqc_generated_shell_sm120_shard_1.cu",
+        "sm_120/vibeqc_generated_shell_sm120_shard_2.cu",
+        "sm_120/vibeqc_generated_shell_sm120_shard_3.cu",
+        "vibeqc_generated_shell_registry.cu"
       ]
     }
   ]
