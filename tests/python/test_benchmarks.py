@@ -252,6 +252,37 @@ bounded-direct-fock-precision-profile enabled=1 threshold=9.9999999999999995e-07
     }
 
 
+def test_issue174_fixed_density_rejects_cold_retries_and_extra_evaluations():
+    """A parsed profile alone cannot certify the density or endpoint timed."""
+
+    benchmark = _issue174_precision_module()
+    diagnostic = """bounded-direct-fock-class-profile total_gpu_ms=1.0 classes=1
+  ppps class=4 launches=1 gpu_ms=1.0 share=100.0%
+bounded-direct-fock-precision-profile enabled=0 threshold=0
+  ppps class=4 fp64_quartets=10 fp32_quartets=0 mixed_capable=1
+"""
+    item = SimpleNamespace(
+        status_message="SCF did not converge",
+        warm_start_used=True,
+        warm_start_fallback=False,
+    )
+    assert (
+        benchmark._validate_fixed_density_sample(item, diagnostic)[
+            "operator_evaluation_count"
+        ]
+        == 1
+    )
+    with pytest.raises(RuntimeError, match="exactly one"):
+        benchmark._validate_fixed_density_sample(item, diagnostic + diagnostic)
+    item.warm_start_fallback = True
+    with pytest.raises(RuntimeError, match="frozen warm density"):
+        benchmark._validate_fixed_density_sample(item, diagnostic)
+    item.warm_start_fallback = False
+    item.warm_start_used = False
+    with pytest.raises(RuntimeError, match="frozen warm density"):
+        benchmark._validate_fixed_density_sample(item, diagnostic)
+
+
 def test_issue174_help_does_not_initialize_cuda():
     """Allow benchmark discovery before requesting the mandatory Slurm job."""
 

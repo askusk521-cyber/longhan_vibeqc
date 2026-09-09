@@ -2,6 +2,7 @@
 #define VIBEQC_SCF_DENSITY_FITTING_HPP
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "integrals/s_integrals.hpp"
@@ -43,6 +44,21 @@ struct DensityFittingScfData {
   integrals::IntegralData one_electron;
   integrals::DensityFittingIntegralData raw;
   DensityFittingThreeCenter three_center;
+  // The metric cutoff selects the retained Hamiltonian as well as its response.
+  // Cached plans must be rebuilt when callers change this numerical control.
+  double metric_relative_threshold{};
+  // Geometry and execution policy replace complete dA/dM tensors when the
+  // generated two-electron response is selected. Both bases keep real owners.
+  std::optional<core::System> df_gradient_orbital, df_gradient_auxiliary;
+  unsigned df_gradient_mapping{};
+  std::size_t df_gradient_budget{};
+
+  /** A fused response retains topology instead of AO derivative tensors.
+   * Geometry and mapping belong to this immutable per-geometry SCF data. */
+  std::optional<core::System> one_electron_gradient_system;
+  int one_electron_gradient_device{-1};
+  unsigned one_electron_gradient_mapping{};
+  std::size_t one_electron_gradient_budget{};
 };
 
 /**
@@ -136,10 +152,25 @@ struct DensityFittingUhfGradient {
 [[nodiscard]] std::vector<double> density_fitting_metric_pseudoinverse(
     const integrals::DensityFittingIntegralData& integrals, double relative_threshold = 1.0e-10);
 
-/** Construct d(M+) for one coordinate of a density-fitting metric. */
+/** Apply the self-adjoint Frechet derivative of the spectrally truncated inverse.
+ * For a forward response, response is dM and the result is d(M+). In reverse,
+ * response is an external bar_(M+) and the result is bar_M. Matrices are full
+ * row-major; the symmetric metric uses the symmetric part of response.
+ * Retained/discarded mixing uses (f(lambda_i)-f(lambda_j))/(lambda_i-lambda_j),
+ * including nonzero discarded eigenvalues. No eigenvector gauge is differentiated.
+ * A positive relative_threshold verifies the supplied inverse's active subspace
+ * and rejects numerically unresolved rank crossings at its scaled cutoff.
+ * Zero preserves legacy callers' inferred active mask; it cannot diagnose the
+ * distance to an unknown threshold. Neither mode changes the value-side rank.
+ */
+[[nodiscard]] std::vector<double> density_fitting_metric_inverse_response(
+    const std::vector<double>& metric, const std::vector<double>& inverse,
+    const std::vector<double>& response, std::size_t dimension, double relative_threshold = 0.0);
+
+/** Construct d(M+) for one coordinate, with optional explicit rank-crossing checks. */
 [[nodiscard]] std::vector<double> density_fitting_metric_pseudoinverse_derivative(
     const integrals::DensityFittingIntegralData& integrals, const std::vector<double>& inverse,
-    std::size_t coordinate);
+    std::size_t coordinate, double relative_threshold = 0.0);
 
 /**
  * Assemble a complete RHF analytic force vector for a DF two-electron

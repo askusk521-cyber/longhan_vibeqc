@@ -9,6 +9,40 @@ from vibeqc import Calculator, ResourceBudget, estimate_hf_resources
 H2 = [(1, (0.0, 0.0, -0.7)), (1, (0.0, 0.0, 0.7))]
 
 
+@pytest.mark.parametrize("allocation", [False, True])
+def test_singlepoint_native_detail_preserves_structured_resource_error(
+    monkeypatch, allocation
+):
+    """Adding context detail must retain the exception's retry/evidence payload."""
+    from vibeqc import resources_native
+    from vibeqc.resources import ResourceAllocationError
+
+    calculator = Calculator(resource_budget=ResourceBudget(host_bytes=1 << 30))
+    failure = (
+        ResourceAllocationError("host", "allocation failed")
+        if allocation
+        else RuntimeError("numerical failure")
+    )
+    evidence = {"sentinel": "resource evidence"}
+    failure.resource_diagnostics = evidence
+
+    def reject(*args):
+        raise failure
+
+    monkeypatch.setattr(resources_native, "check_resource_status", reject)
+    monkeypatch.setattr(
+        calculator._library,
+        "vibeqc_context_get_last_detail",
+        lambda context: b"native diagnostic",
+    )
+    with pytest.raises(type(failure), match="native diagnostic") as caught:
+        calculator.singlepoint(H2)
+    assert caught.value is failure
+    assert caught.value.resource_diagnostics is evidence
+    if allocation:
+        assert caught.value.space == "host"
+
+
 def test_large_infeasible_dry_run_never_initializes_native_or_allocates_tensors(
     monkeypatch,
 ):

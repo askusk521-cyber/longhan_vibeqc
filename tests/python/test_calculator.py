@@ -1,6 +1,8 @@
+import ctypes
+
 import numpy as np
 import pytest
-from vibeqc import Calculator, Primitive, Shell, method_capabilities
+from vibeqc import Calculator, Primitive, Shell, _native, method_capabilities
 
 
 def test_h2_energy_and_force_invariance():
@@ -47,7 +49,15 @@ def test_singlepoint_rejects_invalid_output_selection(properties):
         calculator.singlepoint([("He", (0.0, 0.0, 0.0))], properties=properties)
 
 
-def test_cuda_direct_energy_only_output_selection_omits_forces():
+@pytest.mark.parametrize(
+    ("method", "charge", "multiplicity"), (("rhf", 0, 1), ("uhf", 1, 2))
+)
+@pytest.mark.parametrize(
+    ("density_fitting", "budget"), (("none", 0), ("cuda", 0), ("cuda", 8 * 1024 * 1024))
+)
+def test_cuda_energy_only_output_selection_omits_forces(
+    method, charge, multiplicity, density_fitting, budget
+):
     """Exercise public output selection above the persistent-ERI AO limit."""
 
     atoms = [
@@ -56,17 +66,31 @@ def test_cuda_direct_energy_only_output_selection_omits_forces():
         ("H", (0.0, 1.43233673, 1.10715266)),
     ]
     calculator = Calculator(
+        method=method,
         basis="def2-svp",
+        density_fitting=density_fitting,
+        density_fitting_memory_budget_bytes=budget,
         basis_representation="spherical",
         device="cuda",
         energy_tolerance=1.0e-10,
         density_tolerance=1.0e-8,
     )
     try:
-        energy_only = calculator.singlepoint(atoms, properties=("energy",))
-        energy_and_forces = calculator.singlepoint(atoms)
+        # Probe availability separately: calculation failures must fail the
+        # regression instead of being misreported as an unavailable device.
+        context = ctypes.c_void_p()
+        _native.check(
+            calculator._library,
+            calculator._library.vibeqc_context_create(
+                ctypes.byref(calculator._context_descriptor()), ctypes.byref(context)
+            ),
+        )
     except RuntimeError as error:
         pytest.skip(f"CUDA device unavailable: {error}")
+    calculator._library.vibeqc_context_destroy(context)
+    state = {"charge": charge, "multiplicity": multiplicity}
+    energy_only = calculator.singlepoint(atoms, properties=("energy",), **state)
+    energy_and_forces = calculator.singlepoint(atoms, **state)
 
     assert energy_only.executed_backend == "cuda"
     assert energy_only.energy == pytest.approx(energy_and_forces.energy, abs=2.0e-9)

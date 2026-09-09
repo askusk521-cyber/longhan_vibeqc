@@ -1,0 +1,333 @@
+srun: job 9085 queued and waiting for resources
+srun: job 9085 has been allocated resources
+SLURM_JOB_ID=9085 CUDA_VISIBLE_DEVICES=0
+....                                                                     [100%]
+4 passed, 25 deselected in 2.31s
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Capture range started in the application.
+Capture range ended in the application.
+Generating '/tmp/nsys-report-a6b6.qdstrm'
+[1/1] [0%                          ] issue141-profile-scalar.nsys-repProcessing events...
+[1/1] [0%                          ] issue141-profile-scalar.nsys-rep[1/1] [10%                         ] issue141-profile-scalar.nsys-rep[1/1] [===========53%              ] issue141-profile-scalar.nsys-rep[1/1] [=======================95%  ] issue141-profile-scalar.nsys-rep[1/1] [========================100%] issue141-profile-scalar.nsys-rep[1/1] [========================100%] issue141-profile-scalar.nsys-rep
+{
+  "ao_count": null,
+  "batch_size": 3,
+  "benchmark": "profile_one_electron_force",
+  "case": "sp8",
+  "cuda_visible_devices": "0",
+  "density_tolerance": 1e-10,
+  "df_budget": 0,
+  "energies_hartree": [
+    -0.2906755060102889,
+    -0.2897023252480523,
+    -0.2887263162064191
+  ],
+  "energy_tolerance": 1e-12,
+  "fitted": false,
+  "maximum_absolute_force_hartree_per_bohr": 0.3490772419890294,
+  "mode": "scalar",
+  "repeats": 5,
+  "schema_version": 1,
+  "screening_tolerance": 1e-14,
+  "slurm_job_id": "9085",
+  "warm_median_seconds": 0.0026412231381982565,
+  "warm_minimum_seconds": 0.002624519867822528,
+  "warm_samples": [
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 0,
+      "seconds": 0.0030860728584229946
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 1,
+      "seconds": 0.00272518303245306
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 2,
+      "seconds": 0.0026412231381982565
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 3,
+      "seconds": 0.002624519867822528
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 4,
+      "seconds": 0.0026327769737690687
+    }
+  ]
+}
+Generated:
+	/tmp/issue141-profile-scalar.nsys-rep
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Capture range started in the application.
+Capture range ended in the application.
+Generating '/tmp/nsys-report-74ed.qdstrm'
+[1/1] [0%                          ] issue141-profile-cooperative.nsys-repProcessing events...
+[1/1] [0%                          ] issue141-profile-cooperative.nsys-rep[1/1] [10%                         ] issue141-profile-cooperative.nsys-rep[1/1] [===========53%              ] issue141-profile-cooperative.nsys-rep[1/1] [=======================95%  ] issue141-profile-cooperative.nsys-rep[1/1] [========================100%] issue141-profile-cooperative.nsys-rep[1/1] [========================100%] issue141-profile-cooperative.nsys-rep
+{
+  "ao_count": null,
+  "batch_size": 3,
+  "benchmark": "profile_one_electron_force",
+  "case": "sp8",
+  "cuda_visible_devices": "0",
+  "density_tolerance": 1e-10,
+  "df_budget": 0,
+  "energies_hartree": [
+    -0.2906755060102889,
+    -0.2897023252480523,
+    -0.2887263162064191
+  ],
+  "energy_tolerance": 1e-12,
+  "fitted": false,
+  "maximum_absolute_force_hartree_per_bohr": 0.34907724198902973,
+  "mode": "cooperative",
+  "repeats": 5,
+  "schema_version": 1,
+  "screening_tolerance": 1e-14,
+  "slurm_job_id": "9085",
+  "warm_median_seconds": 0.002444365993142128,
+  "warm_minimum_seconds": 0.0023865147959440947,
+  "warm_samples": [
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 0,
+      "seconds": 0.0026554700452834368
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 1,
+      "seconds": 0.0025327459443360567
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 2,
+      "seconds": 0.002444365993142128
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 3,
+      "seconds": 0.0023865147959440947
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 4,
+      "seconds": 0.002426180988550186
+    }
+  ]
+}
+Generated:
+	/tmp/issue141-profile-cooperative.nsys-rep
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Capture range started in the application.
+Capture range ended in the application.
+Generating '/tmp/nsys-report-364f.qdstrm'
+[1/1] [0%                          ] issue141-profile-generated_thread.nsys-repProcessing events...
+[1/1] [0%                          ] issue141-profile-generated_thread.nsys-rep[1/1] [10%                         ] issue141-profile-generated_thread.nsys-rep[1/1] [===========53%              ] issue141-profile-generated_thread.nsys-rep[1/1] [=======================95%  ] issue141-profile-generated_thread.nsys-rep[1/1] [========================100%] issue141-profile-generated_thread.nsys-rep[1/1] [========================100%] issue141-profile-generated_thread.nsys-rep
+{
+  "ao_count": null,
+  "batch_size": 3,
+  "benchmark": "profile_one_electron_force",
+  "case": "sp8",
+  "cuda_visible_devices": "0",
+  "density_tolerance": 1e-10,
+  "df_budget": 0,
+  "energies_hartree": [
+    -0.2906755060102889,
+    -0.2897023252480523,
+    -0.2887263162064191
+  ],
+  "energy_tolerance": 1e-12,
+  "fitted": false,
+  "maximum_absolute_force_hartree_per_bohr": 0.34907724198902923,
+  "mode": "generated_thread",
+  "repeats": 5,
+  "schema_version": 1,
+  "screening_tolerance": 1e-14,
+  "slurm_job_id": "9085",
+  "warm_median_seconds": 0.002481696894392371,
+  "warm_minimum_seconds": 0.002446659840643406,
+  "warm_samples": [
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 0,
+      "seconds": 0.002806248841807246
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 1,
+      "seconds": 0.002481696894392371
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 2,
+      "seconds": 0.0025031680706888437
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 3,
+      "seconds": 0.002469574101269245
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 4,
+      "seconds": 0.002446659840643406
+    }
+  ]
+}
+Generated:
+	/tmp/issue141-profile-generated_thread.nsys-rep
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Capture range started in the application.
+Capture range ended in the application.
+Generating '/tmp/nsys-report-ba74.qdstrm'
+[1/1] [0%                          ] issue141-profile-generated_shell_warp.nsys-repProcessing events...
+[1/1] [0%                          ] issue141-profile-generated_shell_warp.nsys-rep[1/1] [10%                         ] issue141-profile-generated_shell_warp.nsys-rep[1/1] [===========53%              ] issue141-profile-generated_shell_warp.nsys-rep[1/1] [=======================95%  ] issue141-profile-generated_shell_warp.nsys-rep[1/1] [========================100%] issue141-profile-generated_shell_warp.nsys-rep[1/1] [========================100%] issue141-profile-generated_shell_warp.nsys-rep
+{
+  "ao_count": null,
+  "batch_size": 3,
+  "benchmark": "profile_one_electron_force",
+  "case": "sp8",
+  "cuda_visible_devices": "0",
+  "density_tolerance": 1e-10,
+  "df_budget": 0,
+  "energies_hartree": [
+    -0.2906755060102889,
+    -0.2897023252480523,
+    -0.2887263162064191
+  ],
+  "energy_tolerance": 1e-12,
+  "fitted": false,
+  "maximum_absolute_force_hartree_per_bohr": 0.3490772419890297,
+  "mode": "generated_shell_warp",
+  "repeats": 5,
+  "schema_version": 1,
+  "screening_tolerance": 1e-14,
+  "slurm_job_id": "9085",
+  "warm_median_seconds": 0.0024105110205709934,
+  "warm_minimum_seconds": 0.002365544904023409,
+  "warm_samples": [
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 0,
+      "seconds": 0.002647605026140809
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 1,
+      "seconds": 0.002445428166538477
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 2,
+      "seconds": 0.002365544904023409
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 3,
+      "seconds": 0.0024105110205709934
+    },
+    {
+      "iterations": [
+        1,
+        1,
+        1
+      ],
+      "repeat": 4,
+      "seconds": 0.002378139877691865
+    }
+  ]
+}
+Generated:
+	/tmp/issue141-profile-generated_shell_warp.nsys-rep

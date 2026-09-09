@@ -129,7 +129,9 @@ endif()
 add_library(vibeqc SHARED
   src/api/c_api_batch.cpp
   src/api/c_api_calculation.cpp
+  src/api/c_api_one_electron_gradient.cpp
   src/api/c_api_projection.cpp
+  src/api/c_api_df_gradient.cpp
   src/api/c_api_common.cpp
   src/api/c_api_context.cpp
   src/api/c_api_resources.cpp
@@ -144,6 +146,7 @@ add_library(vibeqc SHARED
   src/posthf/bridge.cpp
   src/runtime/context.cpp
   src/scf/density_fitting.cpp
+  src/scf/df_response_weights.cpp
   src/scf/fleet.cpp
   src/scf/fock_build.cpp
   src/scf/rhf.cpp
@@ -204,6 +207,16 @@ if(VIBEQC_ENABLE_CUDA)
             ${VIBEQC_DF_GENERATOR_INPUTS}
     VERBATIM)
   target_sources(vibeqc PRIVATE "${VIBEQC_DF_GENERATED_HEADER}")
+  set(VIBEQC_DF_DERIVATIVE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_derivatives.cuh")
+  add_custom_command(
+    OUTPUT "${VIBEQC_DF_DERIVATIVE_HEADER}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py"
+            --derivatives --output "${VIBEQC_DF_DERIVATIVE_HEADER}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py" ${VIBEQC_DF_GENERATOR_INPUTS}
+    VERBATIM)
+  target_sources(vibeqc PRIVATE "${VIBEQC_DF_DERIVATIVE_HEADER}"
+                 src/scf/cuda/df_derivatives.cu src/scf/cuda/df_gradient_bridge.cu)
+
   # One-electron lowering is compiled in its own TU, keeping the generic HF
   # fallback independent of generated scalar-family source size.
   set(VIBEQC_ONE_ELECTRON_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_one_electron_values.cuh")
@@ -217,6 +230,18 @@ if(VIBEQC_ENABLE_CUDA)
     VERBATIM)
   target_sources(vibeqc PRIVATE "${VIBEQC_ONE_ELECTRON_HEADER}"
                  src/scf/cuda/one_electron_values.cu)
+  set(VIBEQC_ONE_ELECTRON_DERIVATIVE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_one_electron_derivatives.cuh")
+  add_custom_command(
+    OUTPUT "${VIBEQC_ONE_ELECTRON_DERIVATIVE_HEADER}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_one_electron_kernels.py"
+            --derivatives --output "${VIBEQC_ONE_ELECTRON_DERIVATIVE_HEADER}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_one_electron_kernels.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py"
+            ${VIBEQC_DF_GENERATOR_INPUTS}
+    VERBATIM)
+  target_sources(vibeqc PRIVATE "${VIBEQC_ONE_ELECTRON_DERIVATIVE_HEADER}"
+                 src/scf/cuda/one_electron_derivatives.cu
+                 src/scf/cuda/one_electron_gradient_bridge.cu)
   # The first weighted-ERI migration reuses native primitive loops and queue
   # policies, replacing only their scalar expression with a shared DAG helper.
   set(VIBEQC_WEIGHTED_ERI_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/weighted_eri.cuh")

@@ -14,6 +14,7 @@
 
 #include "runtime/resource_cuda.cuh"
 #include "scf/cuda_density_fitting.hpp"
+#include "scf/cuda_df_gradient.hpp"
 #include "scf/density_fitting.hpp"
 
 namespace vibeqc::scf {
@@ -482,6 +483,7 @@ struct SetupBuffers {
 
 struct CudaDensityFittingJkPlan {
   int device_id{-1};
+  double metric_relative_threshold{};
   std::size_t batch_size{};
   std::size_t nbf{};
   std::size_t naux{};
@@ -1340,8 +1342,8 @@ vibeqc_status source_force_response_impl(CudaDensityFittingJkPlan& plan, std::si
         plan.host_metric_inverse.begin() + metric_offset,
         plan.host_metric_inverse.begin() + metric_offset + metric_elements);
     try {
-      inverse_derivative =
-          density_fitting_metric_pseudoinverse_derivative(metric_data, inverse, 0U);
+      inverse_derivative = density_fitting_metric_pseudoinverse_derivative(
+          metric_data, inverse, 0U, plan.metric_relative_threshold);
     } catch (const std::bad_alloc&) {
       detail = "host allocation for source-backed CUDA metric response failed";
       return VIBEQC_STATUS_OUT_OF_MEMORY;
@@ -1374,6 +1376,75 @@ vibeqc_status source_force_response_impl(CudaDensityFittingJkPlan& plan, std::si
 }
 
 }  // namespace
+
+vibeqc_status execute_cuda_density_fitting_generated_force_response(
+    CudaDensityFittingJkPlan* plan, std::size_t system, const core::System& orbital,
+    const core::System& auxiliary, std::span<const double> raw_a,
+    const std::vector<double>& raw_metric, std::span<const DensityFittingDensityResponse> terms,
+    unsigned schedule, std::size_t maximum_bytes, std::size_t maximum_auxiliary_tile,
+    std::vector<double>& derivative, std::string& detail, DfGradientResources* resources) {
+  if (resources) *resources = {};
+  if (!plan || system >= plan->batch_size) {
+    detail = "invalid generated DF force plan or batch index";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+  const auto elements = plan->naux * plan->naux, offset = system * elements;
+  // Copies isolate one system's spectral reverse map from the packed batch.
+  // Charge them while the bounded HF/derivative bridge is also alive.
+  const auto copies_bytes = 2 * elements * sizeof(double);
+  if (maximum_bytes <= copies_bytes || 12.0L * elements * sizeof(double) > maximum_bytes) {
+    detail = "generated DF metric reverse staging exceeds maximum_bytes";
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
+  }
+  try {
+    std::vector<double> metric, inverse;
+    if (plan->integral_source) {
+      if (plan->host_metrics.size() != plan->batch_size * elements ||
+          plan->host_metric_inverse.size() != plan->batch_size * elements) {
+        detail = "generated DF source has no retained metric factors";
+        return VIBEQC_STATUS_INVALID_ARGUMENT;
+      }
+      metric.assign(plan->host_metrics.begin() + offset,
+                    plan->host_metrics.begin() + offset + elements);
+      inverse.assign(plan->host_metric_inverse.begin() + offset,
+                     plan->host_metric_inverse.begin() + offset + elements);
+    } else {
+      if (raw_metric.size() != elements) {
+        detail = "generated resident DF response needs its original metric";
+        return VIBEQC_STATUS_INVALID_ARGUMENT;
+      }
+      metric = raw_metric;
+      // The resident value path already stages raw A/M on the host. Reuse
+      // that same Hamiltonian and cutoff, without inventing derivative arrays
+      // to satisfy the legacy complete-tensor oracle interface.
+      const auto factor =
+          factor_density_fitting_metric(metric, plan->naux, plan->metric_relative_threshold);
+      inverse.assign(elements, 0.0);
+      for (std::size_t i = 0; i < plan->naux; ++i)
+        for (std::size_t j = 0; j < plan->naux; ++j)
+          for (std::size_t k = 0; k < plan->naux; ++k)
+            inverse[i * plan->naux + j] += factor.inverse_square_root[i * plan->naux + k] *
+                                           factor.inverse_square_root[j * plan->naux + k];
+    }
+    DfGradientResources measured;
+    const auto status = execute_cuda_df_hf_gradient(
+        plan->device_id, reinterpret_cast<void*>(plan->stream), plan->integral_source, system,
+        orbital, auxiliary, raw_a, metric, inverse, terms, plan->metric_relative_threshold,
+        schedule, maximum_bytes - copies_bytes, maximum_auxiliary_tile, derivative, detail,
+        &measured);
+    if (status == VIBEQC_STATUS_SUCCESS && resources) {
+      measured.host_bytes += copies_bytes;
+      *resources = measured;
+    }
+    return status;
+  } catch (const std::bad_alloc&) {
+    detail = "generated DF metric reverse staging exceeded its allocation budget";
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const std::exception& error) {
+    detail = error.what();
+    return VIBEQC_STATUS_NUMERICAL_FAILURE;
+  }
+}
 
 vibeqc_status execute_cuda_density_fitting_source_rhf_force_response(
     CudaDensityFittingJkPlan* plan, std::size_t system, const std::vector<double>& density,
@@ -1531,6 +1602,7 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
   auto* candidate = new (std::nothrow) CudaDensityFittingJkPlan{};
   if (candidate == nullptr) return fail_before_plan(VIBEQC_STATUS_OUT_OF_MEMORY);
   candidate->device_id = device_id;
+  candidate->metric_relative_threshold = relative_threshold;
   candidate->batch_size = batch_size;
   candidate->nbf = nbf;
   candidate->naux = naux;

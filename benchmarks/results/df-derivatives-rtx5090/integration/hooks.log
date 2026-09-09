@@ -1,0 +1,11 @@
+trim trailing whitespace.................................................Passed
+fix end of files.........................................................Passed
+check yaml...........................................(no files to check)Skipped
+check json...............................................................Passed
+check for added large files..............................................Passed
+check for merge conflicts................................................Passed
+check for broken symlinks............................(no files to check)Skipped
+check toml...........................................(no files to check)Skipped
+ruff (legacy alias)..................................(no files to check)Skipped
+ruff format..........................................(no files to check)Skipped
+clang-format.............................................................Passed

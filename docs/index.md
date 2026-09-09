@@ -37,6 +37,10 @@ cover all quantum-chemistry methods through a coherent batched interface.
   correctness model.
 - [One-electron value generation](one_electron_codegen.md): S/T/V DAGs, native
   contraction schedules, same-binary selectors and independent validation.
+- [One-electron derivatives](one_electron_derivatives.md): generic weighted
+  gradients, bounded CUDA contractions and Direct/DF HF adapters.
+- [Density-fitting derivatives](df_derivatives.md): generic A/M responses,
+  bounded HF weights, metric subspace response, and fused CUDA contractions.
 - [Integral IR contracts](integral_ir.md): operator centers, bounded raw blocks,
   external weights, serialization, and backend capability boundaries.
 - [TensorIR](tensor_ir.md): typed tensor equations, exact factors, symmetry-packed

@@ -244,7 +244,7 @@ while **prohibiting performance or production promotion**. It is not a speedup
 claim or CC implementation.
 
 The #174 boundary runner keeps its fixed-density Fock diagnostic separate from
-clean endpoint timing. It records synchronized wall time, CUDA-event shell-class
+clean endpoint timing. It records synchronized wall time, GPU global-timer shell-class
 time, and the retained FP64/FP32 quartet count for every class actually routed
 through the generated streaming workers. Run it only in an allocated GPU job:
 
@@ -255,6 +255,11 @@ srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
    python benchmarks/issue174_precision_boundaries.py \
      --output benchmarks/results/issue174-precision-boundaries.json'
 ```
+
+Each accepted diagnostic sample must use the frozen warm density, report no
+cold fallback, and contain exactly one Fock evaluation. Diagnostic completion
+retains a nonconverged status because it does not run an SCF solve; the fleet
+recognizes that completion and omits its ordinary cold-start retry.
 
 The broad experimental threshold is evidence plumbing, not an automatic-policy
 promotion. Its JSON limitations explicitly reserve controller, strict

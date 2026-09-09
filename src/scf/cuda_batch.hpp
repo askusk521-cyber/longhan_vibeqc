@@ -16,6 +16,9 @@ namespace vibeqc::scf {
 struct RhfBucketItem {
   vibeqc_status status{VIBEQC_STATUS_INTERNAL_ERROR};
   ScfResult scf;
+  /** A completed isolated Fock measurement deliberately has no converged SCF
+   * result. Fleet must preserve its input instead of retrying a cold solve. */
+  bool fock_only_diagnostic{};
 };
 
 struct CudaRhfBucketPlan;

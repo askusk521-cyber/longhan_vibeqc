@@ -23,12 +23,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--inventory", type=Path)
+    parser.add_argument("--derivatives", action="store_true")
     args = parser.parse_args()
-    source = emit_df_values_cuda()
+    if args.derivatives:
+        from tools.vibeqc_codegen.df_derivatives_cuda import (
+            df_derivative_inventory,
+            emit_df_derivatives_cuda,
+        )
+
+        emitter, inventory = emit_df_derivatives_cuda, df_derivative_inventory
+    else:
+        emitter, inventory = emit_df_values_cuda, df_program_inventory
+    source = emitter()
     write_if_changed(args.output, source)
     if args.inventory:
         payload = {
-            **df_program_inventory(),
+            **inventory(),
             "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         }
         write_if_changed(

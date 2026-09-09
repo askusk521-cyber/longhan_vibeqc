@@ -134,12 +134,28 @@ unsigned one_electron_value_mapping_requested() noexcept {
   return selected("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", "shell_warp") ? 1U : 0U;
 }
 
+bool generated_one_electron_derivatives_requested() noexcept {
+  return selected("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated");
+}
+
+unsigned one_electron_derivative_mapping_requested() noexcept {
+  if (selected("VIBEQC_ONE_ELECTRON_DERIVATIVE_MAPPING", "serial")) return 2U;
+  return selected("VIBEQC_ONE_ELECTRON_DERIVATIVE_MAPPING", "shell_warp") ? 1U : 0U;
+}
+
 bool resident_psss_bra_requested() noexcept { return enabled("VIBEQC_PSSS_RESIDENT_BRA"); }
 
 bool generated_psss_weighted_requested() noexcept {
   // Keep the handwritten implementation selected until native resource and
   // complete RHF/UHF endpoint comparisons justify promoting this candidate.
   return selected("VIBEQC_PSSS_WEIGHTED", "generated");
+}
+
+bool generated_df_derivatives_requested() noexcept {
+  return selected("VIBEQC_DF_DERIVATIVES", "generated");
+}
+unsigned df_derivative_mapping_requested() noexcept {
+  return selected("VIBEQC_DF_DERIVATIVE_MAPPING", "serial") ? 1U : 0U;
 }
 
 bool generated_df_values_requested() noexcept {

@@ -191,6 +191,25 @@ def _mode_environment(
     return environment
 
 
+def _validate_fixed_density_sample(item: Any, diagnostic: str) -> dict[str, Any]:
+    """Reject a cold retry or stale plan instead of labeling it fixed-density work."""
+
+    if (
+        item.status_message != "SCF did not converge"
+        or not item.warm_start_used
+        or item.warm_start_fallback
+    ):
+        raise RuntimeError("Fock diagnostic did not preserve the frozen warm density")
+    profile = _parse_fock_profile(diagnostic)
+    if profile["operator_evaluation_count"] != 1:
+        raise RuntimeError("fixed-density timing requires exactly one Fock evaluation")
+    return {
+        "warm_start_used": item.warm_start_used,
+        "warm_start_fallback": item.warm_start_fallback,
+        **profile,
+    }
+
+
 def _fixed_density_profiles(
     case: Any,
     arguments: argparse.Namespace,
@@ -219,8 +238,11 @@ def _fixed_density_profiles(
                 # Changing arithmetic invalidates the device plan. Exclude one
                 # setup replay so every reported sample is the same steady
                 # fixed-density Fock operation.
-                _capture_native_stderr(lambda: batch.execute(strict=False))
+                setup, setup_diagnostic = _capture_native_stderr(
+                    lambda: batch.execute(strict=False)
+                )
                 cupy.cuda.Stream.null.synchronize()
+                _validate_fixed_density_sample(setup.items[0], setup_diagnostic)
                 for _ in range(arguments.repeats):
                     cupy.cuda.Stream.null.synchronize()
                     started = time.perf_counter()
@@ -229,15 +251,10 @@ def _fixed_density_profiles(
                     )
                     cupy.cuda.Stream.null.synchronize()
                     item = result.items[0]
-                    if item.status_message not in {"SCF did not converge", "success"}:
-                        raise RuntimeError(
-                            "Fock diagnostic returned unexpected status: "
-                            f"{item.status_message}"
-                        )
                     samples.append(
                         {
                             "synchronized_wall_seconds": time.perf_counter() - started,
-                            **_parse_fock_profile(diagnostic),
+                            **_validate_fixed_density_sample(item, diagnostic),
                         }
                     )
             records[name] = {
@@ -361,7 +378,7 @@ def main() -> None:
         ),
         "limitations": [
             "The experimental threshold is not a promoted automatic policy.",
-            "Class CUDA-event rows cover instrumented generated Fock workers; synchronized wall time covers the complete isolated replay.",
+            "Class GPU global-timer rows cover instrumented generated Fock workers; synchronized wall time covers the complete isolated replay.",
             "This A-slice records output boundaries and arithmetic work counts; controller/refinement evidence belongs to later #174 slices.",
         ],
     }

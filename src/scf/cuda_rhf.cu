@@ -26,6 +26,7 @@
 #include "runtime/resource_cuda.cuh"
 #include "runtime/resource_usage.hpp"
 #include "scf/aot_shell_registry.hpp"
+#include "scf/cuda/one_electron_derivatives.cuh"
 #include "scf/cuda/one_electron_values.cuh"
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting.hpp"
@@ -9492,105 +9493,7 @@ __global__ void nuclear_force_kernel(DeviceBatch batch, const std::uint8_t* acti
   forces[coordinate] = -derivative.derivative;
 }
 
-__global__ void one_electron_force_scalar_kernel(DeviceBatch batch, const std::int32_t* pair_first,
-                                                 const std::int32_t* pair_second,
-                                                 std::size_t pair_count, const double* density,
-                                                 const double* weighted_density,
-                                                 const std::uint8_t* active, double* forces) {
-  const std::size_t n = static_cast<std::size_t>(batch.nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch.batch_size) * pair_count) {
-    return;
-  }
-  const std::int32_t system = static_cast<std::int32_t>(element / pair_count);
-  const std::size_t local = element % pair_count;
-  if (active[system] == 0) return;
-  const std::size_t i = static_cast<std::size_t>(pair_first[local]);
-  const std::size_t j = static_cast<std::size_t>(pair_second[local]);
-  const std::size_t matrix_offset = static_cast<std::size_t>(system) * matrix_size;
-  const double pij = density[matrix_offset + matrix_index(i, j, n)];
-  const double wij = weighted_density[matrix_offset + matrix_index(i, j, n)];
-  if (pij == 0.0 && wij == 0.0) return;
-  const std::int64_t ao_i =
-      static_cast<std::int64_t>(system) * batch.nbf + static_cast<std::int32_t>(i);
-  const std::int64_t ao_j =
-      static_cast<std::int64_t>(system) * batch.nbf + static_cast<std::int32_t>(j);
-  const unsigned maximum =
-      batch.shell_angular[batch.ao_shells[ao_i]] + batch.shell_angular[batch.ao_shells[ao_j]] + 1U;
-#define VIBEQC_ONE_ELECTRON_FORCE_CASE(Order)                                                  \
-  case Order:                                                                                  \
-    contracted_one_electron_force_pair<Order>(batch, system, static_cast<std::int32_t>(i),     \
-                                              static_cast<std::int32_t>(j), pij, wij, forces); \
-    break
-  switch (maximum) {
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(1);
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(2);
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(3);
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(4);
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(5);
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(6);
-    VIBEQC_ONE_ELECTRON_FORCE_CASE(7);
-  }
-#undef VIBEQC_ONE_ELECTRON_FORCE_CASE
-}
-
-/**
- * Treat nuclei as a prepared point-charge auxiliary dimension.
- *
- * One warp owns one AO pair and reuses a shared primitive-pair Hermite table
- * while its lanes evaluate independent nuclear centers. This avoids a host or
- * device launch per nucleus and preserves the public-basis density contraction
- * used by the scalar accuracy oracle.
- */
-__global__ void one_electron_force_cooperative_kernel(DeviceBatch batch,
-                                                      const std::int32_t* pair_first,
-                                                      const std::int32_t* pair_second,
-                                                      std::size_t pair_count, const double* density,
-                                                      const double* weighted_density,
-                                                      const std::uint8_t* active, double* forces) {
-  extern __shared__ double one_electron_shared[];
-  if (blockDim.x != warpSize) return;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x);
-  if (element >= static_cast<std::size_t>(batch.batch_size) * pair_count) {
-    return;
-  }
-  const std::int32_t system = static_cast<std::int32_t>(element / pair_count);
-  const std::size_t local = element % pair_count;
-  if (active[system] == 0) return;
-  const std::size_t n = static_cast<std::size_t>(batch.nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t i = static_cast<std::size_t>(pair_first[local]);
-  const std::size_t j = static_cast<std::size_t>(pair_second[local]);
-  const std::size_t matrix_offset = static_cast<std::size_t>(system) * matrix_size;
-  const double pij = density[matrix_offset + matrix_index(i, j, n)];
-  const double wij = weighted_density[matrix_offset + matrix_index(i, j, n)];
-  if (pij == 0.0 && wij == 0.0) return;
-  const std::int64_t ao_i =
-      static_cast<std::int64_t>(system) * batch.nbf + static_cast<std::int32_t>(i);
-  const std::int64_t ao_j =
-      static_cast<std::int64_t>(system) * batch.nbf + static_cast<std::int32_t>(j);
-  const unsigned maximum =
-      batch.shell_angular[batch.ao_shells[ao_i]] + batch.shell_angular[batch.ao_shells[ao_j]] + 1U;
-  auto* shared_coefficients =
-      reinterpret_cast<OneElectronDerivativeHermiteCoefficients*>(one_electron_shared);
-#define VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(Order)                                    \
-  case Order:                                                                                \
-    contracted_one_electron_force_pair_cooperative<Order>(                                   \
-        batch, system, static_cast<std::int32_t>(i), static_cast<std::int32_t>(j), pij, wij, \
-        forces, shared_coefficients);                                                        \
-    break
-  switch (maximum) {
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(1);
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(2);
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(3);
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(4);
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(5);
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(6);
-    VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE(7);
-  }
-#undef VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE
-}
+#include "scf/cuda/one_electron_force_reference.cuh"
 
 __global__ void two_electron_force_kernel(DeviceBatch batch, const double* density,
                                           const std::uint8_t* active, double* forces) {
@@ -14223,6 +14126,9 @@ struct CudaRhfBucketPlan {
   bool shell_class_profiling{};
   bool inactive_eigensolver_profiling{};
   bool bounded_fock_class_timing{};
+  // These switches change captured work even when topology and arithmetic match.
+  bool bounded_streaming_override{};
+  bool fock_only_diagnostic{};
   bool graph_native_eigensolver_override{};
   bool reuse_converged_fock{};
   bool mixed_precision_fock{};
@@ -14809,6 +14715,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
        plan.shell_class_profiling != shell_class_profiling ||
        plan.inactive_eigensolver_profiling != inactive_eigensolver_profiling ||
        plan.bounded_fock_class_timing != bounded_fock_class_timing ||
+       plan.bounded_streaming_override != bounded_direct_streaming_override_requested() ||
+       plan.fock_only_diagnostic != bounded_direct_fock_only_diagnostic ||
        plan.graph_native_eigensolver_override != requested_graph_native_eigensolver_override ||
        plan.reuse_converged_fock != requested_reuse_converged_fock ||
        plan.generated_one_electron_values !=
@@ -15009,6 +14917,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     plan.shell_class_profiling = shell_class_profiling;
     plan.inactive_eigensolver_profiling = inactive_eigensolver_profiling;
     plan.bounded_fock_class_timing = bounded_fock_class_timing;
+    plan.bounded_streaming_override = bounded_direct_streaming_override_requested();
+    plan.fock_only_diagnostic = bounded_direct_fock_only_diagnostic;
     plan.graph_native_eigensolver_override = requested_graph_native_eigensolver_override;
     plan.reuse_converged_fock = requested_reuse_converged_fock;
     plan.mixed_precision_fock = requested_mixed_precision_fock;
@@ -17133,6 +17043,7 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // omits the eigensolve/convergence tail. Return after device timings are
     // copied so no final-Fock rebuild or analytic-force work contaminates it.
     fill_global_failure(outputs, VIBEQC_STATUS_NOT_CONVERGED);
+    for (auto& output : outputs) output.fock_only_diagnostic = true;
     return outputs;
   }
 
@@ -17317,7 +17228,24 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     }
     nuclear_force_kernel<<<blocks_for(force_coordinate_count), threads, 0, resources.stream_>>>(
         device_batch, active, forces);
-    if (cooperative_one_electron_force) {
+    // Derivative selection is read on every force execution; it retains no
+    // candidate-specific geometry or plan buffers that could become stale.
+    if (cuda_policy::generated_one_electron_derivatives_requested()) {
+      const OneElectronWeightView weights{unrestricted ? total_weighted_density : weighted_density,
+                                          unrestricted ? total_density : density,
+                                          unrestricted ? total_density : density,
+                                          -1.0,
+                                          1.0,
+                                          1.0};
+      cuda_error = launch_generated_one_electron_gradient(
+          one_electron_view(device_batch), ao_pair_first, ao_pair_second, pair_count, weights,
+          active, cuda_policy::one_electron_derivative_mapping_requested(), -1.0, forces,
+          resources.stream_);
+      if (cuda_error != cudaSuccess) {
+        fill_global_failure(outputs, cuda_status(cuda_error));
+        return outputs;
+      }
+    } else if (cooperative_one_electron_force) {
       constexpr std::size_t shared_bytes = 3 * sizeof(OneElectronDerivativeHermiteCoefficients);
       one_electron_force_cooperative_kernel<<<static_cast<unsigned>(one_electron_force_elements),
                                               threads, shared_bytes, resources.stream_>>>(
@@ -18375,6 +18303,9 @@ std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
        !same_options((*plan)->options, options) || (*plan)->unrestricted != unrestricted ||
        (*plan)->shell_class_profiling != shell_class_profiling ||
        (*plan)->inactive_eigensolver_profiling != inactive_eigensolver_profiling ||
+       (*plan)->bounded_fock_class_timing != bounded_fock_class_timing_requested() ||
+       (*plan)->bounded_streaming_override != bounded_direct_streaming_override_requested() ||
+       (*plan)->fock_only_diagnostic != bounded_direct_fock_only_diagnostic_requested() ||
        (*plan)->graph_native_eigensolver_override != graph_native_eigensolver_override ||
        (*plan)->reuse_converged_fock != reuse_converged_fock ||
        (*plan)->generated_one_electron_values !=
@@ -18424,7 +18355,7 @@ std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
 /** Generate Cartesian DF tensors without constructing the full four-center ERI. */
 vibeqc_status build_cuda_density_fitting_integrals_impl(
     int device_id, const core::System& orbital_system, const core::System& auxiliary_system,
-    integrals::DensityFittingIntegralData& output, std::string& detail) {
+    integrals::DensityFittingIntegralData& output, std::string& detail, bool include_derivatives) {
   if (device_id < 0) {
     detail = "CUDA density-fitting integral generation received an invalid device";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
@@ -18609,8 +18540,10 @@ vibeqc_status build_cuda_density_fitting_integrals_impl(
   output.ncoord = orbital_system.atoms.size() * 3U;
   output.metric.resize(metric_elements);
   output.three_center.resize(three_center_elements);
-  output.metric_derivative.resize(output.ncoord * metric_elements);
-  output.three_center_derivative.resize(output.ncoord * three_center_elements);
+  if (include_derivatives) {
+    output.metric_derivative.resize(output.ncoord * metric_elements);
+    output.three_center_derivative.resize(output.ncoord * three_center_elements);
+  }
   constexpr unsigned threads = 128U;
   const unsigned blocks = static_cast<unsigned>((total_elements + threads - 1U) / threads);
   build_cuda_df_integrals_kernel<false><<<blocks, threads, 0, stream>>>(
@@ -18627,7 +18560,8 @@ vibeqc_status build_cuda_density_fitting_integrals_impl(
     cuda_error = cudaMemcpy(output.three_center.data(), device_three_center,
                             three_center_elements * sizeof(double), cudaMemcpyDeviceToHost);
   }
-  for (std::size_t coordinate = 0; cuda_error == cudaSuccess && coordinate < output.ncoord;
+  for (std::size_t coordinate = 0;
+       include_derivatives && cuda_error == cudaSuccess && coordinate < output.ncoord;
        ++coordinate) {
     build_cuda_df_integrals_kernel<true><<<blocks, threads, 0, stream>>>(
         device_batch, orbital_count, auxiliary_count, dummy_index, metric_elements,
@@ -18659,7 +18593,7 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
     int device_id, const std::vector<core::System>& orbital_systems,
     const std::vector<core::System>& auxiliary_systems,
     std::vector<integrals::DensityFittingIntegralData>& outputs, std::string& detail,
-    std::size_t output_budget_bytes) {
+    std::size_t output_budget_bytes, bool include_derivatives) {
   outputs.clear();
   if (device_id < 0 || orbital_systems.empty() ||
       orbital_systems.size() != auxiliary_systems.size()) {
@@ -18761,7 +18695,8 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
   std::size_t output_elements_per_system = 0;
-  if (!checked_multiply(per_system, coordinate_count + 1U, output_elements_per_system)) {
+  if (!checked_multiply(per_system, (include_derivatives ? coordinate_count : 0U) + 1U,
+                        output_elements_per_system)) {
     detail = "CUDA DF integral batch output dimensions overflowed";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
@@ -18910,9 +18845,11 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
       outputs[system].ncoord = atom_count * 3U;
       outputs[system].metric.resize(metric_elements);
       outputs[system].three_center.resize(three_center_elements);
-      outputs[system].metric_derivative.resize(outputs[system].ncoord * metric_elements);
-      outputs[system].three_center_derivative.resize(outputs[system].ncoord *
-                                                     three_center_elements);
+      if (include_derivatives) {
+        outputs[system].metric_derivative.resize(outputs[system].ncoord * metric_elements);
+        outputs[system].three_center_derivative.resize(outputs[system].ncoord *
+                                                       three_center_elements);
+      }
     }
   } catch (const std::bad_alloc&) {
     detail = "host allocation failed for CUDA DF batch output";
@@ -18968,7 +18905,8 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
     }
   }
 
-  for (std::size_t coordinate = 0; cuda_error == cudaSuccess && coordinate < atom_count * 3U;
+  for (std::size_t coordinate = 0;
+       include_derivatives && cuda_error == cudaSuccess && coordinate < atom_count * 3U;
        ++coordinate) {
     for (std::size_t system_base = 0; cuda_error == cudaSuccess && system_base < batch_size;
          system_base += chunk_systems) {
@@ -19006,244 +18944,12 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
 }
 
 /** Generate Cartesian overlap/Hcore matrices and their coordinate response. */
-vibeqc_status build_cuda_one_electron_integrals_impl(int device_id, const core::System& system,
-                                                     integrals::IntegralData& output,
-                                                     std::string& detail) {
-  if (device_id < 0) {
-    detail = "CUDA one-electron integral generation received an invalid device";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  core::System cartesian_system = system;
-  cartesian_system.basis_representation = VIBEQC_BASIS_CARTESIAN;
-  HostBatch host;
-  std::vector<const std::vector<double>*> no_warm(1, nullptr);
-  // One-electron integrals are spin independent. General spin packing accepts
-  // both RHF and UHF systems; closed-shell packing incorrectly rejects the
-  // odd-electron orbital metadata needed by an open-shell DF endpoint.
-  if (!pack_host_batch({cartesian_system}, no_warm, host, true) || host.nbf == 0U) {
-    detail = "Cartesian one-electron basis cannot be represented by CUDA";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  if (host.nbf > std::numeric_limits<std::int32_t>::max() ||
-      host.nbf > std::numeric_limits<std::size_t>::max() / host.nbf) {
-    detail = "Cartesian one-electron basis dimensions are invalid";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  const std::size_t matrix_elements = host.nbf * host.nbf;
-  const std::size_t pair_count = host.nbf * (host.nbf + 1U) / 2U;
-  if (pair_count > std::numeric_limits<unsigned>::max() * static_cast<std::size_t>(128U)) {
-    detail = "CUDA one-electron launch dimensions are too large";
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  }
-  std::vector<std::int32_t> pair_first;
-  std::vector<std::int32_t> pair_second;
-  pair_first.reserve(pair_count);
-  pair_second.reserve(pair_count);
-  for (std::size_t row = 0; row < host.nbf; ++row) {
-    for (std::size_t column = 0; column <= row; ++column) {
-      pair_first.push_back(static_cast<std::int32_t>(row));
-      pair_second.push_back(static_cast<std::int32_t>(column));
-    }
-  }
-
-  cudaError_t cuda_error = cudaSetDevice(device_id);
-  if (cuda_error != cudaSuccess) {
-    detail = "CUDA device selection failed while generating one-electron integrals";
-    return cuda_status(cuda_error);
-  }
-  cudaStream_t stream = nullptr;
-  cuda_error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-  if (cuda_error != cudaSuccess) {
-    detail = "CUDA stream creation failed while generating one-electron integrals";
-    return cuda_status(cuda_error);
-  }
-  std::vector<void*> allocations;
-  auto release = [&]() {
-    for (void* pointer : allocations) (void)runtime::resource_cuda_free(pointer);
-    allocations.clear();
-    if (stream != nullptr) {
-      (void)cudaStreamDestroy(stream);
-      stream = nullptr;
-    }
-  };
-  runtime::ResourceScopeExit upload_scope{release};
-  auto upload = [&](const void* source, std::size_t bytes) -> void* {
-    if (bytes == 0U) return nullptr;
-    void* destination = nullptr;
-    if (runtime::resource_cuda_malloc(&destination, bytes) != cudaSuccess) return nullptr;
-    if (source != nullptr &&
-        cudaMemcpy(destination, source, bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
-      (void)runtime::resource_cuda_free(destination);
-      return nullptr;
-    }
-    try {
-      allocations.push_back(destination);
-    } catch (const std::bad_alloc&) {
-      (void)runtime::resource_cuda_free(destination);
-      throw;
-    }
-    return destination;
-  };
-  auto upload_vector = [&](const auto& values) -> void* {
-    return upload(values.data(), values.size() * sizeof(values[0]));
-  };
-
-  DeviceBatch device_batch{};
-  device_batch.batch_size = 1;
-  device_batch.nbf = static_cast<std::int32_t>(host.nbf);
-  device_batch.direct_nbf = static_cast<std::int32_t>(host.direct_nbf);
-  device_batch.total_atoms = static_cast<std::int64_t>(host.atomic_numbers.size());
-  device_batch.total_shells = static_cast<std::int64_t>(host.shell_atoms.size());
-  device_batch.total_shell_pairs = static_cast<std::int64_t>(host.shell_pair_first.size());
-  device_batch.shell_pair_first =
-      static_cast<const std::int32_t*>(upload_vector(host.shell_pair_first));
-  device_batch.shell_pair_second =
-      static_cast<const std::int32_t*>(upload_vector(host.shell_pair_second));
-  device_batch.atom_offsets = static_cast<const std::int64_t*>(upload_vector(host.atom_offsets));
-  device_batch.atom_systems = static_cast<const std::int32_t*>(upload_vector(host.atom_systems));
-  device_batch.atomic_numbers =
-      static_cast<const std::int32_t*>(upload_vector(host.atomic_numbers));
-  device_batch.positions = static_cast<const double*>(upload_vector(host.positions));
-  device_batch.shell_atoms = static_cast<const std::int32_t*>(upload_vector(host.shell_atoms));
-  device_batch.shell_angular = static_cast<const std::uint8_t*>(upload_vector(host.shell_angular));
-  device_batch.shell_ao_offsets =
-      static_cast<const std::int64_t*>(upload_vector(host.shell_ao_offsets));
-  device_batch.shell_direct_ao_offsets =
-      static_cast<const std::int64_t*>(upload_vector(host.shell_direct_ao_offsets));
-  device_batch.shell_primitive_offsets =
-      static_cast<const std::int64_t*>(upload_vector(host.shell_primitive_offsets));
-  device_batch.ao_shells = static_cast<const std::int32_t*>(upload_vector(host.ao_shells));
-  device_batch.ao_term_counts =
-      static_cast<const std::uint8_t*>(upload_vector(host.ao_term_counts));
-  device_batch.ao_term_angular =
-      static_cast<const std::uint8_t*>(upload_vector(host.ao_term_angular));
-  device_batch.ao_term_coefficients =
-      static_cast<const double*>(upload_vector(host.ao_term_coefficients));
-  device_batch.direct_ao_shells =
-      static_cast<const std::int32_t*>(upload_vector(host.direct_ao_shells));
-  device_batch.direct_ao_angular =
-      static_cast<const std::uint8_t*>(upload_vector(host.direct_ao_angular));
-  device_batch.direct_ao_coefficients =
-      static_cast<const double*>(upload_vector(host.direct_ao_coefficients));
-  device_batch.primitive_exponents =
-      static_cast<const double*>(upload_vector(host.primitive_exponents));
-  device_batch.primitive_coefficients =
-      static_cast<const double*>(upload_vector(host.primitive_coefficients));
-  const std::array<const void*, 20> metadata{device_batch.shell_pair_first,
-                                             device_batch.shell_pair_second,
-                                             device_batch.atom_offsets,
-                                             device_batch.atom_systems,
-                                             device_batch.atomic_numbers,
-                                             device_batch.positions,
-                                             device_batch.shell_atoms,
-                                             device_batch.shell_angular,
-                                             device_batch.shell_ao_offsets,
-                                             device_batch.shell_direct_ao_offsets,
-                                             device_batch.shell_primitive_offsets,
-                                             device_batch.ao_shells,
-                                             device_batch.ao_term_counts,
-                                             device_batch.ao_term_angular,
-                                             device_batch.ao_term_coefficients,
-                                             device_batch.direct_ao_shells,
-                                             device_batch.direct_ao_angular,
-                                             device_batch.direct_ao_coefficients,
-                                             device_batch.primitive_exponents,
-                                             device_batch.primitive_coefficients};
-  for (const void* pointer : metadata) {
-    if (pointer == nullptr) {
-      detail = "CUDA allocation failed while staging one-electron metadata";
-      release();
-      return VIBEQC_STATUS_OUT_OF_MEMORY;
-    }
-  }
-  const auto* device_pair_first = static_cast<const std::int32_t*>(upload_vector(pair_first));
-  const auto* device_pair_second = static_cast<const std::int32_t*>(upload_vector(pair_second));
-  double* device_overlap = static_cast<double*>(upload(nullptr, matrix_elements * sizeof(double)));
-  double* device_hcore = static_cast<double*>(upload(nullptr, matrix_elements * sizeof(double)));
-  double* device_nuclear = static_cast<double*>(upload(nullptr, sizeof(double)));
-  if (device_pair_first == nullptr || device_pair_second == nullptr || device_overlap == nullptr ||
-      device_hcore == nullptr || device_nuclear == nullptr) {
-    detail = "CUDA allocation failed for one-electron integral output";
-    release();
-    return VIBEQC_STATUS_OUT_OF_MEMORY;
-  }
-
-  output = {};
-  output.nbf = host.nbf;
-  output.ncoord = system.atoms.size() * 3U;
-  output.overlap.resize(matrix_elements);
-  output.hcore.resize(matrix_elements);
-  output.overlap_derivative.resize(output.ncoord * matrix_elements);
-  output.hcore_derivative.resize(output.ncoord * matrix_elements);
-  output.nuclear_repulsion_derivative.resize(output.ncoord);
-  constexpr unsigned threads = 128U;
-  const unsigned pair_blocks = static_cast<unsigned>((pair_count + threads - 1U) / threads);
-  if (cuda_policy::generated_one_electron_values_requested()) {
-    cuda_error = launch_generated_one_electron_values(
-        one_electron_view(device_batch), device_pair_first, device_pair_second, pair_count,
-        cuda_policy::one_electron_value_mapping_requested(), device_overlap, device_hcore, stream);
-    if (cuda_error != cudaSuccess) {
-      detail = "generated CUDA one-electron value launch failed";
-      release();
-      return cuda_status(cuda_error);
-    }
-  } else {
-    build_cuda_one_electron_integrals_kernel<false>
-        <<<pair_blocks, threads, 0, stream>>>(device_batch, device_pair_first, device_pair_second,
-                                              pair_count, -1, device_overlap, device_hcore);
-  }
-  build_cuda_nuclear_repulsion_kernel<false><<<1, 1, 0, stream>>>(device_batch, -1, device_nuclear);
-  cuda_error = cudaGetLastError();
-  if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
-  if (cuda_error == cudaSuccess) {
-    cuda_error = cudaMemcpy(output.overlap.data(), device_overlap, matrix_elements * sizeof(double),
-                            cudaMemcpyDeviceToHost);
-  }
-  if (cuda_error == cudaSuccess) {
-    cuda_error = cudaMemcpy(output.hcore.data(), device_hcore, matrix_elements * sizeof(double),
-                            cudaMemcpyDeviceToHost);
-  }
-  if (cuda_error == cudaSuccess) {
-    cuda_error = cudaMemcpy(&output.nuclear_repulsion, device_nuclear, sizeof(double),
-                            cudaMemcpyDeviceToHost);
-  }
-  for (std::size_t coordinate = 0; cuda_error == cudaSuccess && coordinate < output.ncoord;
-       ++coordinate) {
-    build_cuda_one_electron_integrals_kernel<true><<<pair_blocks, threads, 0, stream>>>(
-        device_batch, device_pair_first, device_pair_second, pair_count,
-        static_cast<std::int64_t>(coordinate), device_overlap, device_hcore);
-    build_cuda_nuclear_repulsion_kernel<true>
-        <<<1, 1, 0, stream>>>(device_batch, static_cast<std::int64_t>(coordinate), device_nuclear);
-    cuda_error = cudaGetLastError();
-    if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
-    if (cuda_error == cudaSuccess) {
-      cuda_error =
-          cudaMemcpy(output.overlap_derivative.data() + coordinate * matrix_elements,
-                     device_overlap, matrix_elements * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_error == cudaSuccess) {
-      cuda_error =
-          cudaMemcpy(output.hcore_derivative.data() + coordinate * matrix_elements, device_hcore,
-                     matrix_elements * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    if (cuda_error == cudaSuccess) {
-      cuda_error = cudaMemcpy(output.nuclear_repulsion_derivative.data() + coordinate,
-                              device_nuclear, sizeof(double), cudaMemcpyDeviceToHost);
-    }
-  }
-  if (cuda_error != cudaSuccess) {
-    detail = "CUDA kernel failed while generating one-electron integrals";
-    release();
-    return cuda_status(cuda_error);
-  }
-  release();
-  return VIBEQC_STATUS_SUCCESS;
-}
+#include "scf/cuda/one_electron_integrals.cuh"
 
 /** Generate one-electron tensors for a homogeneous packed system batch. */
 vibeqc_status build_cuda_one_electron_integrals_batch_impl(
     int device_id, const std::vector<core::System>& systems,
-    std::vector<integrals::IntegralData>& outputs, std::string& detail) {
+    std::vector<integrals::IntegralData>& outputs, std::string& detail, bool include_derivatives) {
   outputs.clear();
   if (device_id < 0 || systems.empty()) {
     detail = "CUDA one-electron integral batch dimensions are invalid";
@@ -19451,8 +19157,8 @@ vibeqc_status build_cuda_one_electron_integrals_batch_impl(
       output.ncoord = systems.front().atoms.size() * 3U;
       output.overlap.resize(matrix_elements);
       output.hcore.resize(matrix_elements);
-      output.overlap_derivative.resize(output.ncoord * matrix_elements);
-      output.hcore_derivative.resize(output.ncoord * matrix_elements);
+      if (include_derivatives) output.overlap_derivative.resize(output.ncoord * matrix_elements);
+      if (include_derivatives) output.hcore_derivative.resize(output.ncoord * matrix_elements);
       output.nuclear_repulsion_derivative.resize(output.ncoord);
     }
   } catch (const std::bad_alloc&) {
@@ -19524,20 +19230,23 @@ vibeqc_status build_cuda_one_electron_integrals_batch_impl(
   }
   if (cuda_error == cudaSuccess) {
     for (std::size_t coordinate = 0; coordinate < systems.front().atoms.size() * 3U; ++coordinate) {
-      build_cuda_one_electron_integrals_kernel<true><<<blocks, threads, 0, stream>>>(
-          device_batch, device_pair_first, device_pair_second, pair_count,
-          static_cast<std::int64_t>(coordinate), device_overlap, device_hcore);
+      if (include_derivatives)
+        build_cuda_one_electron_integrals_kernel<true><<<blocks, threads, 0, stream>>>(
+            device_batch, device_pair_first, device_pair_second, pair_count,
+            static_cast<std::int64_t>(coordinate), device_overlap, device_hcore);
       build_cuda_nuclear_repulsion_kernel<true>
           <<<static_cast<unsigned>((batch_size + threads - 1U) / threads), threads, 0, stream>>>(
               device_batch, static_cast<std::int64_t>(coordinate), device_nuclear);
       cuda_error = cudaGetLastError();
       if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
       if (cuda_error != cudaSuccess) break;
-      cuda_error = cudaMemcpy(packed_overlap.data(), device_overlap,
-                              matrix_batch_elements * sizeof(double), cudaMemcpyDeviceToHost);
-      if (cuda_error == cudaSuccess) {
-        cuda_error = cudaMemcpy(packed_hcore.data(), device_hcore,
+      if (include_derivatives) {
+        cuda_error = cudaMemcpy(packed_overlap.data(), device_overlap,
                                 matrix_batch_elements * sizeof(double), cudaMemcpyDeviceToHost);
+        if (cuda_error == cudaSuccess) {
+          cuda_error = cudaMemcpy(packed_hcore.data(), device_hcore,
+                                  matrix_batch_elements * sizeof(double), cudaMemcpyDeviceToHost);
+        }
       }
       if (cuda_error == cudaSuccess) {
         cuda_error = cudaMemcpy(packed_nuclear.data(), device_nuclear, batch_size * sizeof(double),
@@ -19545,12 +19254,14 @@ vibeqc_status build_cuda_one_electron_integrals_batch_impl(
       }
       if (cuda_error != cudaSuccess) break;
       for (std::size_t system = 0; system < batch_size; ++system) {
-        std::copy(packed_overlap.begin() + system * matrix_elements,
-                  packed_overlap.begin() + (system + 1U) * matrix_elements,
-                  outputs[system].overlap_derivative.begin() + coordinate * matrix_elements);
-        std::copy(packed_hcore.begin() + system * matrix_elements,
-                  packed_hcore.begin() + (system + 1U) * matrix_elements,
-                  outputs[system].hcore_derivative.begin() + coordinate * matrix_elements);
+        if (include_derivatives) {
+          std::copy(packed_overlap.begin() + system * matrix_elements,
+                    packed_overlap.begin() + (system + 1U) * matrix_elements,
+                    outputs[system].overlap_derivative.begin() + coordinate * matrix_elements);
+          std::copy(packed_hcore.begin() + system * matrix_elements,
+                    packed_hcore.begin() + (system + 1U) * matrix_elements,
+                    outputs[system].hcore_derivative.begin() + coordinate * matrix_elements);
+        }
         outputs[system].nuclear_repulsion_derivative[coordinate] = packed_nuclear[system];
       }
     }
@@ -19570,41 +19281,46 @@ vibeqc_status build_cuda_density_fitting_integrals(int device_id,
                                                    const core::System& orbital_system,
                                                    const core::System& auxiliary_system,
                                                    integrals::DensityFittingIntegralData& output,
-                                                   std::string& detail) {
+                                                   std::string& detail, bool include_derivatives) {
   if (!cuda_df_shell_domain(auxiliary_system, "auxiliary", detail) ||
       !cuda_df_shell_domain(orbital_system, "orbital", detail)) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   return build_cuda_density_fitting_integrals_impl(device_id, orbital_system, auxiliary_system,
-                                                   output, detail);
+                                                   output, detail, include_derivatives);
 }
 
 vibeqc_status build_cuda_density_fitting_integrals_batch(
     int device_id, const std::vector<core::System>& orbital_systems,
     const std::vector<core::System>& auxiliary_systems,
     std::vector<integrals::DensityFittingIntegralData>& outputs, std::string& detail,
-    std::size_t output_budget_bytes) {
+    std::size_t output_budget_bytes, bool include_derivatives) {
   for (const auto& system : auxiliary_systems) {
     if (!cuda_df_shell_domain(system, "auxiliary", detail)) return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   for (const auto& system : orbital_systems) {
     if (!cuda_df_shell_domain(system, "orbital", detail)) return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
-  return build_cuda_density_fitting_integrals_batch_impl(
-      device_id, orbital_systems, auxiliary_systems, outputs, detail, output_budget_bytes);
+  return build_cuda_density_fitting_integrals_batch_impl(device_id, orbital_systems,
+                                                         auxiliary_systems, outputs, detail,
+                                                         output_budget_bytes, include_derivatives);
 }
 
 vibeqc_status build_cuda_one_electron_integrals_batch(int device_id,
                                                       const std::vector<core::System>& systems,
                                                       std::vector<integrals::IntegralData>& outputs,
-                                                      std::string& detail) {
-  return build_cuda_one_electron_integrals_batch_impl(device_id, systems, outputs, detail);
+                                                      std::string& detail,
+                                                      bool include_derivatives) {
+  return build_cuda_one_electron_integrals_batch_impl(device_id, systems, outputs, detail,
+                                                      include_derivatives);
 }
 
 vibeqc_status build_cuda_one_electron_integrals(int device_id, const core::System& system,
                                                 integrals::IntegralData& output,
-                                                std::string& detail) {
-  return build_cuda_one_electron_integrals_impl(device_id, system, output, detail);
+                                                std::string& detail, bool include_derivatives,
+                                                bool include_nuclear_derivatives) {
+  return build_cuda_one_electron_integrals_impl(device_id, system, output, detail,
+                                                include_derivatives, include_nuclear_derivatives);
 }
 
 std::vector<RhfBucketItem> run_rhf_cuda_bucket_cached(

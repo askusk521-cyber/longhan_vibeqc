@@ -12,14 +12,16 @@ import os
 import subprocess
 import sys
 from contextlib import ExitStack
+from dataclasses import asdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import numpy as np
-from vibeqc import Calculator, _native
+from vibeqc import Calculator, Primitive, Shell, _native
 from vibeqc.autotune import source_identity
+from vibeqc.resources import ResourceBudget
 
 from benchmarks._cases import benchmark_cases
 from tools.vibeqc_validation.performance import assess_comparison, measure_interleaved
@@ -32,15 +34,62 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=cases, default="sp8")
     parser.add_argument("--batch", type=int, default=1)
-    parser.add_argument("--mapping", choices=("thread", "shell_warp"), default="thread")
+    parser.add_argument(
+        "--mapping", choices=("thread", "shell_warp", "serial"), default="thread"
+    )
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--derivatives", action="store_true")
+    parser.add_argument(
+        "--df-derivatives",
+        action="store_true",
+        help="compare complete DF derivative responses while sharing the generated one-electron backend",
+    )
+    parser.add_argument("--fitted", action="store_true")
+    parser.add_argument("--df-budget", type=int, default=0)
+    parser.add_argument("--observe-resources", action="store_true")
+    parser.add_argument(
+        "--contraction-length",
+        type=int,
+        default=0,
+        help="replace each explicit shell's radial contraction with this many primitives",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID"):
         parser.error("run this real-GPU gate inside Slurm")
     if args.batch < 1 or args.repeats < 5:
         parser.error("batch must be positive and at least five repeats are required")
+    if args.df_derivatives:
+        if not args.fitted or args.derivatives or args.mapping == "shell_warp":
+            parser.error(
+                "DF derivatives require --fitted, thread/serial mapping and no --derivatives"
+            )
+        os.environ["VIBEQC_ONE_ELECTRON_DERIVATIVES"] = "generated"
+    elif args.mapping == "serial":
+        parser.error(
+            "serial mapping is only supported by this gate for --df-derivatives"
+        )
     case = cases[args.case]
+    basis = case.vibeqc_basis
+    if args.contraction_length:
+        if args.contraction_length < 1 or isinstance(basis, str):
+            parser.error(
+                "contraction-length requires positive length and an explicit-shell case"
+            )
+        basis = tuple(
+            Shell(
+                s.atom_index,
+                s.angular_momentum,
+                tuple(
+                    Primitive(
+                        s.primitives[0].exponent * (1 + 0.2 * k),
+                        (-1.0 if k % 3 == 2 else 1.0) / (k + 1),
+                    )
+                    for k in range(args.contraction_length)
+                ),
+            )
+            for s in basis
+        )
     systems = [
         [
             (element, tuple(np.asarray(position) * (1 + 0.01 * i)))
@@ -53,12 +102,14 @@ def main():
     ]
     options = {
         "method": case.method,
-        "basis": case.vibeqc_basis,
+        "basis": basis,
         "basis_representation": case.basis_representation,
         "device": "cuda",
         "energy_tolerance": 1e-12,
         "density_tolerance": 1e-10,
         "screening_tolerance": 1e-14,
+        "density_fitting": "cuda" if args.fitted else "none",
+        "density_fitting_memory_budget_bytes": args.df_budget,
     }
     inputs_hash = canonical_hash(
         {
@@ -67,10 +118,23 @@ def main():
             "charge": case.charge,
             "multiplicity": case.multiplicity,
             "settings": {k: v for k, v in options.items() if k != "basis"},
-            "basis": repr(case.vibeqc_basis),
+            "basis": repr(basis),
         }
     )
-    os.environ["VIBEQC_ONE_ELECTRON_VALUE_MAPPING"] = args.mapping
+    selection_variable = (
+        "VIBEQC_ONE_ELECTRON_DERIVATIVES"
+        if args.derivatives
+        else "VIBEQC_ONE_ELECTRON_VALUES"
+    )
+    mapping_variable = (
+        "VIBEQC_ONE_ELECTRON_DERIVATIVE_MAPPING"
+        if args.derivatives
+        else "VIBEQC_ONE_ELECTRON_VALUE_MAPPING"
+    )
+    if args.df_derivatives:
+        selection_variable = "VIBEQC_DF_DERIVATIVES"
+        mapping_variable = "VIBEQC_DF_DERIVATIVE_MAPPING"
+    os.environ[mapping_variable] = args.mapping
     library = _native.load_library()
     library.vibeqc_get_source_identity.restype = ctypes.c_char_p
     if library.vibeqc_get_source_identity().decode() != source_identity(ROOT):
@@ -87,24 +151,38 @@ def main():
             raise RuntimeError("CUDA synchronization failed")
 
     def select(selection):
-        os.environ["VIBEQC_ONE_ELECTRON_VALUES"] = (
+        os.environ[selection_variable] = (
             "generated" if selection == "candidate" else "reference"
         )
 
     def prepare():
-        return Calculator(**options).prepare_batch(
+        resource_budget = (
+            ResourceBudget(host_bytes=2 << 30, device_bytes=16 << 30)
+            if args.observe_resources
+            else None
+        )
+        return Calculator(**options, resource_budget=resource_budget).prepare_batch(
             systems,
             charges=[case.charge] * args.batch,
             multiplicities=[case.multiplicity] * args.batch,
-            inactive_eigensolver_profiling=True,
+            # Resource plans deliberately exclude optional profiling buffers.
+            inactive_eigensolver_profiling=not (args.fitted or args.observe_resources),
         )
 
     def diagnostics(result, batch):
         return {
             "energies": result.energies.tolist(),
+            "forces": [item.forces.tolist() for item in result.items],
             "iteration_history": [
                 entry.to_dict() for entry in batch.last_inactive_eigensolver_profile()
-            ],
+            ]
+            if not (args.fitted or args.observe_resources)
+            else "iteration history unavailable for DF or resource-budgeted execution",
+            "df_diagnostics": [
+                asdict(item) for item in batch.last_density_fitting_metric_diagnostics()
+            ]
+            if args.fitted
+            else [],
             "iterations": [item.iterations for item in result.items],
             "energy_change": [item.energy_change for item in result.items],
             "density_rms": [item.density_rms for item in result.items],
@@ -167,13 +245,48 @@ def main():
             )
         for side, batch in batches.items():
             memory[side] = batch.resource_diagnostics
+    paired_errors = {}
+    for workload in ("cold-start", "unchanged-geometry", "changed-geometry"):
+        sides = {
+            side: [
+                r["diagnostics"]
+                for r in samples
+                if r["workload"] == workload and r["selection"] == side
+            ]
+            for side in ("baseline", "candidate")
+        }
+        paired_errors[workload] = {
+            "energy": max(
+                float(np.max(np.abs(np.asarray(a["energies"]) - b["energies"])))
+                for a, b in zip(sides["baseline"], sides["candidate"], strict=True)
+            ),
+            "force": max(
+                float(np.max(np.abs(np.asarray(a["forces"]) - b["forces"])))
+                for a, b in zip(sides["baseline"], sides["candidate"], strict=True)
+            ),
+        }
+    passed = all(
+        e["energy"] <= 3e-10 and e["force"] <= 3e-9 for e in paired_errors.values()
+    )
     report = {
-        "schema": "vibeqc.one_electron_endpoint",
+        "schema": "vibeqc.df_derivative_endpoint"
+        if args.df_derivatives
+        else "vibeqc.one_electron_endpoint",
         "version": 1,
         "case": args.case,
         "batch": args.batch,
+        "contraction_length_override": args.contraction_length,
         "mapping": args.mapping,
+        "operator": "df_derivatives"
+        if args.df_derivatives
+        else ("derivatives" if args.derivatives else "values"),
+        "fitted": args.fitted,
+        "df_budget": args.df_budget,
+        "resource_observation_enabled": args.observe_resources,
+        "paired_errors": paired_errors,
+        "accuracy_passed": passed,
         "source_identity": source_identity(ROOT),
+        "df_derivatives": args.df_derivatives,
         "binary_hash": file_hash(library._name),
         "revision": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -192,6 +305,8 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps(report["comparison"], indent=2))
+    if not passed:
+        raise SystemExit("one-electron endpoint accuracy gate failed")
 
 
 if __name__ == "__main__":

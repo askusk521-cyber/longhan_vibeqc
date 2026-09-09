@@ -107,6 +107,25 @@ def query_integral_capability(
         except (ValueError, IndexError) as error:
             return CapabilityCheck(False, reasons=(str(error),))
         return CapabilityCheck(True, schedules=("thread", "shell_warp"))
+    if backend == "cuda_one_electron_derivatives":
+        from .one_electron_derivatives import build_one_electron_derivative_kernel
+        from .shell_spec import cartesian_components
+
+        try:
+            components = tuple(
+                cartesian_components(l)[0] for l in integral.signature.angular
+            )
+            build_one_electron_derivative_kernel(integral, components)
+            if (
+                integral.derivative.requested_centers(integral.operator)
+                != integral.operator.centers
+            ):
+                raise ValueError(
+                    "CUDA one-electron derivative ABI exposes all operator centers"
+                )
+        except (ValueError, IndexError) as error:
+            return CapabilityCheck(False, reasons=(str(error),))
+        return CapabilityCheck(True, schedules=("thread", "shell_warp", "serial"))
     if backend == "cuda_weighted_eri":
         from .blocks import WeightedDerivative
 

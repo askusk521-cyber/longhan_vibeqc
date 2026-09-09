@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", default="sm_120")
     parser.add_argument("--local", action="store_true")
+    parser.add_argument("--derivatives", action="store_true")
     parser.add_argument(
         "--threads", type=int, nargs="+", default=[64, 128, 256], choices=(64, 128, 256)
     )
@@ -43,25 +44,58 @@ def main():
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     target = cuda_target_info(args.architecture)
-    fixtures = df_value_matrix()
+    if args.local and not os.environ.get("SLURM_JOB_ID"):
+        parser.error("--local requires an existing Slurm allocation")
+    if args.derivatives:
+        from itertools import product
+
+        from tools.vibeqc_codegen.df_derivatives_cuda import (
+            df_derivative_inventory,
+            emit_df_derivatives_cuda,
+        )
+        from tools.vibeqc_validation.df_derivatives import make_df_derivative_fixture
+        from tools.vibeqc_validation.df_derivatives_cuda import (
+            emit_df_derivative_driver,
+        )
+
+        make_fixture = make_df_derivative_fixture
+        fixtures = [
+            make_fixture(angular, variant=variant)
+            for count in (2, 3)
+            for angular in product(range(4), repeat=count)
+            for variant in ("asymmetric", "coincident")
+        ]
+        emitter, driver_emitter, inventory = (
+            emit_df_derivatives_cuda,
+            emit_df_derivative_driver,
+            df_derivative_inventory,
+        )
+        header_name, magic, width = "df_derivatives.cuh", b"VQDF1431", 9
+    else:
+        make_fixture = make_df_value_fixture
+        fixtures = df_value_matrix()
+        emitter, driver_emitter, inventory = (
+            emit_df_values_cuda,
+            emit_df_value_driver,
+            df_program_inventory,
+        )
+        header_name, magic, width = "df_values.cuh", b"VQDF1421", 1
     # Contraction counts are runtime extents, independent of shell angular IR.
     fixtures.extend(
         [
-            make_df_value_fixture((1, 2), primitive_lengths=(9, 7)),
-            make_df_value_fixture((0, 1, 0), primitive_lengths=(9, 7, 5)),
+            make_fixture((1, 2), primitive_lengths=(9, 7)),
+            make_fixture((0, 1, 0), primitive_lengths=(9, 7, 5)),
         ]
     )
     inputs = np.concatenate([f.records for f in fixtures])
     input_path = directory / "inputs.bin"
-    input_path.write_bytes(
-        b"VQDF1421" + struct.pack("<Q", len(inputs)) + inputs.tobytes()
-    )
+    input_path.write_bytes(magic + struct.pack("<Q", len(inputs)) + inputs.tobytes())
     header, source, obj, driver, executable = [
         directory / name
-        for name in ("df_values.cuh", "fixture.cu", "fixture.o", "link.cu", "fixture")
+        for name in (header_name, "fixture.cu", "fixture.o", "link.cu", "fixture")
     ]
-    header.write_text(emit_df_values_cuda())
-    source.write_text(emit_df_value_driver(target.architecture))
+    header.write_text(emitter())
+    source.write_text(driver_emitter(target.architecture))
     driver.write_text("// Host main and the CUDA fixture are in the compiled object.\n")
     compiler = CudaCompilerAdapter(args.nvcc.resolve(), target, compile_timeout=600)
     compiled = compiler.compile(source, obj)
@@ -88,9 +122,13 @@ def main():
         slurm_time="00:05:00",
     )
     report = {
-        "schema": "vibeqc.df_value_validation",
+        "schema": "vibeqc.df_derivative_validation"
+        if args.derivatives
+        else "vibeqc.df_value_validation",
         "version": 1,
-        "tier": "isolated_native_values",
+        "tier": "isolated_native_derivatives"
+        if args.derivatives
+        else "isolated_native_values",
         "production_promoted": False,
         "source_hash": file_hash(header),
         "driver_hash": file_hash(source),
@@ -104,7 +142,7 @@ def main():
             "numpy": np.__version__,
             "pyscf": pyscf.__version__,
         },
-        "programs": len(df_program_inventory()["programs"]),
+        "programs": len(inventory()["programs"]),
         "fixture_count": len(fixtures),
         "primitive_count": len(inputs),
         "projection_location": "host, independent PySCF transform",
@@ -124,13 +162,17 @@ def main():
         if run.returncode:
             raise RuntimeError("DF numerical fixture execution failed")
         values = np.fromfile(output, dtype="<f8")
-        if values.shape != (len(inputs),):
+        if values.shape != (len(inputs) * width,):
             raise ValueError("DF numerical fixture output is incomplete")
+        values = values.reshape(len(inputs), width) if args.derivatives else values
         rows, offset = [], 0
         for fixture in fixtures:
-            contracted = fixture.contract(
-                values[offset : offset + len(fixture.records)]
-            )
+            selected = values[offset : offset + len(fixture.records)]
+            if args.derivatives:
+                selected = selected.reshape(-1, 3, 3)
+                if len(fixture.inputs["shells"]) == 2:
+                    selected = selected[:, [0, 2]]
+            contracted = fixture.contract(selected)
             offset += len(fixture.records)
             rows.append(
                 {
