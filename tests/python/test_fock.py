@@ -311,6 +311,41 @@ def test_canonical_semantics_and_execution_identity():
                 assert cpu.execution_identity != gpu.execution_identity
 
 
+@pytest.mark.parametrize("scalar", [np.float32, np.float64])
+@pytest.mark.parametrize("approximation", ["exact", "density_fitted"])
+def test_identity_uses_normalized_native_controls(scalar, approximation):
+    """Accepted scalar inputs retain the identity of their native double values."""
+    screening, cutoff = scalar(1e-12), scalar(1e-10)
+    spec = FockBuildSpec.hf(coulomb=approximation, exchange=approximation)
+    with (
+        NativeAO(ATOMS) as basis,
+        FockPlan(
+            basis,
+            spec,
+            device=DEVICE,
+            device_id=np.int64(0),
+            screening_tolerance=screening,
+            metric_relative_threshold=cutoff,
+        ) as normalized,
+        FockPlan(
+            basis,
+            spec,
+            device=DEVICE,
+            device_id=0,
+            screening_tolerance=float(screening),
+            metric_relative_threshold=float(cutoff),
+        ) as plain,
+    ):
+        assert normalized.identity == plain.identity
+        assert normalized.execution_identity == plain.execution_identity
+        assert normalized.diagnostics == plain.diagnostics
+        if DEVICE == "cuda":
+            assert type(normalized.diagnostics["device_id"]) is int
+        np.testing.assert_array_equal(
+            normalized.evaluate(np.eye(2)).fock, plain.evaluate(np.eye(2)).fock
+        )
+
+
 @pytest.mark.skipif(DEVICE != "cuda", reason="CUDA execution-variant diagnostics")
 def test_one_electron_execution_variant_identity_is_frozen(monkeypatch):
     with NativeAO(ATOMS) as basis:

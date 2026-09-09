@@ -183,6 +183,14 @@ std::vector<double> build_coulomb(const DensityFittingThreeCenter& three_center,
   return coulomb;
 }
 
+// Keep this hot scalar contraction aligned independently of surrounding
+// dispatch changes. On GCC/Zen 2, a 16-byte function shift made the unchanged
+// loops about 31% slower at nbf=16; 32-byte alignment restores the baseline
+// without changing arithmetic or its reduction order. Other compilers may
+// ignore this optional layout hint.
+#if __has_cpp_attribute(gnu::aligned)
+[[gnu::aligned(32)]]
+#endif
 std::vector<double> build_exchange(const DensityFittingThreeCenter& three_center,
                                    const std::vector<double>& density) {
   const std::size_t nbf = three_center.nbf;

@@ -92,6 +92,9 @@ def worker(args):
     from vibeqc import Calculator
 
     record = provenance(args.root, args.build)
+    record["filters"] = {
+        key: getattr(args, key) for key in ("case", "spin", "approximation", "endpoint")
+    }
     record["numpy"] = np.__version__
     library = ctypes.CDLL(str(args.build / "libvibeqc.so"))
     library.vibeqc_get_source_identity.restype = ctypes.c_char_p
@@ -156,6 +159,8 @@ def worker(args):
         )
 
     def measure(name, function, metadata):
+        if args.endpoint is not None and args.endpoint != name:
+            return
         samples, outputs = [], []
         for i in range(args.samples):
             start = perf_counter()
@@ -167,10 +172,19 @@ def worker(args):
         )
 
     for case, atoms in cases.items():
+        if args.case is not None and args.case != case:
+            continue
         for spin in ("rhf", "uhf"):
+            if args.spin is not None and args.spin != spin:
+                continue
             charge, multiplicity = (0, 1) if spin == "rhf" else (1, 2)
             state = {"charge": charge, "multiplicity": multiplicity}
             for approximation in ("exact", "density_fitted"):
+                if (
+                    args.approximation is not None
+                    and args.approximation != approximation
+                ):
+                    continue
                 calc = Calculator(
                     device=args.device,
                     method=spin,
@@ -349,6 +363,20 @@ def main():
         "--output", type=Path, default=Path(".artifacts/fock-strategy-overhead")
     )
     parser.add_argument("--samples", type=int, default=7)
+    parser.add_argument("--case", choices=("h2", "water"))
+    parser.add_argument("--spin", choices=("rhf", "uhf"))
+    parser.add_argument("--approximation", choices=("exact", "density_fitted"))
+    parser.add_argument(
+        "--endpoint",
+        choices=(
+            "singlepoint",
+            "warm_replay",
+            "changed_geometry",
+            "batch_four_cold",
+            "batch_four_warm",
+        ),
+        help="repeat a specific endpoint while retaining its normal warmup/setup",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--build", type=Path, help=argparse.SUPPRESS)
@@ -398,6 +426,12 @@ def main():
                     str(args.samples),
                     "--output",
                     str(output),
+                    *[
+                        item
+                        for key in ("case", "spin", "approximation", "endpoint")
+                        if (value := getattr(args, key)) is not None
+                        for item in ("--" + key, value)
+                    ],
                 ],
                 env=env,
                 check=True,

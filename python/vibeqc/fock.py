@@ -423,7 +423,7 @@ class FockPlan:
         self._library = lib = calc._library
         _bind(lib)
         self._native_source = lib.vibeqc_get_source_identity().decode()
-        self._device_id = device_id if device == "cuda" else None
+        self._device_id = calc._device_id if device == "cuda" else None
         context, system, aux_system = ct.c_void_p(), ct.c_void_p(), ct.c_void_p()
         _native.check(
             lib,
@@ -476,15 +476,20 @@ class FockPlan:
                 lib.vibeqc_system_destroy(system)
             lib.vibeqc_context_destroy(context)
         self._auxiliary_identity = (auxiliary or basis).identity if fitted else None
-        self._execution_identity = canonical_hash(self.diagnostics)
+        # Hash the values consumed by the native plan, including normalized
+        # NumPy scalars, so provenance describes execution rather than input types.
+        diagnostics = self.diagnostics
+        self._execution_identity = canonical_hash(diagnostics)
         self._identity = canonical_hash(
             {
                 "schema": "vibeqc.fock-plan/v1",
                 "basis": basis.identity,
                 "auxiliary": self._auxiliary_identity,
-                "resolved": self.diagnostics["resolved"],
-                "screening": screening_tolerance,
-                "metric_cutoff": metric_relative_threshold if fitted else None,
+                "resolved": diagnostics["resolved"],
+                "screening": diagnostics["screening_tolerance"],
+                "metric_cutoff": diagnostics["metric_relative_threshold"]
+                if fitted
+                else None,
                 "precision": "float64",
             }
         )
