@@ -134,6 +134,15 @@ unsigned one_electron_value_mapping_requested() noexcept {
   return selected("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", "shell_warp") ? 1U : 0U;
 }
 
+bool generated_one_electron_derivatives_requested() noexcept {
+  return selected("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated");
+}
+
+unsigned one_electron_derivative_mapping_requested() noexcept {
+  if (selected("VIBEQC_ONE_ELECTRON_DERIVATIVE_MAPPING", "serial")) return 2U;
+  return selected("VIBEQC_ONE_ELECTRON_DERIVATIVE_MAPPING", "shell_warp") ? 1U : 0U;
+}
+
 bool resident_psss_bra_requested() noexcept { return enabled("VIBEQC_PSSS_RESIDENT_BRA"); }
 
 bool generated_psss_weighted_requested() noexcept {

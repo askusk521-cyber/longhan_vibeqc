@@ -789,10 +789,14 @@ IntegralData transform_integrals(const IntegralData& cartesian, const core::Syst
   const std::size_t ncoord = system.atoms.size() * 3;
   const std::size_t matrix_size = cartesian_nbf * cartesian_nbf;
   const std::size_t eri_size = matrix_size * matrix_size;
+  // A fused derivative consumer needs only transformed values. Both AO
+  // derivative arrays may be absent; a partial or malformed pair is invalid.
+  const bool one_electron_derivatives =
+      !cartesian.overlap_derivative.empty() || !cartesian.hcore_derivative.empty();
   if (cartesian.nbf != cartesian_nbf || cartesian.ncoord != ncoord ||
       cartesian.overlap.size() != matrix_size || cartesian.hcore.size() != matrix_size ||
-      cartesian.overlap_derivative.size() != ncoord * matrix_size ||
-      cartesian.hcore_derivative.size() != ncoord * matrix_size ||
+      (one_electron_derivatives && (cartesian.overlap_derivative.size() != ncoord * matrix_size ||
+                                    cartesian.hcore_derivative.size() != ncoord * matrix_size)) ||
       (!cartesian.eri.empty() && cartesian.eri.size() != eri_size) ||
       (!cartesian.eri_derivative.empty() && cartesian.eri_derivative.size() != ncoord * eri_size)) {
     throw std::invalid_argument("Cartesian one-electron tensor dimensions are inconsistent");
@@ -810,20 +814,25 @@ IntegralData transform_integrals(const IntegralData& cartesian, const core::Syst
   }
   const std::size_t transformed_matrix_size = transformed.nbf * transformed.nbf;
   const std::size_t transformed_eri_size = transformed_matrix_size * transformed_matrix_size;
-  transformed.overlap_derivative.reserve(ncoord * transformed_matrix_size);
-  transformed.hcore_derivative.reserve(ncoord * transformed_matrix_size);
+  if (one_electron_derivatives) {
+    transformed.overlap_derivative.reserve(ncoord * transformed_matrix_size);
+    transformed.hcore_derivative.reserve(ncoord * transformed_matrix_size);
+  }
   if (!cartesian.eri_derivative.empty()) {
     transformed.eri_derivative.reserve(ncoord * transformed_eri_size);
   }
   for (std::size_t coordinate = 0; coordinate < ncoord; ++coordinate) {
-    const std::vector<double> overlap_derivative = transform_matrix(
-        cartesian.overlap_derivative.data() + coordinate * matrix_size, cartesian_nbf, target_aos);
-    const std::vector<double> hcore_derivative = transform_matrix(
-        cartesian.hcore_derivative.data() + coordinate * matrix_size, cartesian_nbf, target_aos);
-    transformed.overlap_derivative.insert(transformed.overlap_derivative.end(),
-                                          overlap_derivative.begin(), overlap_derivative.end());
-    transformed.hcore_derivative.insert(transformed.hcore_derivative.end(),
-                                        hcore_derivative.begin(), hcore_derivative.end());
+    if (one_electron_derivatives) {
+      const std::vector<double> overlap_derivative =
+          transform_matrix(cartesian.overlap_derivative.data() + coordinate * matrix_size,
+                           cartesian_nbf, target_aos);
+      const std::vector<double> hcore_derivative = transform_matrix(
+          cartesian.hcore_derivative.data() + coordinate * matrix_size, cartesian_nbf, target_aos);
+      transformed.overlap_derivative.insert(transformed.overlap_derivative.end(),
+                                            overlap_derivative.begin(), overlap_derivative.end());
+      transformed.hcore_derivative.insert(transformed.hcore_derivative.end(),
+                                          hcore_derivative.begin(), hcore_derivative.end());
+    }
     if (!cartesian.eri_derivative.empty()) {
       const std::vector<double> eri_derivative = transform_eri(
           cartesian.eri_derivative.data() + coordinate * eri_size, cartesian_nbf, target_aos);

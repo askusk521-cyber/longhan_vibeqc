@@ -2,6 +2,7 @@
 #define VIBEQC_SCF_DENSITY_FITTING_HPP
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "integrals/s_integrals.hpp"
@@ -43,6 +44,12 @@ struct DensityFittingScfData {
   integrals::IntegralData one_electron;
   integrals::DensityFittingIntegralData raw;
   DensityFittingThreeCenter three_center;
+  /** A fused response retains topology instead of AO derivative tensors.
+   * Geometry and mapping belong to this immutable per-geometry SCF data. */
+  std::optional<core::System> one_electron_gradient_system;
+  int one_electron_gradient_device{-1};
+  unsigned one_electron_gradient_mapping{};
+  std::size_t one_electron_gradient_budget{};
 };
 
 /**

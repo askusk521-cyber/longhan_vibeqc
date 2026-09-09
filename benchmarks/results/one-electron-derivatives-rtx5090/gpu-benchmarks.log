@@ -1,0 +1,631 @@
+SLURM_JOB_ID=9084 CUDA_VISIBLE_DEVICES=0
+{
+  "status": "not-run",
+  "reason": "difference within 2%, measurement noise, or no improvement",
+  "workloads": {
+    "cold-start": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.05565535090863705,
+        "minimum_seconds": 0.055193055886775255,
+        "maximum_seconds": 0.0580180820543319,
+        "raw_seconds": [
+          0.05727048101834953,
+          0.05523697007447481,
+          0.0580180820543319,
+          0.055193055886775255,
+          0.05565535090863705
+        ],
+        "relative_mad": 0.008306389490216096
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.05542001104913652,
+        "minimum_seconds": 0.05494115501642227,
+        "maximum_seconds": 0.05569726089015603,
+        "raw_seconds": [
+          0.05569726089015603,
+          0.05560078704729676,
+          0.05524376383982599,
+          0.05494115501642227,
+          0.05542001104913652
+        ],
+        "relative_mad": 0.003261926418599291
+      },
+      "relative_improvement": 0.004228521708305455,
+      "noise_floor": 0.023136631817630773,
+      "significant": false
+    },
+    "unchanged-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.003240749938413501,
+        "minimum_seconds": 0.0032016357872635126,
+        "maximum_seconds": 0.0034593679010868073,
+        "raw_seconds": [
+          0.0032727511133998632,
+          0.0034593679010868073,
+          0.003207236062735319,
+          0.0032016357872635126,
+          0.003240749938413501
+        ],
+        "relative_mad": 0.010341395144664652
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.0032101820688694715,
+        "minimum_seconds": 0.0031910750549286604,
+        "maximum_seconds": 0.0032343780621886253,
+        "raw_seconds": [
+          0.0031910750549286604,
+          0.0032343780621886253,
+          0.0032101820688694715,
+          0.0031968660186976194,
+          0.0032336360309273005
+        ],
+        "relative_mad": 0.005952003198229834
+      },
+      "relative_improvement": 0.009432344403281445,
+      "noise_floor": 0.03258679668578897,
+      "significant": false
+    },
+    "changed-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.013419514056295156,
+        "minimum_seconds": 0.013340322999283671,
+        "maximum_seconds": 0.013503195019438863,
+        "raw_seconds": [
+          0.013503195019438863,
+          0.013419514056295156,
+          0.013462495990097523,
+          0.013340322999283671,
+          0.013410416897386312
+        ],
+        "relative_mad": 0.003202942641742175
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.013744756113737822,
+        "minimum_seconds": 0.013673870824277401,
+        "maximum_seconds": 0.013796285958960652,
+        "raw_seconds": [
+          0.01374992704950273,
+          0.013730688951909542,
+          0.013796285958960652,
+          0.013673870824277401,
+          0.013744756113737822
+        ],
+        "relative_mad": 0.001023456634070024
+      },
+      "relative_improvement": -0.024236500373878478,
+      "noise_floor": 0.02,
+      "significant": false
+    }
+  }
+}
+{
+  "status": "not-run",
+  "reason": "difference within 2%, measurement noise, or no improvement",
+  "workloads": {
+    "cold-start": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.05498007801361382,
+        "minimum_seconds": 0.05490632797591388,
+        "maximum_seconds": 0.05772834690287709,
+        "raw_seconds": [
+          0.05650385399349034,
+          0.05490632797591388,
+          0.05772834690287709,
+          0.05492563406005502,
+          0.05498007801361382
+        ],
+        "relative_mad": 0.0013413956539253418
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.05484397802501917,
+        "minimum_seconds": 0.05469602486118674,
+        "maximum_seconds": 0.055125026032328606,
+        "raw_seconds": [
+          0.05484397802501917,
+          0.05482109379954636,
+          0.055125026032328606,
+          0.05502792983315885,
+          0.05469602486118674
+        ],
+        "relative_mad": 0.0026977102894493103
+      },
+      "relative_improvement": 0.0024754418966257408,
+      "noise_floor": 0.02,
+      "significant": false
+    },
+    "unchanged-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.003198449034243822,
+        "minimum_seconds": 0.003149675903841853,
+        "maximum_seconds": 0.0033435469958931208,
+        "raw_seconds": [
+          0.003198449034243822,
+          0.0033435469958931208,
+          0.003209910821169615,
+          0.0031968269031494856,
+          0.003149675903841853
+        ],
+        "relative_mad": 0.0035835452755627515
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.0031550570856779814,
+        "minimum_seconds": 0.003133885096758604,
+        "maximum_seconds": 0.0032353000715374947,
+        "raw_seconds": [
+          0.0031770081259310246,
+          0.0032353000715374947,
+          0.003133985912427306,
+          0.003133885096758604,
+          0.0031550570856779814
+        ],
+        "relative_mad": 0.0067104931367122115
+      },
+      "relative_improvement": 0.01356655932336892,
+      "noise_floor": 0.020588076824549925,
+      "significant": false
+    },
+    "changed-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.013449771795421839,
+        "minimum_seconds": 0.01334869908168912,
+        "maximum_seconds": 0.013475350802764297,
+        "raw_seconds": [
+          0.013469479978084564,
+          0.013449771795421839,
+          0.013475350802764297,
+          0.01334869908168912,
+          0.013393784873187542
+        ],
+        "relative_mad": 0.0019018172004349246
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.013590231072157621,
+        "minimum_seconds": 0.013567358022555709,
+        "maximum_seconds": 0.013654574053362012,
+        "raw_seconds": [
+          0.013567358022555709,
+          0.013654574053362012,
+          0.013590231072157621,
+          0.01360133197158575,
+          0.013576545054093003
+        ],
+        "relative_mad": 0.0010070482239744054
+      },
+      "relative_improvement": -0.010443246091624614,
+      "noise_floor": 0.02,
+      "significant": false
+    }
+  }
+}
+{
+  "status": "not-run",
+  "reason": "difference within 2%, measurement noise, or no improvement",
+  "workloads": {
+    "cold-start": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.046781031880527735,
+        "minimum_seconds": 0.046755663119256496,
+        "maximum_seconds": 0.04712158301845193,
+        "raw_seconds": [
+          0.04712158301845193,
+          0.046755663119256496,
+          0.04675687593407929,
+          0.04688283591531217,
+          0.046781031880527735
+        ],
+        "relative_mad": 0.0005422873385099034
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.047262141946703196,
+        "minimum_seconds": 0.047035367926582694,
+        "maximum_seconds": 0.04939893004484475,
+        "raw_seconds": [
+          0.047498936066403985,
+          0.047035367926582694,
+          0.047262141946703196,
+          0.047063833102583885,
+          0.04939893004484475
+        ],
+        "relative_mad": 0.004798217151821667
+      },
+      "relative_improvement": -0.010284297862521496,
+      "noise_floor": 0.02,
+      "significant": false
+    },
+    "unchanged-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.016017163870856166,
+        "minimum_seconds": 0.015984672121703625,
+        "maximum_seconds": 0.016067040152847767,
+        "raw_seconds": [
+          0.016067040152847767,
+          0.016047200886532664,
+          0.016005662037059665,
+          0.016017163870856166,
+          0.015984672121703625
+        ],
+        "relative_mad": 0.0018753017649492801
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.016388304997235537,
+        "minimum_seconds": 0.016370319994166493,
+        "maximum_seconds": 0.01642271992750466,
+        "raw_seconds": [
+          0.01638133078813553,
+          0.01642271992750466,
+          0.016370319994166493,
+          0.01640036702156067,
+          0.016388304997235537
+        ],
+        "relative_mad": 0.0007360141471108241
+      },
+      "relative_improvement": -0.02317146339837839,
+      "noise_floor": 0.02,
+      "significant": false
+    },
+    "changed-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.03666742192581296,
+        "minimum_seconds": 0.035848706029355526,
+        "maximum_seconds": 0.0380943319760263,
+        "raw_seconds": [
+          0.0380943319760263,
+          0.03671464300714433,
+          0.03666742192581296,
+          0.03657273086719215,
+          0.035848706029355526
+        ],
+        "relative_mad": 0.0025824302240935663
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.03935176902450621,
+        "minimum_seconds": 0.03791185305453837,
+        "maximum_seconds": 0.040842369897291064,
+        "raw_seconds": [
+          0.040842369897291064,
+          0.04070835397578776,
+          0.03935176902450621,
+          0.0393036468885839,
+          0.03791185305453837
+        ],
+        "relative_mad": 0.034473290144510095
+      },
+      "relative_improvement": -0.0732079583921752,
+      "noise_floor": 0.07411144073720732,
+      "significant": false
+    }
+  }
+}
+{
+  "status": "not-run",
+  "reason": "difference within 2%, measurement noise, or no improvement",
+  "workloads": {
+    "cold-start": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 2.014792083064094,
+        "minimum_seconds": 1.9781344179064035,
+        "maximum_seconds": 2.045870756963268,
+        "raw_seconds": [
+          2.029060914879665,
+          1.9781344179064035,
+          2.045870756963268,
+          2.014792083064094,
+          2.011899274075404
+        ],
+        "relative_mad": 0.007082036868970899
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 2.0057489711325616,
+        "minimum_seconds": 1.971063019009307,
+        "maximum_seconds": 2.025249473983422,
+        "raw_seconds": [
+          1.971063019009307,
+          2.025249473983422,
+          2.0057489711325616,
+          2.0189149260986596,
+          1.984447309980169
+        ],
+        "relative_mad": 0.009722304800609843
+      },
+      "relative_improvement": 0.004488359869758818,
+      "noise_floor": 0.033608683339161484,
+      "significant": false
+    },
+    "unchanged-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 1.472444789018482,
+        "minimum_seconds": 1.4517132369801402,
+        "maximum_seconds": 1.5079193459823728,
+        "raw_seconds": [
+          1.470522188115865,
+          1.472444789018482,
+          1.4739993610419333,
+          1.4517132369801402,
+          1.5079193459823728
+        ],
+        "relative_mad": 0.001305720198784883
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 1.4821186119224876,
+        "minimum_seconds": 1.4580349831376225,
+        "maximum_seconds": 1.5190617199987173,
+        "raw_seconds": [
+          1.5190617199987173,
+          1.4580349831376225,
+          1.486796231009066,
+          1.4714027082081884,
+          1.4821186119224876
+        ],
+        "relative_mad": 0.007230125597302482
+      },
+      "relative_improvement": -0.006569905354790295,
+      "noise_floor": 0.02,
+      "significant": false
+    },
+    "changed-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 10.01536097493954,
+        "minimum_seconds": 10.00540665187873,
+        "maximum_seconds": 10.037612540880218,
+        "raw_seconds": [
+          10.013487837975845,
+          10.037612540880218,
+          10.019767983118072,
+          10.00540665187873,
+          10.01536097493954
+        ],
+        "relative_mad": 0.00044002489671209554
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 10.036743781063706,
+        "minimum_seconds": 10.02830986189656,
+        "maximum_seconds": 10.055804125964642,
+        "raw_seconds": [
+          10.046833007130772,
+          10.055804125964642,
+          10.030908458866179,
+          10.02830986189656,
+          10.036743781063706
+        ],
+        "relative_mad": 0.0008403043209151494
+      },
+      "relative_improvement": -0.0021350010426652855,
+      "noise_floor": 0.02,
+      "significant": false
+    }
+  }
+}
+{
+  "status": "not-run",
+  "reason": "difference within 2%, measurement noise, or no improvement",
+  "workloads": {
+    "cold-start": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.06331697013229132,
+        "minimum_seconds": 0.0627746619284153,
+        "maximum_seconds": 0.06591233401559293,
+        "raw_seconds": [
+          0.064449094934389,
+          0.06591233401559293,
+          0.06312583386898041,
+          0.06331697013229132,
+          0.0627746619284153
+        ],
+        "relative_mad": 0.008564974014753814
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.06127960211597383,
+        "minimum_seconds": 0.06118348799645901,
+        "maximum_seconds": 0.06141837686300278,
+        "raw_seconds": [
+          0.06139948102645576,
+          0.06125309085473418,
+          0.06141837686300278,
+          0.06127960211597383,
+          0.06118348799645901
+        ],
+        "relative_mad": 0.0015684520818676918
+      },
+      "relative_improvement": 0.03217728220508198,
+      "noise_floor": 0.02026685219324301,
+      "significant": true
+    },
+    "unchanged-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.004586433991789818,
+        "minimum_seconds": 0.004519806941971183,
+        "maximum_seconds": 0.004641920793801546,
+        "raw_seconds": [
+          0.004641920793801546,
+          0.004597305087372661,
+          0.004519806941971183,
+          0.004586433991789818,
+          0.004549663979560137
+        ],
+        "relative_mad": 0.008017124479607266
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.005428805015981197,
+        "minimum_seconds": 0.005421070847660303,
+        "maximum_seconds": 0.0054573798552155495,
+        "raw_seconds": [
+          0.005422573070973158,
+          0.0054573798552155495,
+          0.005421070847660303,
+          0.005428805015981197,
+          0.005452520912513137
+        ],
+        "relative_mad": 0.0014246539152035422
+      },
+      "relative_improvement": -0.18366579039386788,
+      "noise_floor": 0.02,
+      "significant": false
+    },
+    "changed-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.014567749109119177,
+        "minimum_seconds": 0.014553803019225597,
+        "maximum_seconds": 0.014646959956735373,
+        "raw_seconds": [
+          0.014597565867006779,
+          0.014553803019225597,
+          0.014567749109119177,
+          0.014646959956735373,
+          0.014555604895576835
+        ],
+        "relative_mad": 0.00095732633704197
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.013900041114538908,
+        "minimum_seconds": 0.013889671070501208,
+        "maximum_seconds": 0.013924348168075085,
+        "raw_seconds": [
+          0.013911923859268427,
+          0.013889671070501208,
+          0.013893038034439087,
+          0.013900041114538908,
+          0.013924348168075085
+        ],
+        "relative_mad": 0.0007460441269380874
+      },
+      "relative_improvement": 0.045834671477304245,
+      "noise_floor": 0.02,
+      "significant": true
+    }
+  }
+}
+{
+  "status": "not-run",
+  "reason": "difference within 2%, measurement noise, or no improvement",
+  "workloads": {
+    "cold-start": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.21279161307029426,
+        "minimum_seconds": 0.2125361249782145,
+        "maximum_seconds": 0.215486248023808,
+        "raw_seconds": [
+          0.21395207312889397,
+          0.215486248023808,
+          0.2125361249782145,
+          0.21279161307029426,
+          0.21274457196705043
+        ],
+        "relative_mad": 0.0012006492567700959
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.21067451313138008,
+        "minimum_seconds": 0.21042797109112144,
+        "maximum_seconds": 0.21073068003170192,
+        "raw_seconds": [
+          0.2107279549818486,
+          0.21042797109112144,
+          0.21067451313138008,
+          0.21073068003170192,
+          0.21047198493033648
+        ],
+        "relative_mad": 0.0002666051032324667
+      },
+      "relative_improvement": 0.009949170027743537,
+      "noise_floor": 0.02,
+      "significant": false
+    },
+    "unchanged-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.11090134107507765,
+        "minimum_seconds": 0.10627572215162218,
+        "maximum_seconds": 0.11545729706995189,
+        "raw_seconds": [
+          0.11545729706995189,
+          0.11227062996476889,
+          0.11090134107507765,
+          0.10765491984784603,
+          0.10627572215162218
+        ],
+        "relative_mad": 0.029273056536204278
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.10870942799374461,
+        "minimum_seconds": 0.10397518100216985,
+        "maximum_seconds": 0.11184038687497377,
+        "raw_seconds": [
+          0.11184038687497377,
+          0.1109357769601047,
+          0.10870942799374461,
+          0.10596666089259088,
+          0.10397518100216985
+        ],
+        "relative_mad": 0.02523025970950336
+      },
+      "relative_improvement": 0.01976453179091109,
+      "noise_floor": 0.10900663249141528,
+      "significant": false
+    },
+    "changed-geometry": {
+      "baseline": {
+        "samples": 5,
+        "median_seconds": 0.13841946492902935,
+        "minimum_seconds": 0.1382026900537312,
+        "maximum_seconds": 0.13911302108317614,
+        "raw_seconds": [
+          0.13911302108317614,
+          0.13841946492902935,
+          0.13899377291090786,
+          0.1382026900537312,
+          0.13838219293393195
+        ],
+        "relative_mad": 0.0015660721951879211
+      },
+      "candidate": {
+        "samples": 5,
+        "median_seconds": 0.13746831403113902,
+        "minimum_seconds": 0.1368215181864798,
+        "maximum_seconds": 0.13854337204247713,
+        "raw_seconds": [
+          0.13854337204247713,
+          0.13810799806378782,
+          0.13746103108860552,
+          0.1368215181864798,
+          0.13746831403113902
+        ],
+        "relative_mad": 0.0046533198370637035
+      },
+      "relative_improvement": 0.006871511159055599,
+      "noise_floor": 0.02,
+      "significant": false
+    }
+  }
+}
