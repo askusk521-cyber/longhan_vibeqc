@@ -24,8 +24,7 @@ DensityFittingResponseWeightResources contract_density_fitting_response_weights(
   const auto matrix = n * n, metric_elements = a * a;
   for (const auto& term : terms) {
     if (term.density.size() != matrix || !std::isfinite(term.coulomb_coefficient) ||
-        !std::isfinite(term.exchange_coefficient) || term.coulomb_coefficient < 0 ||
-        term.exchange_coefficient < 0)
+        !std::isfinite(term.exchange_coefficient))
       throw std::invalid_argument("invalid HF density response term");
     for (std::size_t i = 0; i < n; ++i)
       for (std::size_t j = 0; j < n; ++j)
@@ -79,6 +78,7 @@ DensityFittingResponseWeightResources contract_density_fitting_response_weights(
         read(begin + p, std::span<double>(raw_block).subspan(p * matrix, matrix));
         for (std::size_t t = 0; t < terms.size(); ++t) {
           const double coefficient = terms[t].coulomb_coefficient;
+          if (coefficient == 0) continue;
           for (std::size_t ij = 0; ij < matrix; ++ij)
             weight_block[p * matrix + ij] +=
                 coefficient * terms[t].density[ij] * potentials[t * a + begin + p];

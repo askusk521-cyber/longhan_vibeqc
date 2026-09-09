@@ -2,6 +2,7 @@
 #define VIBEQC_SCF_FLEET_HPP
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -15,6 +16,7 @@
 namespace vibeqc::scf {
 
 struct CudaRhfBucketPlan;
+class PreparedFockPlan;
 
 struct FleetItemResult {
   vibeqc_status status{VIBEQC_STATUS_INTERNAL_ERROR};
@@ -110,6 +112,9 @@ class FleetPlan {
   std::vector<std::size_t> execution_order_;
   std::vector<std::size_t> bucket_ids_;
   std::vector<std::optional<HfWarmState>> warm_densities_;
+  // Independent CUDA sources are item-owned: a bad neighbor or a changed
+  // ragged bucket population cannot reinterpret another item's source slot.
+  std::vector<std::unique_ptr<PreparedFockPlan>> independent_fock_plans_;
   void retain_warm_state(std::size_t index, const core::System& system, const ScfResult& result);
   std::optional<CudaRhfShellClassProfile> last_shell_class_profile_;
   std::optional<CudaPppsQueueProfile> last_ppps_queue_profile_;

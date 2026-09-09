@@ -134,6 +134,7 @@ endif()
 add_library(vibeqc SHARED
   src/api/c_api_batch.cpp
   src/api/c_api_calculation.cpp
+  src/api/c_api_fock.cpp
   src/api/c_api_one_electron_gradient.cpp
   src/api/c_api_projection.cpp
   src/api/c_api_df_gradient.cpp
@@ -154,6 +155,10 @@ add_library(vibeqc SHARED
   src/scf/df_response_weights.cpp
   src/scf/fleet.cpp
   src/scf/fock_build.cpp
+  src/scf/fock_provider.cpp
+  src/scf/cuda_fock_provider.cpp
+  src/scf/fock_prepared.cpp
+  src/scf/fock_execution.cpp
   src/scf/rhf.cpp
 )
 
@@ -503,6 +508,7 @@ if(VIBEQC_ENABLE_CUDA)
 else()
   target_sources(vibeqc PRIVATE
     src/scf/cuda_density_fitting_stub.cpp
+    src/scf/cuda_direct_jk_stub.cpp
     src/scf/cuda_density_fitting_integrals_stub.cpp
     src/scf/cuda_weighted_eri_stub.cpp)
   target_compile_definitions(vibeqc PUBLIC VIBEQC_HAS_CUDA=0)
@@ -530,6 +536,14 @@ if(VIBEQC_BUILD_TESTS)
   target_link_libraries(vibeqc_fock_build_tests PRIVATE vibeqc)
   target_include_directories(vibeqc_fock_build_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   add_test(NAME vibeqc_fock_build_tests COMMAND vibeqc_fock_build_tests)
+  add_executable(vibeqc_fock_provider_tests tests/native/test_fock_provider.cpp)
+  target_link_libraries(vibeqc_fock_provider_tests PRIVATE vibeqc)
+  target_include_directories(vibeqc_fock_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME vibeqc_fock_provider_tests COMMAND vibeqc_fock_provider_tests)
+  add_executable(vibeqc_fock_api_tests tests/native/test_fock_api.cpp)
+  target_link_libraries(vibeqc_fock_api_tests PRIVATE vibeqc)
+  # CPU by default; invoke the explicit CUDA argument only inside a GPU job.
+  add_test(NAME vibeqc_fock_api_tests COMMAND vibeqc_fock_api_tests)
 
   add_executable(vibeqc_native_tests tests/native/test_rhf.cpp)
   target_link_libraries(vibeqc_native_tests PRIVATE vibeqc)
@@ -604,6 +618,17 @@ if(VIBEQC_BUILD_TESTS)
 
   # This test requires a tuned registry and deliberately rejects the portable
   # stub used when AOT shells are disabled. Other CUDA tests use either build.
+  if(VIBEQC_ENABLE_CUDA)
+    add_executable(vibeqc_cuda_fock_provider_tests tests/native/test_cuda_fock_provider.cpp)
+    target_link_libraries(vibeqc_cuda_fock_provider_tests PRIVATE vibeqc CUDA::cudart)
+    target_include_directories(vibeqc_cuda_fock_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_cuda_fock_provider_tests COMMAND vibeqc_cuda_fock_provider_tests)
+    add_executable(vibeqc_cuda_fock_composition_tests tests/native/test_cuda_fock_composition.cpp)
+    target_link_libraries(vibeqc_cuda_fock_composition_tests PRIVATE vibeqc)
+    target_include_directories(vibeqc_cuda_fock_composition_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_cuda_fock_composition_tests COMMAND vibeqc_cuda_fock_composition_tests)
+  endif()
+
   if(VIBEQC_ENABLE_CUDA AND VIBEQC_ENABLE_AOT_SHELLS)
     add_executable(vibeqc_aot_profile_tests tests/native/test_aot_profile.cpp)
     target_link_libraries(vibeqc_aot_profile_tests PRIVATE vibeqc CUDA::cudart)

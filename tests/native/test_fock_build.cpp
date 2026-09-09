@@ -232,10 +232,10 @@ void verify_unrestricted_coefficients_and_capabilities() {
               cpu.maximum_angular_momentum == 3 && cpu.cartesian && cpu.spherical &&
               cpu.independent_terms && cpu.arbitrary_coefficients && !cpu.legacy_adapter_only,
           "CPU exact capabilities misrepresent the executable contract");
-  require(!cuda.independent_terms && !cuda.arbitrary_coefficients && !cuda.legacy_adapter_only,
-          "CUDA advertised independent terms before its fused consumer supports them");
-  require(fitted.legacy_adapter_only && !fitted.independent_terms && !fitted.arbitrary_coefficients,
-          "legacy fitted adapter advertised a migrated independent provider");
+  require(cuda.independent_terms && cuda.arbitrary_coefficients && !cuda.legacy_adapter_only,
+          "CUDA capabilities omit the independent provider boundary");
+  require(!fitted.legacy_adapter_only && fitted.independent_terms && fitted.arbitrary_coefficients,
+          "CUDA DF capabilities omit independent selection and signed response");
   require_rejected(
       [&] {
         (void)fock_provider_capabilities(static_cast<FockApproximation>(99), FockBackend::Cpu);
@@ -291,8 +291,9 @@ void verify_preflight_and_approximation_identity() {
   for (const bool exchange : {false, true}) {
     auto mixed = exact_spec;
     (exchange ? mixed.exchange : mixed.coulomb).approximation = FockApproximation::DensityFitted;
-    require_rejected([&] { (void)resolve_fock_build(mixed, FockBackend::Cuda); },
-                     "unimplemented mixed exact/DF approximation was silently selected");
+    const auto resolved = resolve_fock_build(mixed, FockBackend::Cuda);
+    require(resolved.spec == mixed && resolved.schedule == FockSchedule::CudaIndependent,
+            "independent CUDA selection changed the requested Hamiltonian");
   }
   const auto fitted = resolve_fock_build(
       make_hf_fock_spec(FockSpin::Restricted, FockApproximation::DensityFitted), FockBackend::Cuda);
@@ -314,12 +315,14 @@ void verify_preflight_and_approximation_identity() {
 
   auto custom_cuda = exact_spec;
   custom_cuda.exchange.coefficient = -0.2;
-  require_rejected([&] { (void)resolve_fock_build(custom_cuda, FockBackend::Cuda); },
-                   "CUDA fixed-HF schedule accepted general exchange coefficients");
+  require(
+      resolve_fock_build(custom_cuda, FockBackend::Cuda).schedule == FockSchedule::CudaIndependent,
+      "custom CUDA coefficients did not select independent execution");
   custom_cuda = exact_spec;
   custom_cuda.exchange.present = false;
-  require_rejected([&] { (void)resolve_fock_build(custom_cuda, FockBackend::Cuda); },
-                   "CUDA fixed-HF schedule silently computed unrequested K");
+  require(
+      resolve_fock_build(custom_cuda, FockBackend::Cuda).schedule == FockSchedule::CudaIndependent,
+      "absent CUDA K did not select independent execution");
 }
 
 vibeqc::core::System hydrogen_molecule() {

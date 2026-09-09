@@ -24,9 +24,12 @@
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/cuda_df_gradient.hpp"
+#include "scf/cuda_fock_provider.hpp"
 #include "scf/cuda_one_electron_gradient.hpp"
 #include "scf/density_fitting.hpp"
 #include "scf/fock_build.hpp"
+#include "scf/fock_prepared.hpp"
+#include "scf/fock_provider.hpp"
 #include "scf/proposals.hpp"
 
 namespace vibeqc::scf {
@@ -314,12 +317,10 @@ Matrix energy_weighted_density(const Matrix& coefficients, const std::vector<dou
   return weighted;
 }
 
-std::pair<Matrix, Matrix> build_uhf_focks(const ResolvedFockBuild& strategy, const Matrix& hcore,
-                                          const std::vector<double>& eri,
-                                          const Matrix& alpha_density, const Matrix& beta_density,
-                                          std::size_t n) {
-  const auto jk = build_exact_direct_jk(strategy, n, eri, alpha_density, beta_density);
-  auto fock = assemble_fock(strategy, hcore, jk);
+template <class Plan>
+std::pair<Matrix, Matrix> build_uhf_focks(const Plan& plan, const Matrix& hcore,
+                                          const Matrix& alpha_density, const Matrix& beta_density) {
+  auto fock = assemble_fock(plan.strategy(), hcore, plan.build(alpha_density, beta_density));
   return {std::move(fock.alpha), std::move(fock.beta)};
 }
 
@@ -352,9 +353,9 @@ std::pair<Matrix, Matrix> split_spin_matrices(const Matrix& joined, std::size_t 
   };
 }
 
-Matrix build_fock(const ResolvedFockBuild& strategy, const Matrix& hcore,
-                  const std::vector<double>& eri, const Matrix& density, std::size_t n) {
-  return assemble_fock(strategy, hcore, build_exact_direct_jk(strategy, n, eri, density)).alpha;
+template <class Plan>
+Matrix build_fock(const Plan& plan, const Matrix& hcore, const Matrix& density) {
+  return assemble_fock(plan.strategy(), hcore, plan.build(density)).alpha;
 }
 
 double electronic_energy(const Matrix& density, const Matrix& hcore, const Matrix& fock) {
@@ -481,6 +482,16 @@ std::size_t integral_numeric_capacity(const DensityFittingScfData& data) noexcep
       integral_numeric_capacity(data.one_electron),
       runtime::vector_capacities(data.raw.metric, data.raw.three_center, data.raw.metric_derivative,
                                  data.raw.three_center_derivative, data.three_center.values));
+}
+
+/** Count the actual owner once when exact and fitted providers share AO data. */
+struct CpuScfIntegralDataView {
+  const integrals::IntegralData& orbital;
+  const DensityFittingScfData* fitted;
+};
+std::size_t integral_numeric_capacity(CpuScfIntegralDataView data) noexcept {
+  return data.fitted ? integral_numeric_capacity(*data.fitted)
+                     : integral_numeric_capacity(data.orbital);
 }
 
 template <class Data, class... Vectors>
@@ -665,80 +676,78 @@ Matrix safeguarded_update(const ScfOptions& options, std::uint64_t generation, u
   return baseline;
 }
 
-std::vector<double> analytic_forces(const ResolvedFockBuild& strategy,
-                                    const integrals::IntegralData& ints, const Matrix& density,
-                                    const Matrix& weighted_density) {
+template <class Plan>
+std::vector<double> analytic_forces(const Plan& plan, const integrals::IntegralData& ints,
+                                    const Matrix& density, const Matrix& weighted_density) {
   const std::size_t n = ints.nbf;
+  const auto two_electron = plan.energy_derivative(density);
   std::vector<double> forces(ints.ncoord, 0.0);
   for (std::size_t coordinate = 0; coordinate < ints.ncoord; ++coordinate) {
     const double* ds = ints.overlap_derivative.data() + coordinate * n * n;
     const double* dh = ints.hcore_derivative.data() + coordinate * n * n;
-    const double* deri = ints.eri_derivative.data() + coordinate * n * n * n * n;
     double derivative = ints.nuclear_repulsion_derivative[coordinate];
     for (std::size_t element = 0; element < n * n; ++element) {
       derivative += density[element] * dh[element];
       derivative -= weighted_density[element] * ds[element];
     }
-    derivative += contract_exact_direct_energy_derivative(
-        strategy, n, std::span<const double>(deri, n * n * n * n), density);
+    derivative += two_electron[coordinate];
     forces[coordinate] = -derivative;
   }
   return forces;
 }
 
-std::vector<double> analytic_uhf_forces(const ResolvedFockBuild& strategy,
-                                        const integrals::IntegralData& ints,
+template <class Plan>
+std::vector<double> analytic_uhf_forces(const Plan& plan, const integrals::IntegralData& ints,
                                         const Matrix& alpha_density, const Matrix& beta_density,
                                         const Matrix& alpha_weighted_density,
                                         const Matrix& beta_weighted_density) {
   const std::size_t n = ints.nbf;
+  const auto two_electron = plan.energy_derivative(alpha_density, beta_density);
   std::vector<double> forces(ints.ncoord, 0.0);
   for (std::size_t coordinate = 0; coordinate < ints.ncoord; ++coordinate) {
     const double* ds = ints.overlap_derivative.data() + coordinate * n * n;
     const double* dh = ints.hcore_derivative.data() + coordinate * n * n;
-    const double* deri = ints.eri_derivative.data() + coordinate * n * n * n * n;
     double derivative = ints.nuclear_repulsion_derivative[coordinate];
     for (std::size_t element = 0; element < n * n; ++element) {
       derivative += (alpha_density[element] + beta_density[element]) * dh[element];
       derivative -=
           (alpha_weighted_density[element] + beta_weighted_density[element]) * ds[element];
     }
-    derivative += contract_exact_direct_energy_derivative(
-        strategy, n, std::span<const double>(deri, n * n * n * n), alpha_density, beta_density);
+    derivative += two_electron[coordinate];
     forces[coordinate] = -derivative;
   }
   return forces;
 }
 
-void finalize_scf(const ResolvedFockBuild& strategy, const integrals::IntegralData& ints,
+template <class Plan>
+void finalize_scf(const Plan& plan, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t occupied, Matrix& density,
                   bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
-  Matrix final_fock = build_fock(strategy, ints.hcore, ints.eri, density, n);
+  Matrix final_fock = build_fock(plan, ints.hcore, density);
   EigenResult orbitals = generalized_eigen(final_fock, orthogonalizer, n);
   density = density_from_orbitals(orbitals.vectors, n, occupied);
-  final_fock = build_fock(strategy, ints.hcore, ints.eri, density, n);
+  final_fock = build_fock(plan, ints.hcore, density);
   result.energy = electronic_energy(density, ints.hcore, final_fock) + ints.nuclear_repulsion;
   if (compute_forces) {
     const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
-    result.forces = analytic_forces(strategy, ints, density, weighted);
+    result.forces = analytic_forces(plan, ints, density, weighted);
   }
   result.density = density;
 }
 
-void finalize_uhf(const ResolvedFockBuild& strategy, const integrals::IntegralData& ints,
+template <class Plan>
+void finalize_uhf(const Plan& plan, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t alpha_occupied,
                   std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
                   bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
-  auto [alpha_fock, beta_fock] =
-      build_uhf_focks(strategy, ints.hcore, ints.eri, alpha_density, beta_density, n);
+  auto [alpha_fock, beta_fock] = build_uhf_focks(plan, ints.hcore, alpha_density, beta_density);
   EigenResult alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
   EigenResult beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
   alpha_density = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
   beta_density = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
-  std::tie(alpha_fock, beta_fock) =
-      build_uhf_focks(strategy, ints.hcore, ints.eri, alpha_density, beta_density, n);
+  std::tie(alpha_fock, beta_fock) = build_uhf_focks(plan, ints.hcore, alpha_density, beta_density);
   result.energy =
       uhf_electronic_energy(alpha_density, beta_density, ints.hcore, alpha_fock, beta_fock) +
       ints.nuclear_repulsion;
@@ -747,8 +756,8 @@ void finalize_uhf(const ResolvedFockBuild& strategy, const integrals::IntegralDa
         alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
     const Matrix beta_weighted =
         energy_weighted_density(beta_orbitals.vectors, beta_orbitals.values, n, beta_occupied, 1.0);
-    result.forces = analytic_uhf_forces(strategy, ints, alpha_density, beta_density, alpha_weighted,
-                                        beta_weighted);
+    result.forces =
+        analytic_uhf_forces(plan, ints, alpha_density, beta_density, alpha_weighted, beta_weighted);
   }
   result.density = concatenate(alpha_density, beta_density);
 }
@@ -877,12 +886,10 @@ void bind_generated_df(DensityFittingScfData& data, const core::System& orbital,
 #endif
 }
 
-DensityFittingScfData prepare_density_fitting_data(const core::System& system,
-                                                   const core::System& auxiliary_system,
-                                                   double relative_threshold,
-                                                   int cuda_device_id = -1,
-                                                   std::size_t output_budget_bytes = 0U,
-                                                   bool include_derivatives = true) {
+[[maybe_unused]] DensityFittingScfData prepare_density_fitting_data(
+    const core::System& system, const core::System& auxiliary_system, double relative_threshold,
+    int cuda_device_id = -1, std::size_t output_budget_bytes = 0U,
+    bool include_derivatives = true) {
   // A non-negative device selects the CUDA Cartesian evaluator for the raw
   // metric/three-center tensors.  The default keeps CPU-reference callers
   // entirely on the existing oracle path.
@@ -1065,10 +1072,12 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
   return gradient;
 }
 
-void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matrix& orthogonalizer,
-                                  std::size_t occupied, Matrix& density, const ScfOptions& options,
-                                  ScfResult& result, CudaDensityFittingJkPlan* cuda_plan = nullptr,
-                                  std::size_t cuda_system = 0) {
+[[maybe_unused]] void finalize_density_fitting_rhf(const DensityFittingScfData& data,
+                                                   const Matrix& orthogonalizer,
+                                                   std::size_t occupied, Matrix& density,
+                                                   const ScfOptions& options, ScfResult& result,
+                                                   CudaDensityFittingJkPlan* cuda_plan = nullptr,
+                                                   std::size_t cuda_system = 0) {
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
 #endif
@@ -1222,12 +1231,11 @@ void finalize_density_fitting_rhf(const DensityFittingScfData& data, const Matri
   result.density = density;
 }
 
-void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matrix& orthogonalizer,
-                                  std::size_t alpha_occupied, std::size_t beta_occupied,
-                                  Matrix& alpha_density, Matrix& beta_density,
-                                  const ScfOptions& options, ScfResult& result,
-                                  CudaDensityFittingJkPlan* cuda_plan = nullptr,
-                                  std::size_t cuda_system = 0) {
+[[maybe_unused]] void finalize_density_fitting_uhf(
+    const DensityFittingScfData& data, const Matrix& orthogonalizer, std::size_t alpha_occupied,
+    std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
+    const ScfOptions& options, ScfResult& result, CudaDensityFittingJkPlan* cuda_plan = nullptr,
+    std::size_t cuda_system = 0) {
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
 #endif
@@ -1421,20 +1429,11 @@ void validate_hf_warm_density(const core::System& source, vibeqc_method method,
   }
 }
 
-ScfResult run_rhf(const core::System& system, const ScfOptions& options,
-                  const std::vector<double>* initial_density) {
-  // Resolve before integral allocation; iteration, final rebuild, and forces share this plan.
-  const ResolvedFockBuild strategy =
-      options.resolved_fock_build
-          ? *options.resolved_fock_build
-          : resolve_fock_build(make_hf_fock_spec(FockSpin::Restricted), FockBackend::Cpu,
-                               options.screening_tolerance);
-  require_exact_direct_strategy(strategy, FockSpin::Restricted, FockBackend::Cpu);
-  if (strategy.screening_tolerance != options.screening_tolerance) {
-    throw std::invalid_argument("resolved Fock screening differs from SCF options");
-  }
-  const integrals::IntegralData ints =
-      integrals::build_cartesian_integrals(system, options.compute_forces);
+template <class Plan>
+static ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& options,
+                                   const integrals::IntegralData& ints, const Plan& plan,
+                                   const DensityFittingScfData* fitted,
+                                   const std::vector<double>* initial_density) {
   const std::size_t n = ints.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
@@ -1458,15 +1457,15 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
   double previous_energy = std::numeric_limits<double>::infinity();
   for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
     ++result.fock_builds;
-    const Matrix fock = build_fock(strategy, ints.hcore, ints.eri, density, n);
+    const Matrix fock = build_fock(plan, ints.hcore, density);
     const double energy = electronic_energy(density, ints.hcore, fock) + ints.nuclear_repulsion;
     const Matrix residual = commutator_residual(fock, density, ints.overlap, n);
     const Matrix effective_fock = diis.update(fock, residual);
     orbitals = generalized_eigen(effective_fock, orthogonalizer, n);
     Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
 
-    sample_scf_buffers(ints, diis, orthogonalizer, density, fock, residual, effective_fock,
-                       orbitals.values, orbitals.vectors, next_density);
+    sample_scf_buffers(CpuScfIntegralDataView{ints, fitted}, diis, orthogonalizer, density, fock,
+                       residual, effective_fock, orbitals.values, orbitals.vectors, next_density);
 
     result.iterations = iteration;
     result.energy = energy;
@@ -1482,7 +1481,7 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
           options, generation, iteration, ints.overlap, density, fock, residual,
           std::move(next_density), {static_cast<unsigned>(system.electron_count)}, 2.0, result,
           diis, proposal_failures, terminal, [&](const Matrix& trial) {
-            const Matrix trial_fock = build_fock(strategy, ints.hcore, ints.eri, trial, n);
+            const Matrix trial_fock = build_fock(plan, ints.hcore, trial);
             return std::make_pair(
                 electronic_energy(trial, ints.hcore, trial_fock) + ints.nuclear_repulsion,
                 commutator_residual(trial_fock, trial, ints.overlap, n));
@@ -1506,24 +1505,15 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
 
   // Rebuild and diagonalize the un-extrapolated converged Fock matrix. The
   // resulting orbitals define the energy-weighted density in the Pulay term.
-  finalize_scf(strategy, ints, orthogonalizer, occupied, density, options.compute_forces, result);
+  finalize_scf(plan, ints, orthogonalizer, occupied, density, options.compute_forces, result);
   return result;
 }
 
-ScfResult run_uhf(const core::System& system, const ScfOptions& options,
-                  const std::vector<double>* initial_density) {
-  // Resolve before integral allocation; iteration, final rebuild, and forces share this plan.
-  const ResolvedFockBuild strategy =
-      options.resolved_fock_build
-          ? *options.resolved_fock_build
-          : resolve_fock_build(make_hf_fock_spec(FockSpin::Unrestricted), FockBackend::Cpu,
-                               options.screening_tolerance);
-  require_exact_direct_strategy(strategy, FockSpin::Unrestricted, FockBackend::Cpu);
-  if (strategy.screening_tolerance != options.screening_tolerance) {
-    throw std::invalid_argument("resolved Fock screening differs from SCF options");
-  }
-  const integrals::IntegralData ints =
-      integrals::build_cartesian_integrals(system, options.compute_forces);
+template <class Plan>
+static ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& options,
+                                   const integrals::IntegralData& ints, const Plan& plan,
+                                   const DensityFittingScfData* fitted,
+                                   const std::vector<double>* initial_density) {
   const std::size_t n = ints.nbf;
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (alpha_occupied > n || beta_occupied > n) {
@@ -1550,8 +1540,7 @@ ScfResult run_uhf(const core::System& system, const ScfOptions& options,
   double previous_energy = std::numeric_limits<double>::infinity();
   for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
     ++result.fock_builds;
-    auto [alpha_fock, beta_fock] =
-        build_uhf_focks(strategy, ints.hcore, ints.eri, alpha_density, beta_density, n);
+    auto [alpha_fock, beta_fock] = build_uhf_focks(plan, ints.hcore, alpha_density, beta_density);
     const double energy =
         uhf_electronic_energy(alpha_density, beta_density, ints.hcore, alpha_fock, beta_fock) +
         ints.nuclear_repulsion;
@@ -1566,10 +1555,11 @@ ScfResult run_uhf(const core::System& system, const ScfOptions& options,
     Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
     Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
 
-    sample_scf_buffers(ints, diis, orthogonalizer, alpha_density, beta_density, alpha_fock,
-                       beta_fock, alpha_residual, beta_residual, physical_fock, physical_residual,
-                       effective_joined, alpha_orbitals.values, alpha_orbitals.vectors,
-                       beta_orbitals.values, beta_orbitals.vectors, next_alpha, next_beta);
+    sample_scf_buffers(CpuScfIntegralDataView{ints, fitted}, diis, orthogonalizer, alpha_density,
+                       beta_density, alpha_fock, beta_fock, alpha_residual, beta_residual,
+                       physical_fock, physical_residual, effective_joined, alpha_orbitals.values,
+                       alpha_orbitals.vectors, beta_orbitals.values, beta_orbitals.vectors,
+                       next_alpha, next_beta);
 
     result.iterations = iteration;
     result.energy = energy;
@@ -1588,7 +1578,7 @@ ScfResult run_uhf(const core::System& system, const ScfOptions& options,
           {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)}, 1.0,
           result, diis, proposal_failures, terminal, [&](const Matrix& trial) {
             const auto [a, b] = split_spin_matrices(trial, n * n);
-            const auto [fa, fb] = build_uhf_focks(strategy, ints.hcore, ints.eri, a, b, n);
+            const auto [fa, fb] = build_uhf_focks(plan, ints.hcore, a, b);
             return std::make_pair(
                 uhf_electronic_energy(a, b, ints.hcore, fa, fb) + ints.nuclear_repulsion,
                 concatenate(commutator_residual(fa, a, ints.overlap, n),
@@ -1616,198 +1606,91 @@ ScfResult run_uhf(const core::System& system, const ScfOptions& options,
 
   // As in RHF, rebuild from the un-extrapolated converged spin Fock matrices
   // before forming orbital-weighted Pulay densities and analytic forces.
-  finalize_uhf(strategy, ints, orthogonalizer, alpha_occupied, beta_occupied, alpha_density,
+  finalize_uhf(plan, ints, orthogonalizer, alpha_occupied, beta_occupied, alpha_density,
                beta_density, options.compute_forces, result);
   return result;
+}
+
+ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOptions& options,
+                                     const std::vector<double>* initial_density) {
+  const auto strategy = fock_strategy_for_execution(options);
+  // A source prepared with first derivatives also owns all value data. An
+  // energy-only replay may reuse it without evaluating a response, but no
+  // other semantic or execution change can reuse this immutable owner.
+  auto required = plan.strategy().spec;
+  required.derivative_order = strategy.spec.derivative_order;
+  if (strategy.spec.derivative_order > plan.strategy().spec.derivative_order ||
+      strategy != resolve_fock_build(required, plan.strategy().backend,
+                                     plan.strategy().screening_tolerance,
+                                     plan.strategy().metric_relative_threshold))
+    throw std::invalid_argument("prepared Fock execution controls changed");
+  const auto& system = plan.system();
+  if (strategy.spec.spin == FockSpin::Restricted &&
+      (system.electron_count <= 0 || system.electron_count % 2 || system.multiplicity != 1))
+    throw std::invalid_argument("restricted Fock SCF requires a closed-shell electron count");
+  return strategy.spec.spin == FockSpin::Unrestricted
+             ? run_uhf_host_plan(system, options, plan.one_electron(), plan, plan.cpu_fitted_data(),
+                                 initial_density)
+             : run_rhf_host_plan(system, options, plan.one_electron(), plan, plan.cpu_fitted_data(),
+                                 initial_density);
+}
+
+ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* auxiliary,
+                                const ScfOptions& options,
+                                const std::vector<double>* initial_density) {
+  const auto strategy = fock_strategy_for_execution(options);
+  if (strategy.backend != FockBackend::Cpu)
+    throw std::invalid_argument("CPU Fock entry requires a CPU strategy");
+  const PreparedFockPlan plan(system, auxiliary, strategy);
+  return run_prepared_fock_strategy(plan, options, initial_density);
+}
+
+ScfResult run_rhf(const core::System& system, const ScfOptions& options,
+                  const std::vector<double>* initial_density) {
+  ScfOptions execution = options;
+  if (!execution.resolved_fock_build)
+    execution.resolved_fock_build = resolve_fock_build(
+        make_hf_fock_spec(FockSpin::Restricted), FockBackend::Cpu, options.screening_tolerance);
+  require_exact_direct_strategy(*execution.resolved_fock_build, FockSpin::Restricted,
+                                FockBackend::Cpu);
+  return run_cpu_fock_strategy(system, nullptr, execution, initial_density);
 }
 
 ScfResult run_rhf_density_fitting(const core::System& system, const core::System& auxiliary_system,
                                   const ScfOptions& options,
                                   const std::vector<double>* initial_density) {
-  const DensityFittingScfData data = prepare_density_fitting_data(
-      system, auxiliary_system, options.density_fitting_relative_threshold, -1, 0U,
-      options.compute_forces);
-  const std::size_t n = data.one_electron.nbf;
-  const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
-  if (occupied > n) {
-    throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
-  }
-  const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
-  EigenResult orbitals;
-  Matrix density = prepare_initial_density(system, data.one_electron, orthogonalizer, occupied,
-                                           initial_density, orbitals);
-  if (options.strict_initial_density && initial_density) {
-    validate_seed(data.one_electron.overlap, *initial_density, n,
-                  {static_cast<unsigned>(system.electron_count)}, 2.0);
-    density = *initial_density;
-  }
-  Diis diis(options.diis_history);
-  const auto generation = new_scf_generation(options);
-  unsigned proposal_failures = 0;
+  ScfOptions execution = options;
+  const auto expected = resolve_fock_build(
+      make_hf_fock_spec(FockSpin::Restricted, FockApproximation::DensityFitted), FockBackend::Cpu,
+      options.screening_tolerance, options.density_fitting_relative_threshold);
+  if (execution.resolved_fock_build && *execution.resolved_fock_build != expected)
+    throw std::invalid_argument("legacy DF HF entry requires its resolved standard HF strategy");
+  execution.resolved_fock_build = expected;
+  return run_cpu_fock_strategy(system, &auxiliary_system, execution, initial_density);
+}
 
-  ScfResult result;
-  result.initial_density_used = initial_density != nullptr;
-  double previous_energy = std::numeric_limits<double>::infinity();
-  for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
-    ++result.fock_builds;
-    const Matrix fock =
-        build_density_fitting_rhf_fock(data.one_electron.hcore, data.three_center, density);
-    const double energy = electronic_energy(density, data.one_electron.hcore, fock) +
-                          data.one_electron.nuclear_repulsion;
-    const Matrix residual = commutator_residual(fock, density, data.one_electron.overlap, n);
-    const Matrix effective_fock = diis.update(fock, residual);
-    orbitals = generalized_eigen(effective_fock, orthogonalizer, n);
-    Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
-
-    sample_scf_buffers(data, diis, orthogonalizer, density, fock, residual, effective_fock,
-                       orbitals.values, orbitals.vectors, next_density);
-
-    result.iterations = iteration;
-    result.energy = energy;
-    result.energy_change = std::isfinite(previous_energy) ? std::abs(energy - previous_energy)
-                                                          : std::numeric_limits<double>::infinity();
-    result.density_rms = density_rms(next_density, density);
-    const bool terminal = iteration > 1 && result.energy_change < options.energy_tolerance &&
-                          result.density_rms < options.density_tolerance &&
-                          (!options.hooks || !options.hooks->propose ||
-                           residual_rms(residual) < options.density_tolerance);
-    if (options.hooks) {
-      next_density = safeguarded_update(
-          options, generation, iteration, data.one_electron.overlap, density, fock, residual,
-          std::move(next_density), {static_cast<unsigned>(system.electron_count)}, 2.0, result,
-          diis, proposal_failures, terminal, [&](const Matrix& trial) {
-            const Matrix trial_fock =
-                build_density_fitting_rhf_fock(data.one_electron.hcore, data.three_center, trial);
-            return std::make_pair(
-                electronic_energy(trial, data.one_electron.hcore, trial_fock) +
-                    data.one_electron.nuclear_repulsion,
-                commutator_residual(trial_fock, trial, data.one_electron.overlap, n));
-          });
-    }
-    if (terminal) {
-      density = std::move(next_density);
-      result.converged = true;
-      break;
-    }
-    previous_energy = energy;
-    density = std::move(next_density);
-  }
-
-  if (!result.converged) {
-    // Failed traces retain the last iterate, never a converged reference.
-    result.density = density;
-    return result;
-  }
-  result.fock_builds += 2;  // Physical rebuilds performed by finalization.
-
-  finalize_density_fitting_rhf(data, orthogonalizer, occupied, density, options, result);
-  return result;
+ScfResult run_uhf(const core::System& system, const ScfOptions& options,
+                  const std::vector<double>* initial_density) {
+  ScfOptions execution = options;
+  if (!execution.resolved_fock_build)
+    execution.resolved_fock_build = resolve_fock_build(
+        make_hf_fock_spec(FockSpin::Unrestricted), FockBackend::Cpu, options.screening_tolerance);
+  require_exact_direct_strategy(*execution.resolved_fock_build, FockSpin::Unrestricted,
+                                FockBackend::Cpu);
+  return run_cpu_fock_strategy(system, nullptr, execution, initial_density);
 }
 
 ScfResult run_uhf_density_fitting(const core::System& system, const core::System& auxiliary_system,
                                   const ScfOptions& options,
                                   const std::vector<double>* initial_density) {
-  const DensityFittingScfData data = prepare_density_fitting_data(
-      system, auxiliary_system, options.density_fitting_relative_threshold, -1, 0U,
-      options.compute_forces);
-  const std::size_t n = data.one_electron.nbf;
-  const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
-  if (alpha_occupied > n || beta_occupied > n) {
-    throw std::runtime_error("basis has fewer orbitals than required UHF spin occupations");
-  }
-  const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
-  EigenResult alpha_orbitals;
-  EigenResult beta_orbitals;
-  auto [alpha_density, beta_density] =
-      prepare_initial_uhf_density(data.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
-                                  initial_density, alpha_orbitals, beta_orbitals);
-  if (options.strict_initial_density && initial_density) {
-    validate_seed(data.one_electron.overlap, *initial_density, n,
-                  {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)},
-                  1.0);
-    std::tie(alpha_density, beta_density) = split_spin_matrices(*initial_density, n * n);
-  }
-  Diis diis(options.diis_history);
-  const auto generation = new_scf_generation(options);
-  unsigned proposal_failures = 0;
-
-  ScfResult result;
-  result.initial_density_used = initial_density != nullptr;
-  double previous_energy = std::numeric_limits<double>::infinity();
-  for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
-    ++result.fock_builds;
-    auto [alpha_fock, beta_fock] = build_density_fitting_uhf_focks(
-        data.one_electron.hcore, data.three_center, alpha_density, beta_density);
-    const double energy = uhf_electronic_energy(alpha_density, beta_density,
-                                                data.one_electron.hcore, alpha_fock, beta_fock) +
-                          data.one_electron.nuclear_repulsion;
-    const Matrix alpha_residual =
-        commutator_residual(alpha_fock, alpha_density, data.one_electron.overlap, n);
-    const Matrix beta_residual =
-        commutator_residual(beta_fock, beta_density, data.one_electron.overlap, n);
-    const Matrix physical_fock = concatenate(alpha_fock, beta_fock);
-    const Matrix physical_residual = concatenate(alpha_residual, beta_residual);
-    const Matrix effective_joined = diis.update(physical_fock, physical_residual);
-    std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, n * n);
-    alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-    beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
-    Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
-    Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
-
-    sample_scf_buffers(data, diis, orthogonalizer, alpha_density, beta_density, alpha_fock,
-                       beta_fock, alpha_residual, beta_residual, physical_fock, physical_residual,
-                       effective_joined, alpha_orbitals.values, alpha_orbitals.vectors,
-                       beta_orbitals.values, beta_orbitals.vectors, next_alpha, next_beta);
-
-    result.iterations = iteration;
-    result.energy = energy;
-    result.energy_change = std::isfinite(previous_energy) ? std::abs(energy - previous_energy)
-                                                          : std::numeric_limits<double>::infinity();
-    result.density_rms =
-        density_rms(concatenate(next_alpha, next_beta), concatenate(alpha_density, beta_density));
-    const bool terminal = iteration > 1 && result.energy_change < options.energy_tolerance &&
-                          result.density_rms < options.density_tolerance &&
-                          (!options.hooks || !options.hooks->propose ||
-                           residual_rms(physical_residual) < options.density_tolerance);
-    if (options.hooks) {
-      const Matrix next = safeguarded_update(
-          options, generation, iteration, data.one_electron.overlap,
-          concatenate(alpha_density, beta_density), physical_fock, physical_residual,
-          concatenate(next_alpha, next_beta),
-          {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)}, 1.0,
-          result, diis, proposal_failures, terminal, [&](const Matrix& trial) {
-            const auto [a, b] = split_spin_matrices(trial, n * n);
-            const auto [fa, fb] =
-                build_density_fitting_uhf_focks(data.one_electron.hcore, data.three_center, a, b);
-            return std::make_pair(
-                uhf_electronic_energy(a, b, data.one_electron.hcore, fa, fb) +
-                    data.one_electron.nuclear_repulsion,
-                concatenate(commutator_residual(fa, a, data.one_electron.overlap, n),
-                            commutator_residual(fb, b, data.one_electron.overlap, n)));
-          });
-      std::tie(next_alpha, next_beta) = split_spin_matrices(next, n * n);
-    }
-    if (terminal) {
-      alpha_density = std::move(next_alpha);
-      beta_density = std::move(next_beta);
-      result.converged = true;
-      break;
-    }
-    previous_energy = energy;
-    alpha_density = std::move(next_alpha);
-    beta_density = std::move(next_beta);
-  }
-
-  if (!result.converged) {
-    // Failed traces retain the last iterate, never a converged reference.
-    result.density = concatenate(alpha_density, beta_density);
-    return result;
-  }
-  result.fock_builds += 2;  // Physical rebuilds performed by finalization.
-
-  finalize_density_fitting_uhf(data, orthogonalizer, alpha_occupied, beta_occupied, alpha_density,
-                               beta_density, options, result);
-  return result;
+  ScfOptions execution = options;
+  const auto expected = resolve_fock_build(
+      make_hf_fock_spec(FockSpin::Unrestricted, FockApproximation::DensityFitted), FockBackend::Cpu,
+      options.screening_tolerance, options.density_fitting_relative_threshold);
+  if (execution.resolved_fock_build && *execution.resolved_fock_build != expected)
+    throw std::invalid_argument("legacy DF HF entry requires its resolved standard HF strategy");
+  execution.resolved_fock_build = expected;
+  return run_cpu_fock_strategy(system, &auxiliary_system, execution, initial_density);
 }
 
 #if VIBEQC_HAS_CUDA
@@ -1895,6 +1778,18 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
     *output_diagnostics = diagnostics;
   }
   return owned_plan;
+}
+
+ScfResult run_cuda_independent_fock_strategy(const core::System& system,
+                                             const core::System* auxiliary,
+                                             const ScfOptions& options, int device_id,
+                                             const std::vector<double>* initial_density) {
+  const auto strategy = fock_strategy_for_execution(options);
+  if (strategy.backend != FockBackend::Cuda)
+    throw std::invalid_argument("CUDA Fock entry requires a CUDA strategy");
+  const PreparedFockPlan plan(system, auxiliary, strategy, device_id,
+                              options.density_fitting_memory_budget_bytes);
+  return run_prepared_fock_strategy(plan, options, initial_density);
 }
 
 CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
@@ -3367,6 +3262,11 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_cached(
 #endif  // VIBEQC_HAS_CUDA
 
 #if !VIBEQC_HAS_CUDA
+ScfResult run_cuda_independent_fock_strategy(const core::System&, const core::System*,
+                                             const ScfOptions&, int, const std::vector<double>*) {
+  throw std::runtime_error("CUDA Fock providers are unavailable in this build");
+}
+
 // Keep diagnostics identical to the CUDA backend's small persistent-ERI
 // policy without exposing an implementation tuning threshold through the ABI.
 constexpr std::size_t kDiagnosticPersistentEriAoLimit = 16;

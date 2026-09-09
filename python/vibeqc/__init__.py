@@ -32,6 +32,8 @@ from .calculator import (
     method_capabilities,
 )
 from .elements import ElectronState, electron_state
+from .fock import FockBuildSpec, FockEvaluation, FockPlan, FockScfResult, FockTerm
+from .mean_field import FixedDensityMeanField, MeanFieldEvaluation
 from .overlap import cross_overlap
 from .progressive import ProgressiveResult, projected_singlepoint
 from .projection import (
@@ -70,7 +72,14 @@ __all__ = [
     "ElementBasis",
     "ErrorEvidence",
     "EvidenceKind",
+    "FixedDensityMeanField",
+    "FockBuildSpec",
+    "FockEvaluation",
+    "FockPlan",
+    "FockScfResult",
+    "FockTerm",
     "InactiveEigensolverProfileEntry",
+    "MeanFieldEvaluation",
     "MethodCapabilities",
     "ObservableTarget",
     "OccupiedProjection",

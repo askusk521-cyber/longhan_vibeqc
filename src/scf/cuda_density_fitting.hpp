@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/types.hpp"
+#include "scf/fock_build.hpp"
 #include "vibeqc/vibeqc.h"
 
 namespace vibeqc::scf {
@@ -127,6 +128,11 @@ vibeqc_status execute_cuda_density_fitting_source_uhf_force_response(
 
 /** Return the fixed batch cardinality owned by a prepared plan. */
 std::size_t cuda_density_fitting_jk_plan_batch_size(const CudaDensityFittingJkPlan* plan) noexcept;
+/** Verify a borrowed item's dimensions and the value-side metric cutoff before
+ * binding an independent Fock/response view. */
+bool cuda_density_fitting_jk_plan_matches(const CudaDensityFittingJkPlan* plan, std::size_t item,
+                                          std::size_t nbf, std::size_t naux,
+                                          double relative_threshold) noexcept;
 
 /** Scalar state returned by the device-resident DF SCF loop. */
 struct CudaDensityFittingDeviceScfItem {
@@ -201,13 +207,15 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled(
  * Build batched RHF RI-J/K matrices on the plan's non-blocking CUDA stream.
  *
  * The closed-shell density includes double occupation. Returned matrices are
- * row-major and the caller forms the two-electron Fock term as J - 0.5 K.
+ * row-major and the caller forms the standard HF term as J - 0.5 K. `terms`
+ * skips unrequested contractions and downloads; absent host outputs are empty.
+ * The prepared plan retains its accounted scratch capacity for later replays.
  */
 vibeqc_status execute_cuda_density_fitting_rhf_jk(CudaDensityFittingJkPlan* plan,
                                                   const std::vector<double>& density,
                                                   std::vector<double>& coulomb,
                                                   std::vector<double>& exchange,
-                                                  std::string& detail);
+                                                  std::string& detail, JkTermSelection terms = {});
 
 /**
  * Build batched UHF RI-J/K matrices on the plan's non-blocking CUDA stream.
@@ -215,10 +223,13 @@ vibeqc_status execute_cuda_density_fitting_rhf_jk(CudaDensityFittingJkPlan* plan
  * Coulomb uses alpha + beta density. Each exchange matrix uses only its
  * matching spin density, so F_sigma = H + J - K_sigma.
  */
-vibeqc_status execute_cuda_density_fitting_uhf_jk(
-    CudaDensityFittingJkPlan* plan, const std::vector<double>& alpha_density,
-    const std::vector<double>& beta_density, std::vector<double>& coulomb,
-    std::vector<double>& alpha_exchange, std::vector<double>& beta_exchange, std::string& detail);
+vibeqc_status execute_cuda_density_fitting_uhf_jk(CudaDensityFittingJkPlan* plan,
+                                                  const std::vector<double>& alpha_density,
+                                                  const std::vector<double>& beta_density,
+                                                  std::vector<double>& coulomb,
+                                                  std::vector<double>& alpha_exchange,
+                                                  std::vector<double>& beta_exchange,
+                                                  std::string& detail, JkTermSelection terms = {});
 
 /**
  * Build one RHF J/K item without packing a complete batch on the host.
@@ -229,27 +240,36 @@ vibeqc_status execute_cuda_density_fitting_uhf_jk(
  */
 vibeqc_status execute_cuda_density_fitting_rhf_jk_item(
     CudaDensityFittingJkPlan* plan, std::size_t system, const std::vector<double>& density,
-    std::vector<double>& coulomb, std::vector<double>& exchange, std::string& detail);
+    std::vector<double>& coulomb, std::vector<double>& exchange, std::string& detail,
+    JkTermSelection terms = {});
 
 /** UHF counterpart of the bounded item-level J/K helper. */
 vibeqc_status execute_cuda_density_fitting_uhf_jk_item(
     CudaDensityFittingJkPlan* plan, std::size_t system, const std::vector<double>& alpha_density,
     const std::vector<double>& beta_density, std::vector<double>& coulomb,
-    std::vector<double>& alpha_exchange, std::vector<double>& beta_exchange, std::string& detail);
+    std::vector<double>& alpha_exchange, std::vector<double>& beta_exchange, std::string& detail,
+    JkTermSelection terms = {});
 
 /**
  * Execute one RHF DF J/K contraction directly from device-resident density
  * matrices.  No host transfer is performed; callers own all device pointers
- * and must keep them valid until the plan stream has completed.
+ * and must keep them valid until the plan stream has completed. Unselected
+ * output pointers may be null and are never accessed. Selected outputs are raw
+ * and unscaled, in row-major order; external assembly applies coefficients
+ * exactly once. Density layout is explicit: the default preserves the legacy
+ * column-major SCF buffer convention. Row-major callers reuse the existing
+ * transpose staging; nonsymmetric densities retain their orientation.
  */
-vibeqc_status execute_cuda_density_fitting_rhf_jk_device(CudaDensityFittingJkPlan* plan,
-                                                         const double* density, double* coulomb,
-                                                         double* exchange, std::string& detail);
+vibeqc_status execute_cuda_density_fitting_rhf_jk_device(
+    CudaDensityFittingJkPlan* plan, const double* density, double* coulomb, double* exchange,
+    std::string& detail, JkTermSelection terms = {},
+    FockMatrixLayout density_layout = FockMatrixLayout::ColumnMajor);
 
 /** Device-pointer counterpart for unrestricted DF J/K. */
 vibeqc_status execute_cuda_density_fitting_uhf_jk_device(
     CudaDensityFittingJkPlan* plan, const double* alpha_density, const double* beta_density,
-    double* coulomb, double* alpha_exchange, double* beta_exchange, std::string& detail);
+    double* coulomb, double* alpha_exchange, double* beta_exchange, std::string& detail,
+    JkTermSelection terms = {}, FockMatrixLayout density_layout = FockMatrixLayout::ColumnMajor);
 
 /**
  * Evaluate the complete raw-tensor RHF DF two-electron force response on the

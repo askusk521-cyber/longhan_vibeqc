@@ -14,6 +14,7 @@
 
 #include "molecule/basis.hpp"
 #include "runtime/resource_usage.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 
 namespace vibeqc::scf {
@@ -144,7 +145,8 @@ FleetPlan::FleetPlan(std::vector<core::System> systems, vibeqc_method method, Sc
       auxiliary_template_(std::move(auxiliary_template)),
       execution_order_(systems_.size()),
       bucket_ids_(systems_.size()),
-      warm_densities_(systems_.size()) {
+      warm_densities_(systems_.size()),
+      independent_fock_plans_(systems_.size()) {
   const bool fitted = options_.density_fitting_mode != VIBEQC_DENSITY_FITTING_NONE;
   const FockBackend backend =
       cuda_fock_enabled_ || cuda_density_fitting_enabled_ ? FockBackend::Cuda : FockBackend::Cpu;
@@ -153,11 +155,20 @@ FleetPlan::FleetPlan(std::vector<core::System> systems, vibeqc_method method, Sc
           method_ == VIBEQC_METHOD_UHF ? FockSpin::Unrestricted : FockSpin::Restricted,
           fitted ? FockApproximation::DensityFitted : FockApproximation::Exact),
       backend, options_.screening_tolerance, options_.density_fitting_relative_threshold);
-  if (options_.resolved_fock_build.has_value() && *options_.resolved_fock_build != expected) {
-    throw std::invalid_argument("fleet options disagree with the resolved HF Fock strategy");
-  }
-  options_.resolved_fock_build = expected;
-  if (!fitted) require_exact_direct_strategy(expected, expected.spec.spin, backend);
+  if (!options_.resolved_fock_build) options_.resolved_fock_build = expected;
+  const auto& strategy = *options_.resolved_fock_build;
+  validate_resolved_fock_build(strategy);
+  if (strategy.spec.spin != expected.spec.spin || strategy.backend != backend ||
+      strategy.screening_tolerance != options_.screening_tolerance ||
+      (options_.compute_forces && strategy.spec.derivative_order != 1) ||
+      (strategy.metric_relative_threshold != 0.0 &&
+       strategy.metric_relative_threshold != options_.density_fitting_relative_threshold) ||
+      (backend == FockBackend::Cuda && strategy.schedule != FockSchedule::CudaIndependent &&
+       strategy.legacy_density_fitting != cuda_density_fitting_enabled_))
+    throw std::invalid_argument("fleet options disagree with the resolved Fock strategy");
+  if (strategy.schedule == FockSchedule::CudaIndependent &&
+      (shell_class_profiling_enabled_ || inactive_eigensolver_profiling_enabled_))
+    throw std::invalid_argument("independent CUDA SCF does not expose fused-solver profiles");
   std::iota(execution_order_.begin(), execution_order_.end(), 0);
   std::stable_sort(execution_order_.begin(), execution_order_.end(),
                    [&](std::size_t a, std::size_t b) {
@@ -202,7 +213,9 @@ std::vector<FleetItemResult> FleetPlan::execute(
   const auto execute_one = [&](std::size_t system_index) {
     FleetItemResult& item = results[system_index];
     item.bucket_id = bucket_ids_[system_index];
-    item.executed_backend = VIBEQC_BACKEND_CPU_REFERENCE;
+    item.executed_backend = options_.resolved_fock_build->backend == FockBackend::Cuda
+                                ? VIBEQC_BACKEND_CUDA
+                                : VIBEQC_BACKEND_CPU_REFERENCE;
     core::System execution_system = systems_[system_index];
     if (!coordinates.empty() && coordinates[system_index].has_value()) {
       if (!valid_coordinates(*coordinates[system_index], execution_system.atoms.size())) {
@@ -214,33 +227,16 @@ std::vector<FleetItemResult> FleetPlan::execute(
 
     const bool has_warm_density = warm_starts_enabled_ && warm_densities_[system_index].has_value();
     item.warm_start_used = has_warm_density;
-    const ResolvedFockBuild& strategy = *options_.resolved_fock_build;
-    const bool use_cuda_density_fitting =
-        strategy.legacy_density_fitting && strategy.backend == FockBackend::Cuda;
     const auto evaluate = [&](const std::vector<double>* initial_density) {
-      if (strategy.legacy_density_fitting) {
-        const core::System auxiliary =
-            auxiliary_for_geometry(auxiliary_template_, execution_system);
-        if (use_cuda_density_fitting) {
-          return method_ == VIBEQC_METHOD_UHF
-                     ? run_uhf_density_fitting_cuda(execution_system, auxiliary, options_,
-                                                    device_id_, initial_density)
-                     : run_rhf_density_fitting_cuda(execution_system, auxiliary, options_,
-                                                    device_id_, initial_density);
-        }
-        return method_ == VIBEQC_METHOD_UHF
-                   ? run_uhf_density_fitting(execution_system, auxiliary, options_, initial_density)
-                   : run_rhf_density_fitting(execution_system, auxiliary, options_,
-                                             initial_density);
-      }
-      return method_ == VIBEQC_METHOD_UHF ? run_uhf(execution_system, options_, initial_density)
-                                          : run_rhf(execution_system, options_, initial_density);
+      const core::System auxiliary = auxiliary_for_geometry(auxiliary_template_, execution_system);
+      return run_fock_strategy_cached(independent_fock_plans_[system_index], execution_system,
+                                      &auxiliary, options_, device_id_, initial_density);
     };
     try {
       const std::vector<double>* initial_density =
           has_warm_density ? &warm_densities_[system_index]->density : nullptr;
       item.scf = evaluate(initial_density);
-      if (use_cuda_density_fitting) {
+      if (options_.resolved_fock_build->backend == FockBackend::Cuda) {
         item.executed_backend = VIBEQC_BACKEND_CUDA;
       }
       if (has_warm_density && !item.scf.converged) {
@@ -293,7 +289,15 @@ std::vector<FleetItemResult> FleetPlan::execute(
     const std::size_t worker_count = std::min(
         bucket_size, requested_workers ? std::min<std::size_t>(hardware_threads, requested_workers)
                                        : hardware_threads);
-    if (cuda_fock_enabled_) {
+    if (options_.resolved_fock_build->backend == FockBackend::Cuda &&
+        (options_.resolved_fock_build->schedule == FockSchedule::CudaIndependent ||
+         options_.resolved_fock_build->spec.derivative_order == 0)) {
+      // General strategies share the host iteration control and execute one
+      // CUDA item at a time. This preserves the outer resource ledger and
+      // prevents an incompatible request from reaching either fused HF loop.
+      for (std::size_t position = bucket_begin; position < bucket_end; ++position)
+        execute_one(execution_order_[position]);
+    } else if (cuda_fock_enabled_) {
       std::vector<core::System> cuda_systems;
       std::vector<std::size_t> original_indices;
       std::vector<const std::vector<double>*> initial_densities;
@@ -562,6 +566,9 @@ std::vector<FleetItemResult> FleetPlan::execute(
       std::size_t resident_bytes = 0;
       for (const auto* plan : cuda_bucket_plans_)
         resident_bytes = runtime::add_capacity(resident_bytes, hf_cuda_owned_device_bytes(plan));
+      for (const auto& plan : independent_fock_plans_)
+        if (plan)
+          resident_bytes = runtime::add_capacity(resident_bytes, plan->diagnostic().device_bytes);
       runtime::sample_cuda_arena_capacity(resident_bytes);
     }
     bucket_begin = bucket_end;

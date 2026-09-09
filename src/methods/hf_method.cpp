@@ -12,6 +12,7 @@
 
 #include "api/handles.hpp"
 #include "scf/fleet.hpp"
+#include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
 
@@ -279,28 +280,12 @@ class HfPreparedCalculation final : public PreparedCalculation {
     scf::ScfOptions execution_options = options_;
     execution_options.compute_forces = compute_forces;
     const scf::ResolvedFockBuild& strategy = *execution_options.resolved_fock_build;
-    const bool unrestricted = strategy.spec.spin == scf::FockSpin::Unrestricted;
     const bool use_cuda = strategy.backend == scf::FockBackend::Cuda;
-    scf::ScfResult native;
-    if (strategy.legacy_density_fitting) {
-      const core::System& auxiliary =
-          auxiliary_template_.has_value() ? *auxiliary_template_ : system_;
-      if (use_cuda) {
-        native = unrestricted ? scf::run_uhf_density_fitting_cuda(
-                                    system_, auxiliary, execution_options, context_->device_id)
-                              : scf::run_rhf_density_fitting_cuda(
-                                    system_, auxiliary, execution_options, context_->device_id);
-      } else {
-        native = unrestricted ? scf::run_uhf_density_fitting(system_, auxiliary, execution_options)
-                              : scf::run_rhf_density_fitting(system_, auxiliary, execution_options);
-      }
-    } else if (use_cuda) {
-      native = unrestricted ? scf::run_uhf_cuda(system_, execution_options, context_->device_id)
-                            : scf::run_rhf_cuda(system_, execution_options, context_->device_id);
-    } else {
-      native = unrestricted ? scf::run_uhf(system_, execution_options)
-                            : scf::run_rhf(system_, execution_options);
-    }
+    // PreparedCalculation's external-serialization contract covers both
+    // cache replacement and the entire solve on its non-reentrant workspace.
+    auto native = scf::run_fock_strategy_cached(
+        fock_cache_, system_, auxiliary_template_ ? &*auxiliary_template_ : nullptr,
+        execution_options, context_->device_id);
     return adapt_result(std::move(native),
                         use_cuda ? VIBEQC_BACKEND_CUDA : VIBEQC_BACKEND_CPU_REFERENCE);
   }
@@ -311,6 +296,7 @@ class HfPreparedCalculation final : public PreparedCalculation {
   core::System system_;
   scf::ScfOptions options_;
   std::optional<core::System> auxiliary_template_;
+  std::unique_ptr<scf::PreparedFockPlan> fock_cache_;
 };
 
 class HfPreparedBatch final : public PreparedBatch {
