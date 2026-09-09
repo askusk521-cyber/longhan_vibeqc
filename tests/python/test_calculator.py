@@ -11,6 +11,69 @@ def test_h2_energy_and_force_invariance():
     assert result.executed_backend == "cpu_reference"
 
 
+@pytest.mark.parametrize(
+    ("method", "charge", "multiplicity"),
+    (("rhf", 0, 1), ("uhf", 1, 2)),
+)
+@pytest.mark.parametrize("density_fitting", ("none", "cpu"))
+def test_energy_only_output_selection_omits_forces(
+    method, charge, multiplicity, density_fitting
+):
+    """The public energy endpoint must not disguise completed force work."""
+
+    atoms = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
+    calculator = Calculator(
+        method=method,
+        basis="sto-3g",
+        device="cpu",
+        density_fitting=density_fitting,
+    )
+    state = {"charge": charge, "multiplicity": multiplicity}
+    energy_only = calculator.singlepoint(atoms, properties=("energy",), **state)
+    energy_and_forces = calculator.singlepoint(atoms, **state)
+
+    assert energy_only.energy == pytest.approx(energy_and_forces.energy, abs=1.0e-14)
+    assert energy_only.forces is None
+    assert energy_and_forces.forces is not None
+
+
+@pytest.mark.parametrize(
+    "properties", [(), ("forces",), ("energy", "dipole"), "energy"]
+)
+def test_singlepoint_rejects_invalid_output_selection(properties):
+    calculator = Calculator()
+    expected = TypeError if isinstance(properties, str) else ValueError
+    with pytest.raises(expected):
+        calculator.singlepoint([("He", (0.0, 0.0, 0.0))], properties=properties)
+
+
+def test_cuda_direct_energy_only_output_selection_omits_forces():
+    """Exercise public output selection above the persistent-ERI AO limit."""
+
+    atoms = [
+        ("O", (0.0, 0.0, 0.0)),
+        ("H", (0.0, -1.43233673, 1.10715266)),
+        ("H", (0.0, 1.43233673, 1.10715266)),
+    ]
+    calculator = Calculator(
+        basis="def2-svp",
+        basis_representation="spherical",
+        device="cuda",
+        energy_tolerance=1.0e-10,
+        density_tolerance=1.0e-8,
+    )
+    try:
+        energy_only = calculator.singlepoint(atoms, properties=("energy",))
+        energy_and_forces = calculator.singlepoint(atoms)
+    except RuntimeError as error:
+        pytest.skip(f"CUDA device unavailable: {error}")
+
+    assert energy_only.executed_backend == "cuda"
+    assert energy_only.energy == pytest.approx(energy_and_forces.energy, abs=2.0e-9)
+    assert energy_only.forces is None
+    assert energy_and_forces.forces is not None
+
+
 def test_wb97m_v_is_reserved_not_implemented():
     try:
         Calculator(method="wb97m-v")

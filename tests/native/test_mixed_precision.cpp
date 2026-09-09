@@ -87,6 +87,18 @@ void verify_mode(bool unrestricted) {
           "FP64 direct-Fock reference did not converge");
   const std::vector<const std::vector<double>*> warm_density{&fp64[0].scf.density};
 
+  // Output selection belongs to the cached-plan identity. Reusing a topology
+  // after switching to energy-only must omit every force result while keeping
+  // the exact final energy; switching back below must restore force work.
+  options.compute_forces = false;
+  const std::vector<vibeqc::scf::RhfBucketItem> energy_only = run_cached(warm_density);
+  require(energy_only.size() == 1 && energy_only[0].status == VIBEQC_STATUS_SUCCESS &&
+              energy_only[0].scf.converged && energy_only[0].scf.forces.empty(),
+          "energy-only CUDA execution produced an analytic-force result");
+  require(std::abs(energy_only[0].scf.energy - fp64[0].scf.energy) < 2.0e-9,
+          "energy-only CUDA execution changed the FP64 energy");
+  options.compute_forces = true;
+
   setenv("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "auto", 1);
   const std::vector<vibeqc::scf::RhfBucketItem> mixed = run_cached(warm_density);
   require(mixed.size() == 1 && mixed[0].status == VIBEQC_STATUS_SUCCESS && mixed[0].scf.converged &&

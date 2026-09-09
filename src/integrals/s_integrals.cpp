@@ -562,13 +562,14 @@ void require_matching_density_fitting_geometry(const core::System& orbital_syste
 }  // namespace
 
 DensityFittingIntegralData build_density_fitting_integrals(const core::System& orbital_system,
-                                                           const core::System& auxiliary_system) {
+                                                           const core::System& auxiliary_system,
+                                                           bool include_derivatives) {
   require_matching_density_fitting_geometry(orbital_system, auxiliary_system);
 
   DensityFittingIntegralData cartesian;
   cartesian.nbf = molecule::cartesian_ao_count(orbital_system);
   cartesian.naux = molecule::cartesian_ao_count(auxiliary_system);
-  cartesian.ncoord = orbital_system.atoms.size() * 3;
+  cartesian.ncoord = include_derivatives ? orbital_system.atoms.size() * 3 : 0;
   const std::vector<AoView> orbital_aos = expand_cartesian_aos(orbital_system);
   const std::vector<AoView> auxiliary_aos = expand_cartesian_aos(auxiliary_system);
 
@@ -577,8 +578,10 @@ DensityFittingIntegralData build_density_fitting_integrals(const core::System& o
   for (std::size_t atom = 0; atom < orbital_system.atoms.size(); ++atom) {
     Vec3 position;
     for (std::size_t axis = 0; axis < 3; ++axis) {
-      position[axis] = Jet::variable(orbital_system.atoms[atom].position[axis], cartesian.ncoord,
-                                     atom * 3 + axis);
+      const double coordinate = orbital_system.atoms[atom].position[axis];
+      position[axis] = include_derivatives
+                           ? Jet::variable(coordinate, cartesian.ncoord, atom * 3 + axis)
+                           : Jet(coordinate, 0);
     }
     atom_coordinates.push_back(std::move(position));
   }
@@ -836,10 +839,10 @@ IntegralData transform_integrals(const IntegralData& cartesian, const core::Syst
   return transformed;
 }
 
-IntegralData build_integrals(const core::System& system) {
+IntegralData build_integrals(const core::System& system, bool include_derivatives) {
   IntegralData out;
   out.nbf = molecule::cartesian_ao_count(system);
-  out.ncoord = system.atoms.size() * 3;
+  out.ncoord = include_derivatives ? system.atoms.size() * 3 : 0;
   const std::size_t n = out.nbf;
   const std::vector<AoView> aos = expand_cartesian_aos(system);
 
@@ -848,8 +851,9 @@ IntegralData build_integrals(const core::System& system) {
   for (std::size_t atom = 0; atom < system.atoms.size(); ++atom) {
     Vec3 position;
     for (std::size_t axis = 0; axis < 3; ++axis) {
-      position[axis] =
-          Jet::variable(system.atoms[atom].position[axis], out.ncoord, atom * 3 + axis);
+      const double coordinate = system.atoms[atom].position[axis];
+      position[axis] = include_derivatives ? Jet::variable(coordinate, out.ncoord, atom * 3 + axis)
+                                           : Jet(coordinate, 0);
     }
     atom_coordinates.push_back(std::move(position));
   }

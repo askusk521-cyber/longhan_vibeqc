@@ -234,8 +234,28 @@ The HF example compares identical native implementations as an A/B protocol
 control. It validates all samples, freezes post-cold warm-start density, and
 checks changed geometry against native one-shot execution (explicitly a replay
 consistency check, not an independent displaced libcint reference). The public
-HF API always computes forces and exposes neither full iteration histories,
-final orbitals/density, nor allocator peaks. Those fields and energy-only work
-are honestly unavailable. The example therefore demonstrates numerical and
-endpoint evidence plus timing collection while **prohibiting performance or
-production promotion**. It is not a speedup claim or CC implementation.
+HF API exposes neither full iteration histories, final orbitals/density, nor
+allocator peaks. Explicit energy-only execution is
+available through the C ABI's NULL/zero force output and Python's
+``properties=("energy",)`` selection; #174's executable boundary benchmark
+measures that endpoint directly rather than subtracting force time. The example
+therefore demonstrates numerical and endpoint evidence plus timing collection
+while **prohibiting performance or production promotion**. It is not a speedup
+claim or CC implementation.
+
+The #174 boundary runner keeps its fixed-density Fock diagnostic separate from
+clean endpoint timing. It records synchronized wall time, CUDA-event shell-class
+time, and the retained FP64/FP32 quartet count for every class actually routed
+through the generated streaming workers. Run it only in an allocated GPU job:
+
+```bash
+srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
+  --time=00:20:00 bash -lc \
+  'VIBEQC_LIBRARY=$PWD/build/libvibeqc.so PYTHONPATH=$PWD/python:$PWD \
+   python benchmarks/issue174_precision_boundaries.py \
+     --output benchmarks/results/issue174-precision-boundaries.json'
+```
+
+The broad experimental threshold is evidence plumbing, not an automatic-policy
+promotion. Its JSON limitations explicitly reserve controller, strict
+refinement, and promotion claims for later #174 slices.

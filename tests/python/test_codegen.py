@@ -3070,7 +3070,7 @@ def test_bounded_force_registry_gaps_use_exact_runtime_fallback():
     fallback = source.index("const auto launch_bounded_generic_force")
     dispatch = source.index("const auto launch_bounded_force")
     dispatch_boundary = re.search(
-        r"if \(quartet_direct &&\s+plan\.shell_quartet_tile_capacities",
+        r"if \((?:options\.compute_forces &&\s+)?quartet_direct &&\s+plan\.shell_quartet_tile_capacities",
         source[dispatch:],
     )
     assert dispatch_boundary is not None
@@ -3736,6 +3736,22 @@ def test_bounded_streaming_uses_monotonic_system_density_tail():
     assert "topology.system_pair_density_bounds[" in generator
     assert "system_density_bound < screening_tolerance" in generator
     assert "topology.generated_overflow[{shell_class}U]" in generator
+
+
+def test_bounded_streaming_profiles_executed_precision_per_shell_class():
+    """Count actual retained quartets without changing normal kernel work."""
+
+    generator = (
+        REPOSITORY_ROOT / "tools" / "vibeqc_codegen" / "production.py"
+    ).read_text(encoding="utf-8")
+    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
+        encoding="utf-8"
+    )
+    assert "record_fock_precision" in generator
+    assert "fp64_work_count, fp32_work_count" in generator
+    assert "bounded_fock_fp64_work_counts + shell_class" in source
+    assert "bounded_fock_fp32_work_counts + shell_class" in source
+    assert "fp64_quartets=%llu fp32_quartets=%llu" in source
 
 
 def test_generated_order2_fock_masks_handwritten_fallback():

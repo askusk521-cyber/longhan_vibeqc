@@ -29,6 +29,9 @@ struct ScfOptions {
   ScfHooks* hooks{};
   /** Diagnostic proposal bridge rejects malformed seeds instead of normalizing them. */
   bool strict_initial_density{};
+  /** False for an explicit energy-only endpoint. Backends must then omit
+   * derivative evaluation and return an empty force vector. */
+  bool compute_forces{true};
 };
 
 /** Internal mean-field result, including state retained for warm starts. */

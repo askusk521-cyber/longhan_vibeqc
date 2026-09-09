@@ -72,7 +72,7 @@ class Shell:
 @dataclass(frozen=True)
 class Result:
     energy: float
-    forces: np.ndarray
+    forces: np.ndarray | None
     converged: bool
     iterations: int
     energy_change: float
@@ -602,13 +602,15 @@ class Calculator:
             converged=converged,
         )
 
-    def _preflight_hf_basis(self, atoms):
-        """Check the value and force operators needed by a public HF endpoint.
+    def _preflight_hf_basis(self, atoms, *, compute_forces=True):
+        """Check only the operators needed by the selected HF outputs.
 
         Runtime shape/resource and occupation checks remain native. This data
         preflight never turns an ECP or an unsupported auxiliary shell into an
-        all-electron through-f approximation.
+        all-electron through-f approximation. Energy-only calls deliberately
+        avoid requiring derivative capability that their backend will not use.
         """
+        derivative_orders = (0, 1) if compute_forces else (0,)
         for role, basis, operators in (
             (
                 "orbital",
@@ -620,7 +622,7 @@ class Calculator:
             if basis is None:
                 continue
             for operator in operators:
-                for order in (0, 1):
+                for order in derivative_orders:
                     require_basis(
                         basis,
                         atoms,
@@ -826,11 +828,35 @@ class Calculator:
         *,
         charge: int = 0,
         multiplicity: int = 1,
+        properties: Iterable[str] = ("energy", "forces"),
     ) -> Result:
+        """Run one SCF calculation for explicitly selected observables.
+
+        Energy and convergence diagnostics are always returned. Select
+        ``properties=("energy",)`` to omit analytic-force evaluation; the
+        returned ``Result.forces`` is then ``None``. The default preserves the
+        historical energy-plus-forces endpoint.
+        """
+        if isinstance(properties, (str, bytes)):
+            raise TypeError("properties must be an iterable of property names")
+        try:
+            requested_properties = frozenset(properties)
+        except TypeError as error:
+            raise TypeError(
+                "properties must contain hashable property names"
+            ) from error
+        supported_properties = frozenset(("energy", "forces"))
+        if not requested_properties or "energy" not in requested_properties:
+            raise ValueError("properties must include 'energy'")
+        unknown_properties = requested_properties - supported_properties
+        if unknown_properties:
+            names = ", ".join(sorted(repr(name) for name in unknown_properties))
+            raise ValueError(f"unsupported properties: {names}")
+        compute_forces = "forces" in requested_properties
         native_atoms = tuple(Atom.from_value(atom) for atom in atoms)
         if not native_atoms:
             raise ValueError("at least one atom is required")
-        self._preflight_hf_basis(native_atoms)
+        self._preflight_hf_basis(native_atoms, compute_forces=compute_forces)
         resource_plan = None
         if self._resource_budget is not None:
             resource_plan = self.estimate_resources(
@@ -879,13 +905,17 @@ class Calculator:
                     ctypes.byref(calculation),
                 ),
             )
-            force_storage = (ctypes.c_double * (3 * len(native_atoms)))()
+            force_storage = (
+                (ctypes.c_double * (3 * len(native_atoms)))()
+                if compute_forces
+                else None
+            )
             result_descriptor = _native.ResultDescriptor(
                 ctypes.sizeof(_native.ResultDescriptor),
                 _native.ABI_VERSION,
                 0.0,
                 force_storage,
-                len(force_storage),
+                len(force_storage) if force_storage is not None else 0,
                 0,
                 0.0,
                 0.0,
@@ -917,7 +947,11 @@ class Calculator:
                 from .resources_native import check_resource_status
 
                 check_resource_status(self._library, status, resource_diagnostics)
-            forces = np.ctypeslib.as_array(force_storage).copy().reshape(-1, 3)
+            forces = (
+                np.ctypeslib.as_array(force_storage).copy().reshape(-1, 3)
+                if force_storage is not None
+                else None
+            )
             backend = (
                 "cuda"
                 if result_descriptor.executed_backend == _native.BACKEND_CUDA

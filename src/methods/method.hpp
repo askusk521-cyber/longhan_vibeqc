@@ -148,7 +148,9 @@ class PreparedCalculation {
   virtual ~PreparedCalculation() = default;
   [[nodiscard]] virtual std::size_t atom_count() const noexcept = 0;
   [[nodiscard]] virtual const Capabilities& capabilities() const noexcept = 0;
-  virtual Result execute() = 0;
+  /** Execute only the requested output work. Energy and convergence
+   * diagnostics are always produced; forces are opt-in per execution. */
+  virtual Result execute(bool compute_forces) = 0;
 };
 
 /** Prepared ragged execution. Method families choose their own batching policy. */
