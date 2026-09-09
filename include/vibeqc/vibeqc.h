@@ -486,6 +486,25 @@ VIBEQC_API vibeqc_status vibeqc_system_one_electron_gradient_cuda(
     unsigned schedule, size_t maximum_bytes, double* gradient, size_t gradient_count,
     vibeqc_one_electron_gradient_resources* resources);
 
+/** Physical Fock builds in the last CPU batch execution, including final
+ * rebuilds. A joint UHF alpha/beta J/K evaluation counts once. Returns
+ * NOT_IMPLEMENTED for an unexecuted item, CUDA, or an incompletely counted
+ * warm-to-cold retry. The result is never inferred from iteration count. */
+VIBEQC_API vibeqc_status vibeqc_batch_get_last_fock_builds(const vibeqc_batch* batch,
+                                                           uint32_t index, uint64_t* builds);
+
+/**
+ * Synchronously write the normalized rectangular overlap <target AO|source AO>
+ * in row-major order. output_count must equal target_nbf * source_nbf. Both
+ * systems may independently select Cartesian/spherical AOs and geometries.
+ * This explicit CPU evaluator allocates no ERI or nuclear-derivative tensors.
+ * The context supplies error details; its accelerator selection is irrelevant.
+ */
+VIBEQC_API vibeqc_status vibeqc_system_cross_overlap_cpu(vibeqc_context* context,
+                                                         const vibeqc_system* target,
+                                                         const vibeqc_system* source,
+                                                         double* output, size_t output_count);
+
 VIBEQC_API vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context,
                                                     const vibeqc_system* system,
                                                     const vibeqc_method_descriptor* descriptor,

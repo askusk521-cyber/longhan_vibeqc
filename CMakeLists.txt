@@ -130,6 +130,7 @@ add_library(vibeqc SHARED
   src/api/c_api_batch.cpp
   src/api/c_api_calculation.cpp
   src/api/c_api_one_electron_gradient.cpp
+  src/api/c_api_projection.cpp
   src/api/c_api_common.cpp
   src/api/c_api_context.cpp
   src/api/c_api_resources.cpp
