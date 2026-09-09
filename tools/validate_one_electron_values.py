@@ -36,29 +36,55 @@ def main():
     parser.add_argument("--nvcc", type=Path, required=True)
     parser.add_argument("--architecture", default="sm_120")
     parser.add_argument("--local", action="store_true")
+    parser.add_argument(
+        "--derivatives",
+        action="store_true",
+        help="validate dS/dT/dV with the same resource protocol",
+    )
     args = parser.parse_args()
     if args.local and not os.environ.get("SLURM_JOB_ID"):
         parser.error("--local requires an existing Slurm GPU allocation")
     directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    fixtures = one_electron_value_matrix()
+    if args.derivatives:
+        from tools.vibeqc_codegen.one_electron_derivatives_cuda import (
+            emit_one_electron_derivatives_cuda,
+        )
+        from tools.vibeqc_validation.one_electron_derivatives import (
+            one_electron_derivative_matrix,
+        )
+        from tools.vibeqc_validation.one_electron_derivatives_cuda import (
+            emit_one_electron_derivative_driver,
+        )
+
+        fixtures = one_electron_derivative_matrix()
+        emit_header = emit_one_electron_derivatives_cuda
+        emit_driver = emit_one_electron_derivative_driver
+        header_name = "generated_one_electron_derivatives.cuh"
+        magic, width, atol, rtol = b"VQOE1411", 27, 3e-11, 6e-12
+    else:
+        fixtures = one_electron_value_matrix()
+        emit_header, emit_driver = (
+            emit_one_electron_values_cuda,
+            emit_one_electron_value_driver,
+        )
+        header_name = "generated_one_electron_values.cuh"
+        magic, width, atol, rtol = b"VQOE1401", 3, 1e-11, 3e-12
     inputs = np.concatenate([f.records for f in fixtures])
     input_path = directory / "inputs.bin"
-    input_path.write_bytes(
-        b"VQOE1401" + struct.pack("<Q", len(inputs)) + inputs.tobytes()
-    )
+    input_path.write_bytes(magic + struct.pack("<Q", len(inputs)) + inputs.tobytes())
     header, source, obj, driver, executable = [
         directory / name
         for name in (
-            "generated_one_electron_values.cuh",
+            header_name,
             "fixture.cu",
             "fixture.o",
             "link.cu",
             "fixture",
         )
     ]
-    header.write_text(emit_one_electron_values_cuda())
-    source.write_text(emit_one_electron_value_driver(args.architecture))
+    header.write_text(emit_header())
+    source.write_text(emit_driver(args.architecture))
     driver.write_text("// Numerical main is in fixture.o.\n")
     compiler = CudaCompilerAdapter(
         args.nvcc.resolve(), cuda_target_info(args.architecture), compile_timeout=900
@@ -87,7 +113,9 @@ def main():
         slurm_time="00:05:00",
     )
     report = {
-        "schema": "vibeqc.one_electron_value_validation",
+        "schema": "vibeqc.one_electron_derivative_validation"
+        if args.derivatives
+        else "vibeqc.one_electron_value_validation",
         "version": 1,
         "production_promoted": False,
         "source_hash": file_hash(header),
@@ -118,7 +146,7 @@ def main():
         (directory / f"runtime-{threads}.log").write_text(run.stdout + run.stderr)
         if run.returncode:
             raise RuntimeError("one-electron fixture failed; see runtime log")
-        values = np.fromfile(output, dtype="<f8").reshape(len(inputs), 3)
+        values = np.fromfile(output, dtype="<f8").reshape(len(inputs), width)
         rows, offset = [], 0
         for fixture in fixtures:
             contracted = fixture.contract(
@@ -133,13 +161,13 @@ def main():
                         "inputs": fixture.inputs,
                         "input_hash": fixture.input_hash,
                         "cartesian": block_error(
-                            contracted[i], fixture.reference[i], atol=1e-11, rtol=3e-12
+                            contracted[i], fixture.reference[i], atol=atol, rtol=rtol
                         ),
                         "spherical": block_error(
                             spherical[i],
                             fixture.spherical_reference[i],
-                            atol=1e-11,
-                            rtol=3e-12,
+                            atol=atol,
+                            rtol=rtol,
                         ),
                     }
                 )

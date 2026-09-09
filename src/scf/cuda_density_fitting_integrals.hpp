@@ -35,16 +35,20 @@ vibeqc_status build_cuda_density_fitting_integrals_batch(
     std::vector<integrals::DensityFittingIntegralData>& outputs, std::string& detail,
     std::size_t output_budget_bytes = 0);
 
-/** Batched Cartesian overlap/Hcore and nuclear-repulsion generation. */
+/** Batched Cartesian overlap/Hcore and nuclear-repulsion generation.
+ * include_derivatives=false omits only AO derivative matrices, retaining the
+ * independent O(Natom) nuclear-repulsion response for a fused consumer. */
 vibeqc_status build_cuda_one_electron_integrals_batch(int device_id,
                                                       const std::vector<core::System>& systems,
                                                       std::vector<integrals::IntegralData>& outputs,
-                                                      std::string& detail);
+                                                      std::string& detail,
+                                                      bool include_derivatives = true);
 
 /** Generate Cartesian one-electron values and first nuclear derivatives. */
 vibeqc_status build_cuda_one_electron_integrals(int device_id, const core::System& system,
                                                 integrals::IntegralData& output,
-                                                std::string& detail);
+                                                std::string& detail,
+                                                bool include_derivatives = true);
 
 }  // namespace vibeqc::scf
 
