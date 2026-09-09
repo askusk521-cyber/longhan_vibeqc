@@ -207,6 +207,9 @@ def test_native_one_electron_uhf_export_accepts_an_empty_beta_spin():
         assert problem.layout.block_dimension("alpha") == 0
         assert problem.layout.block_dimension("beta") == 0
         assert problem.dimension == 0
+        dense = UHFResponseOperator(problem, backend).to_dense()
+        assert dense.shape == (0, 0)
+        assert not dense.flags.writeable
 
 
 def test_native_open_shell_uhf_export_builds_a_response_problem():

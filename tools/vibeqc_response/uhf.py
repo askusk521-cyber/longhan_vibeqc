@@ -520,6 +520,8 @@ class UHFResponseOperator:
 
     def to_dense(self):
         """Materialize a tiny diagnostic response matrix through JVP columns."""
+        if self.dimension == 0:
+            return immutable(np.empty((0, 0), dtype=np.float64))
         eye = np.eye(self.dimension)
         return immutable(
             np.column_stack(
