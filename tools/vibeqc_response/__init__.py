@@ -34,6 +34,12 @@ from .problem import (
     ResponseUnsupported,
     RotationLayout,
 )
+from .uhf import (
+    UHFReferenceSnapshot,
+    UHFResponseOperator,
+    UHFResponseProblem,
+    UHFSpinRotationLayout,
+)
 from .xc import FixedDensityXCDerivativeKernel
 
 __all__ = [
@@ -54,6 +60,10 @@ __all__ = [
     "ResponseUnsupported",
     "RotationLayout",
     "SolveResult",
+    "UHFReferenceSnapshot",
+    "UHFResponseOperator",
+    "UHFResponseProblem",
+    "UHFSpinRotationLayout",
     "explicit_rhf_response_matrix",
     "finite_rotation_jvp",
     "solve",

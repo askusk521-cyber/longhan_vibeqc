@@ -145,3 +145,23 @@ test compares this action with the independent explicit MO matrix from
 A direct four-center CUDA J/K response backend is not promoted by this slice;
 the evidence labels that absence explicitly instead of treating the CUDA DF
 path as equivalent to the conventional four-center Hamiltonian.
+
+## UHF CPHF boundary
+
+`UHFReferenceSnapshot`, `UHFSpinRotationLayout`, and `UHFResponseOperator`
+provide the shared alpha/beta CPHF contract.  The packed vector stores all
+alpha occupied-virtual rotations followed by beta rotations.  The matrix-free
+action uses the native UHF Fock convention: Coulomb is evaluated from the
+spin-summed density response, while each exchange action uses its own spin
+density.  This keeps both spin channels coupled without storing an AO N^4
+response tensor.
+
+The UHF snapshot binds both canonical spin references, occupations,
+Hamiltonian and SCF generation.  Consequently a recycle space cannot be
+reused merely because alpha/beta dimensions happen to match.  The generic
+GMRES, blocked multi-RHS and recycling APIs operate on this response problem
+unchanged.
+
+This is the HF UHF response layer only.  A native converged RKS/UKS CPKS
+endpoint remains a dependency of `#162`; this module does not relabel a UHF
+state as a KS endpoint or enable unsupported XC derivatives.
