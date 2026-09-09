@@ -33,7 +33,11 @@ def main():
     parser.add_argument("--case", choices=("sp8", "sdf18-direct"), default="sp8")
     parser.add_argument("--contraction-length", type=int, default=1)
     parser.add_argument("--maximum-bytes", type=int, default=128 << 10)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/benchmarks/one_electron_gradient_contract.json"),
+    )
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID"):
         parser.error("run real-GPU measurements inside a finite Slurm allocation")

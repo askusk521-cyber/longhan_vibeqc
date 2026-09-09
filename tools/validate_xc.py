@@ -271,7 +271,7 @@ def main():
         choices=("cpu", "cuda-compile", "gpu-numerical", "endpoint"),
         required=True,
     )
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path, default=Path(".artifacts/benchmarks/xc"))
     parser.add_argument("--cache", type=Path, default=Path("/tmp/xc161-cuda-cache"))
     parser.add_argument(
         "--nvcc", type=Path, default=Path("/group/software/cuda-12.9.1/bin/nvcc")

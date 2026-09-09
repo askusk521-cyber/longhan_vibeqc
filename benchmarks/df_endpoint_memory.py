@@ -30,7 +30,11 @@ def main():
     )
     parser.add_argument("--batch", type=int, default=3)
     parser.add_argument("--df-budget", type=int, default=0)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".artifacts/benchmarks/df_endpoint_memory.json"),
+    )
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID") or args.batch < 1 or args.df_budget < 0:
         parser.error("use a finite Slurm job, positive batch, and nonnegative budget")

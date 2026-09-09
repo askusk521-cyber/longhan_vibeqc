@@ -25,7 +25,7 @@ and split compilation set to one. All runs preserve Slurm device visibility.
   reported native host-plus-device numeric storage is 52,832 bytes. Generated
   runs contain 333 generated psss records and 3,016 fallback records; reference
   runs evaluate all 3,349 through the independent fallback.
-- [memcheck.log](memcheck.log): Compute Sanitizer reports zero errors. The
+- [sanitizer audit](../retention-238/migration.json): Compute Sanitizer reports zero errors. The
   sanitized scalar/gradient output also agrees with the ordinary run.
 
 Native allocation accounting includes host results, device results, and the
@@ -109,3 +109,7 @@ python tools/validate_weighted_eri_endpoints.py \
 Host checks: 77 focused tests, nine native CPU suites, 692 Python tests passing
 in CI with 74 GPU-specific skips, and pre-commit. Large sample JSON files are
 compact; the index and provenance preserve their identities.
+
+Routine log/XML files named in this historical account are now represented in
+[the retention audit](../retention-238/migration.json), with extracted measurements,
+diagnostic conclusions, and exact original Git/checksum identities.

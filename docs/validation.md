@@ -1,5 +1,7 @@
 # Reproducible validation gates (CG01)
 
+Storage, publication, exceptions and external archives follow the [evidence retention policy](evidence_retention.md).
+
 This protocol supports integral, tensor, and correlated-method development
 without requiring a GPU to write or test CPU code. It adds fixtures and evidence
 registration; executable production methods remain RHF and UHF. PySCF/libcint
