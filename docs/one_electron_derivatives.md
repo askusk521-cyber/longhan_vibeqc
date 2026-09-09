@@ -208,5 +208,16 @@ iteration counts.
 
 The generated implementation remains **opt-in**: gains are workload-dependent,
 and unchanged resident DF replay regresses. Reproduction scripts are archived
-alongside the results; update their worktree/interpreter paths locally and run
-each through a finite Slurm allocation.
+alongside the results and resolve the checkout relative to their own location.
+Set `PYTHON`, optional `CUDA_HOME`/`NSYS`, and run each through a finite Slurm
+allocation. `VIBEQC_LIBRARY` can select a nondefault build.
+
+Integration with the merged basis-projection implementation and review fixes
+is recorded separately in `integration/validation.json` beside the original
+evidence. It passes 13 native CUDA tests, 29 derivative tests, 5 projection
+tests, 41 checkpoint tests and 14 resource tests. The RHF/UHF cache regression
+rejects an infeasible replacement budget and verifies recovery at 1/8 MiB,
+rebuilding both prepared response data and the owning CUDA plan. The bridge
+restores the calling thread's device after cleanup; this single-GPU validation
+does not exercise restoration between distinct physical devices. Original
+benchmark hashes and timings above remain attached to the original binary.

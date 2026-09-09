@@ -30,10 +30,13 @@ def test_arbitrary_nonsymmetric_weights_raw_fused_and_bounded_schedules(represen
         "shells": [
             {
                 "atom_index": 0,
-                "angular_momentum": l,
-                "primitives": [[0.7 + 0.2 * l, 0.8], [1.8 + 0.1 * l, -0.13]],
+                "angular_momentum": angular_momentum,
+                "primitives": [
+                    [0.7 + 0.2 * angular_momentum, 0.8],
+                    [1.8 + 0.1 * angular_momentum, -0.13],
+                ],
             }
-            for l in (0, 1, 2, 3)
+            for angular_momentum in (0, 1, 2, 3)
         ]
         + [{"atom_index": 1, "angular_momentum": 0, "primitives": [[1.2, 1.0]]}],
     }

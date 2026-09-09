@@ -679,6 +679,48 @@ int main() {
                   bounded_bucket_results[1].scf.forces.size() == second_orbital.atoms.size() * 3U,
               "bounded CUDA DF bucket force dimensions are inconsistent");
 
+      // Reuse the actual fleet cache across option changes. This catches a
+      // stale default budget even when geometry and generated mapping match.
+      const char* response_policy = std::getenv("VIBEQC_ONE_ELECTRON_DERIVATIVES");
+      if (response_policy && std::string(response_policy) == "generated") {
+        for (auto run : {vibeqc::scf::run_rhf_density_fitting_cuda_bucket_cached,
+                         vibeqc::scf::run_uhf_density_fitting_cuda_bucket_cached}) {
+          struct PlanGuard {
+            vibeqc::scf::CudaDensityFittingJkPlan* plan{};
+            ~PlanGuard() { vibeqc::scf::destroy_cuda_density_fitting_jk_plan(plan); }
+          } cached;
+          std::vector<std::optional<vibeqc::scf::DensityFittingScfData>> prepared_cache;
+          std::vector<double> initial_forces;
+          for (std::size_t budget : {0U, 32768U, 1024U * 1024U, 8U * 1024U * 1024U}) {
+            bucket_options.density_fitting_memory_budget_bytes = budget;
+            const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
+                                    bucket_initial, 0, nullptr, &prepared_cache);
+            if (budget == 32768U) {
+              // This sp batch cannot fit its preparation metadata in 32 KiB.
+              // A stale default cache used to bypass that active limit.
+              require(replay.size() == 2 && replay[0].status == VIBEQC_STATUS_OUT_OF_MEMORY &&
+                          replay[1].status == VIBEQC_STATUS_OUT_OF_MEMORY && !cached.plan,
+                      "DF cache bypassed an infeasible replacement budget");
+              continue;
+            }
+            require(replay.size() == 2 && replay[0].status == VIBEQC_STATUS_SUCCESS &&
+                        replay[1].status == VIBEQC_STATUS_SUCCESS,
+                    ("generated DF cache budget replay failed at " + std::to_string(budget) +
+                     " bytes; status=" + std::to_string(replay[0].status))
+                        .c_str());
+            for (const auto& item : prepared_cache) {
+              require(item && item->one_electron_gradient_system.has_value() &&
+                          item->one_electron_gradient_budget ==
+                              (budget ? budget : 128U * 1024U * 1024U),
+                      "generated DF cache retained the previous response budget");
+            }
+            if (initial_forces.empty()) initial_forces = replay[0].scf.forces;
+            require_matrix_close(replay[0].scf.forces, initial_forces, 5.0e-9,
+                                 "DF cache budget change altered forces");
+          }
+        }
+      }
+
       std::vector<double> second_metric = plus.metric;
       const std::size_t dependent = plus.naux - 1;
       for (std::size_t auxiliary = 0; auxiliary < plus.naux; ++auxiliary) {

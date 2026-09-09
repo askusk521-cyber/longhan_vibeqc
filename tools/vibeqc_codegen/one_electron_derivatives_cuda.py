@@ -10,6 +10,7 @@ from .one_electron_cuda import (
     _emit_pair_geometry,
     _emit_support_cuda,
     _geometry_boundary,
+    _pair_geometry_inventory,
 )
 from .one_electron_derivatives import (
     build_one_electron_derivative_ir,
@@ -66,9 +67,14 @@ def _emit_axis_permutations():
         "__device__ __forceinline__ PairGeometry permute_pair(const PairGeometry& pair, unsigned axis) {",
         "  PairGeometry result = pair;",
     ]
+    _, fields = _pair_geometry_inventory()
+    axis_fields = {field[:-2] for field in fields if field.endswith(("_x", "_y", "_z"))}
+    for prefix in axis_fields:
+        if not all(f"{prefix}_{axis}" in fields for axis in "xyz"):
+            raise ValueError(f"incomplete Cartesian geometry field: {prefix}")
     for axis, name in ((1, "y"), (2, "z")):
         lines.append(f"  if (axis == {axis}) {{")
-        for center in ("a", "b", "pa", "pb"):
+        for center in sorted(axis_fields):
             lines += [
                 f"    result.{center}_x = pair.{center}_{name};",
                 f"    result.{center}_{name} = pair.{center}_x;",

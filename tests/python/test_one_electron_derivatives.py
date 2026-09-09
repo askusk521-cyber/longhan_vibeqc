@@ -41,7 +41,9 @@ def test_all_cartesian_derivatives_match_independent_libcint(family, angular):
     gto = pytest.importorskip("pyscf.gto")
     positions = [(0.2, -0.3, 0.1), (-0.4, 0.15, 0.5), (0.17, -0.11, -0.4)]
     exponents = (0.8, 0.35)
-    components = tuple(cartesian_components(l) for l in angular)
+    components = tuple(
+        cartesian_components(angular_momentum) for angular_momentum in angular
+    )
     mol = gto.M(
         atom=[("ghost-H", positions[0]), ("ghost-He", positions[1])],
         basis={
@@ -94,7 +96,11 @@ def test_center_sign_translation_and_arbitrary_fixed_weights(family, coincident)
         positions = positions[:2]
     exponents = (0.8, 0.35)
     angular = (3, 2)
-    pairs = list(product(*(cartesian_components(l) for l in angular)))
+    pairs = list(
+        product(
+            *(cartesian_components(angular_momentum) for angular_momentum in angular)
+        )
+    )
     weights = np.random.default_rng(141).normal(size=len(pairs))
     programs = [kernel(family, angular, c) for c in pairs]
     actual = sum(

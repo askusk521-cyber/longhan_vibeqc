@@ -19,6 +19,15 @@ void check(cudaError_t status) {
   if (status != cudaSuccess) throw CudaFailure{status};
 }
 
+/** Restore thread-local device selection after the owning arena drains. */
+struct DeviceGuard {
+  int previous{};
+  DeviceGuard() { check(cudaGetDevice(&previous)); }
+  ~DeviceGuard() { (void)cudaSetDevice(previous); }
+  DeviceGuard(const DeviceGuard&) = delete;
+  DeviceGuard& operator=(const DeviceGuard&) = delete;
+};
+
 /** Compact topology only: no Direct-HF quartet queues or integral tensors. */
 struct HostView {
   std::vector<std::int64_t> atom_offsets, ao_offsets, primitive_offsets;
@@ -150,8 +159,15 @@ vibeqc_status execute_cuda_one_electron_gradient(
   // entries. Bound that before creating any pair lists or metadata vectors.
   long double primitives = 0;
   for (const auto& shell : system.shells) primitives += shell.primitives.size();
+  // Shell count is bounded by AO count. Include shell/primitive offsets,
+  // expansion storage, atom data, output, and the larger of the pair lists.
+  constexpr long double per_ao =
+      2 * sizeof(std::int32_t) + 2 * sizeof(std::int64_t) + sizeof(std::uint8_t) +
+      molecule::kMaximumAoExpansionTerms * (3 * sizeof(std::uint8_t) + sizeof(double));
+  constexpr long double per_atom = sizeof(std::int32_t) + 6 * sizeof(double);
   const long double host_bound =
-      2 * (128.0L * n + 64.0L * atoms + 32.0L * primitives + 8.0L * n * (n + 1)) + 48;
+      2 * (per_ao * n + per_atom * atoms + 2 * sizeof(double) * primitives +
+           sizeof(std::int32_t) * static_cast<long double>(n) * (n + 1) + 4 * sizeof(std::int64_t));
   if (host_bound > maximum_bytes) {
     detail = "generated one-electron host staging exceeds maximum_bytes";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
@@ -162,6 +178,7 @@ vibeqc_status execute_cuda_one_electron_gradient(
     // A caller's old output capacity is outside this operation's budget, and
     // its input weights may alias that vector, so replace it only on success.
     std::vector<double> result(3 * atoms);
+    DeviceGuard device_guard;
     check(cudaSetDevice(device_id));
     Arena arena(maximum_bytes);
     check(cudaStreamCreateWithFlags(&arena.stream, cudaStreamNonBlocking));

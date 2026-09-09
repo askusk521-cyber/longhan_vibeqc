@@ -814,15 +814,19 @@ void bind_generated_one_electron(DensityFittingScfData& data, const core::System
 #endif
 }
 
-/** Cached DF tensors must follow a selector change even on unchanged geometry. */
-[[maybe_unused]] bool one_electron_response_policy_matches(const DensityFittingScfData& data) {
+/** Cached DF response state must follow policy and budget changes on replay. */
+[[maybe_unused]] bool one_electron_response_policy_matches(const DensityFittingScfData& data,
+                                                           std::size_t requested_budget) {
 #if VIBEQC_HAS_CUDA
   const bool generated = cuda_policy::generated_one_electron_derivatives_requested();
+  const auto effective_budget = requested_budget ? requested_budget : 128U * 1024U * 1024U;
   return data.one_electron_gradient_system.has_value() == generated &&
-         (!generated || data.one_electron_gradient_mapping ==
-                            cuda_policy::one_electron_derivative_mapping_requested());
+         (!generated || (data.one_electron_gradient_mapping ==
+                             cuda_policy::one_electron_derivative_mapping_requested() &&
+                         data.one_electron_gradient_budget == effective_budget));
 #else
   (void)data;
+  (void)requested_budget;
   return true;
 #endif
 }
@@ -2455,9 +2459,18 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
   std::vector<std::optional<DensityFittingScfData>> batched_prepared;
   const bool cached_data_complete =
       prepared_cache != nullptr && prepared_cache->size() == systems.size() &&
-      std::all_of(prepared_cache->begin(), prepared_cache->end(), [](const auto& item) {
-        return item.has_value() && one_electron_response_policy_matches(*item);
+      std::all_of(prepared_cache->begin(), prepared_cache->end(), [&options](const auto& item) {
+        return item.has_value() && one_electron_response_policy_matches(
+                                       *item, options.density_fitting_memory_budget_bytes);
       });
+  if (prepared_cache != nullptr && !cached_data_complete && cached_plan != nullptr &&
+      *cached_plan != nullptr) {
+    // A budget change can switch resident tensors to a source-backed plan.
+    // Rebuild both cache layers together so the new response data and plan
+    // share the same storage contract and allocation limit.
+    destroy_cuda_density_fitting_jk_plan(*cached_plan);
+    *cached_plan = nullptr;
+  }
   if (device_id >= 0 && !cached_data_complete) {
     batched_prepared = prepare_cuda_density_fitting_batch(
         systems, auxiliary_template, options.density_fitting_relative_threshold,
@@ -2809,9 +2822,18 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
   std::vector<std::optional<DensityFittingScfData>> batched_prepared;
   const bool cached_data_complete =
       prepared_cache != nullptr && prepared_cache->size() == systems.size() &&
-      std::all_of(prepared_cache->begin(), prepared_cache->end(), [](const auto& item) {
-        return item.has_value() && one_electron_response_policy_matches(*item);
+      std::all_of(prepared_cache->begin(), prepared_cache->end(), [&options](const auto& item) {
+        return item.has_value() && one_electron_response_policy_matches(
+                                       *item, options.density_fitting_memory_budget_bytes);
       });
+  if (prepared_cache != nullptr && !cached_data_complete && cached_plan != nullptr &&
+      *cached_plan != nullptr) {
+    // A budget change can switch resident tensors to a source-backed plan.
+    // Rebuild both cache layers together so the new response data and plan
+    // share the same storage contract and allocation limit.
+    destroy_cuda_density_fitting_jk_plan(*cached_plan);
+    *cached_plan = nullptr;
+  }
   if (device_id >= 0 && !cached_data_complete) {
     batched_prepared = prepare_cuda_density_fitting_batch(
         systems, auxiliary_template, options.density_fitting_relative_threshold,

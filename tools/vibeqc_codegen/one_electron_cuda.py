@@ -68,7 +68,8 @@ def _geometry_boundary(kernel, roots):
     return target, tuple(visit(root.identifier) for root in roots)
 
 
-def _emit_pair_geometry():
+def _pair_geometry_inventory():
+    """Return the kernel and complete field order shared by value/response emitters."""
     kernel = build_one_electron_component_kernel(
         build_one_electron_value_ir("overlap", (0, 0)), ("", "")
     )
@@ -76,6 +77,11 @@ def _emit_pair_geometry():
         f"{center}_{axis}" for center in "ab" for axis in "xyz"
     ]
     fields += [name for name, _ in kernel.pair_geometry]
+    return kernel, fields
+
+
+def _emit_pair_geometry():
+    kernel, fields = _pair_geometry_inventory()
     lines = ["struct PairGeometry {", "  double " + ", ".join(fields) + ";", "};"]
     lines += [
         "__device__ __forceinline__ PairGeometry make_pair(",
