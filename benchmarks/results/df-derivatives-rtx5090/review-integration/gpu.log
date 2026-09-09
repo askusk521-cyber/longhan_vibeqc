@@ -41,3 +41,7 @@ Total Test time (real) =  47.60 sec
 16 passed in 24.76s
 .....                                                                    [100%]
 5 passed in 4.03s
+
+Additional null-channel C ABI regressions (allocated Slurm execution):
+...                                                                      [100%]
+3 passed, 27 deselected in 0.41s

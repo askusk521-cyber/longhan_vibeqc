@@ -279,6 +279,46 @@ def test_metric_only_weight_response_moves_both_auxiliary_centers():
     np.testing.assert_allclose(actual.sum(axis=0), 0, atol=2e-10)
 
 
+@pytest.mark.parametrize("null_a,null_m", [(True, False), (False, True), (True, True)])
+def test_null_weight_channels_are_documented_zero_operators(
+    monkeypatch, null_a, null_m
+):
+    """The C ABI retains full shape counts when a null pointer denotes zero."""
+    assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
+    oi, xi = fixture_inputs("spherical", False)
+    orbital, auxiliary = calculator(oi), calculator(xi)
+    atoms = [(z, tuple(r)) for z, r in zip(("He", "H", "H"), oi["coordinates"])]
+    n = sum(2 * shell["angular_momentum"] + 1 for shell in oi["shells"])
+    a = sum(2 * shell["angular_momentum"] + 1 for shell in xi["shells"])
+    random = np.random.default_rng(1433)
+    wa, wm = random.normal(size=(n, n, a)), random.normal(size=(a, a))
+    expected, _ = execute_df_gradient(
+        orbital,
+        auxiliary,
+        atoms,
+        np.zeros_like(wa) if null_a else wa,
+        np.zeros_like(wm) if null_m else wm,
+    )
+    native = orbital._library.vibeqc_system_df_gradient_cuda
+
+    def nullable(*arguments):
+        native.argtypes, native.restype = nullable.argtypes, nullable.restype
+        arguments = list(arguments)
+        assert arguments[4] == wa.size and arguments[6] == wm.size
+        if null_a:
+            arguments[3] = None
+        if null_m:
+            arguments[5] = None
+        return native(*arguments)
+
+    monkeypatch.setattr(orbital._library, "vibeqc_system_df_gradient_cuda", nullable)
+    actual, resources = execute_df_gradient(orbital, auxiliary, atoms, wa, wm)
+    np.testing.assert_allclose(actual, expected, atol=2e-9, rtol=2e-11)
+    if null_a and null_m:
+        np.testing.assert_array_equal(actual, np.zeros_like(actual))
+        assert resources["tiles"] == 0
+
+
 @pytest.mark.parametrize("method,charge,multiplicity", [("rhf", 0, 1), ("uhf", 1, 2)])
 def test_auxiliary_only_atom_hf_energy_derivative(
     monkeypatch, method, charge, multiplicity

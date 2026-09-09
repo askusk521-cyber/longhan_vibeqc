@@ -1,4 +1,10 @@
 {
+  "additional_null_channel_regressions": {
+    "contract": "Null pointers denote zero operators while counts retain full tensor dimensions. Both null means an exact zero gradient without derivative tiles.",
+    "failed": 0,
+    "passed": 3,
+    "skipped": 0
+  },
   "benchmark_smoke": {
     "archive_rejection_job": 9105,
     "fresh_memory_records": 8,
