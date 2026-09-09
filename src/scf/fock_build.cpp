@@ -78,10 +78,9 @@ FockProviderCapabilities fock_provider_capabilities(FockApproximation approximat
                                                     FockBackend backend) {
   require(valid(approximation) && valid(backend), "unknown Fock provider/backend");
   FockProviderCapabilities capabilities;
-  capabilities.independent_terms = backend == FockBackend::Cpu;
+  capabilities.independent_terms = true;
   capabilities.arbitrary_coefficients = capabilities.independent_terms;
-  capabilities.legacy_adapter_only =
-      approximation == FockApproximation::DensityFitted && backend == FockBackend::Cuda;
+  capabilities.legacy_adapter_only = false;
   return capabilities;
 }
 
@@ -110,21 +109,20 @@ ResolvedFockBuild resolve_fock_build(FockBuildSpec spec, FockBackend backend,
     require(std::isfinite(metric_relative_threshold) && metric_relative_threshold > 0.0 &&
                 metric_relative_threshold < 1.0,
             "DF metric relative threshold must lie strictly between zero and one");
-    if (backend == FockBackend::Cuda)
-      require(standard_hf_terms(spec, FockApproximation::DensityFitted),
-              "CUDA independent/mixed Fock providers require a migrated execution plan");
-  } else if (backend == FockBackend::Cuda) {
-    require(standard_hf_terms(spec, FockApproximation::Exact),
-            "CUDA fused direct provider currently supports the complete standard HF pair only");
   }
   ResolvedFockBuild result;
   result.spec = std::move(spec);
   result.backend = backend;
   const bool fitted_hf = standard_hf_terms(result.spec, FockApproximation::DensityFitted);
-  result.schedule =
-      fitted
-          ? (fitted_hf ? FockSchedule::LegacyDensityFitting : FockSchedule::CpuIndependent)
-          : (backend == FockBackend::Cuda ? FockSchedule::CudaFused : FockSchedule::CpuReference);
+  if (backend == FockBackend::Cuda)
+    result.schedule = fitted_hf ? FockSchedule::LegacyDensityFitting
+                      : standard_hf_terms(result.spec, FockApproximation::Exact)
+                          ? FockSchedule::CudaFused
+                          : FockSchedule::CudaIndependent;
+  else
+    result.schedule =
+        fitted ? (fitted_hf ? FockSchedule::LegacyDensityFitting : FockSchedule::CpuIndependent)
+               : FockSchedule::CpuReference;
   result.screening_tolerance = screening_tolerance;
   result.metric_relative_threshold = fitted ? metric_relative_threshold : 0.0;
   result.legacy_density_fitting = fitted_hf;

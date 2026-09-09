@@ -3943,5 +3943,11 @@ void destroy_cuda_density_fitting_jk_plan(CudaDensityFittingJkPlan* plan) noexce
 std::size_t cuda_density_fitting_jk_plan_batch_size(const CudaDensityFittingJkPlan* plan) noexcept {
   return plan == nullptr ? 0U : plan->batch_size;
 }
+bool cuda_density_fitting_jk_plan_matches(const CudaDensityFittingJkPlan* plan, std::size_t item,
+                                          std::size_t nbf, std::size_t naux,
+                                          double relative_threshold) noexcept {
+  return plan && item < plan->batch_size && plan->nbf == nbf && plan->naux == naux &&
+         plan->metric_relative_threshold == relative_threshold;
+}
 
 }  // namespace vibeqc::scf

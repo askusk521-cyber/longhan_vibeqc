@@ -12,7 +12,14 @@ enum class FockSpin { Restricted, Unrestricted };
 enum class FockOperator { FullRange, ShortRange, LongRange };
 enum class FockApproximation { Exact, DensityFitted };
 enum class FockBackend { Cpu, Cuda };
-enum class FockSchedule { CpuReference, CudaFused, LegacyDensityFitting, CpuIndependent };
+enum class FockSchedule {
+  CpuReference,
+  CudaFused,
+  LegacyDensityFitting,
+  CpuIndependent,
+  /** Host SCF control with independently bound CUDA integral consumers. */
+  CudaIndependent
+};
 enum class FockPrecision { Float64 };
 enum class FockMatrixLayout { RowMajor, ColumnMajor };
 

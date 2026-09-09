@@ -24,6 +24,7 @@
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/cuda_df_gradient.hpp"
+#include "scf/cuda_fock_provider.hpp"
 #include "scf/cuda_one_electron_gradient.hpp"
 #include "scf/density_fitting.hpp"
 #include "scf/fock_build.hpp"
@@ -315,7 +316,8 @@ Matrix energy_weighted_density(const Matrix& coefficients, const std::vector<dou
   return weighted;
 }
 
-std::pair<Matrix, Matrix> build_uhf_focks(const CpuFockPlanView& plan, const Matrix& hcore,
+template <class Plan>
+std::pair<Matrix, Matrix> build_uhf_focks(const Plan& plan, const Matrix& hcore,
                                           const Matrix& alpha_density, const Matrix& beta_density) {
   auto fock = assemble_fock(plan.strategy(), hcore, plan.build(alpha_density, beta_density));
   return {std::move(fock.alpha), std::move(fock.beta)};
@@ -350,7 +352,8 @@ std::pair<Matrix, Matrix> split_spin_matrices(const Matrix& joined, std::size_t 
   };
 }
 
-Matrix build_fock(const CpuFockPlanView& plan, const Matrix& hcore, const Matrix& density) {
+template <class Plan>
+Matrix build_fock(const Plan& plan, const Matrix& hcore, const Matrix& density) {
   return assemble_fock(plan.strategy(), hcore, plan.build(density)).alpha;
 }
 
@@ -672,9 +675,9 @@ Matrix safeguarded_update(const ScfOptions& options, std::uint64_t generation, u
   return baseline;
 }
 
-std::vector<double> analytic_forces(const CpuFockPlanView& plan,
-                                    const integrals::IntegralData& ints, const Matrix& density,
-                                    const Matrix& weighted_density) {
+template <class Plan>
+std::vector<double> analytic_forces(const Plan& plan, const integrals::IntegralData& ints,
+                                    const Matrix& density, const Matrix& weighted_density) {
   const std::size_t n = ints.nbf;
   const auto two_electron = plan.energy_derivative(density);
   std::vector<double> forces(ints.ncoord, 0.0);
@@ -692,8 +695,8 @@ std::vector<double> analytic_forces(const CpuFockPlanView& plan,
   return forces;
 }
 
-std::vector<double> analytic_uhf_forces(const CpuFockPlanView& plan,
-                                        const integrals::IntegralData& ints,
+template <class Plan>
+std::vector<double> analytic_uhf_forces(const Plan& plan, const integrals::IntegralData& ints,
                                         const Matrix& alpha_density, const Matrix& beta_density,
                                         const Matrix& alpha_weighted_density,
                                         const Matrix& beta_weighted_density) {
@@ -715,7 +718,8 @@ std::vector<double> analytic_uhf_forces(const CpuFockPlanView& plan,
   return forces;
 }
 
-void finalize_scf(const CpuFockPlanView& plan, const integrals::IntegralData& ints,
+template <class Plan>
+void finalize_scf(const Plan& plan, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t occupied, Matrix& density,
                   bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
@@ -731,7 +735,8 @@ void finalize_scf(const CpuFockPlanView& plan, const integrals::IntegralData& in
   result.density = density;
 }
 
-void finalize_uhf(const CpuFockPlanView& plan, const integrals::IntegralData& ints,
+template <class Plan>
+void finalize_uhf(const Plan& plan, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t alpha_occupied,
                   std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
                   bool compute_forces, ScfResult& result) {
@@ -1425,10 +1430,11 @@ void validate_hf_warm_density(const core::System& source, vibeqc_method method,
   }
 }
 
-static ScfResult run_rhf_cpu_plan(const core::System& system, const ScfOptions& options,
-                                  const integrals::IntegralData& ints, const CpuFockPlanView& plan,
-                                  const DensityFittingScfData* fitted,
-                                  const std::vector<double>* initial_density) {
+template <class Plan>
+static ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& options,
+                                   const integrals::IntegralData& ints, const Plan& plan,
+                                   const DensityFittingScfData* fitted,
+                                   const std::vector<double>* initial_density) {
   const std::size_t n = ints.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
@@ -1504,10 +1510,11 @@ static ScfResult run_rhf_cpu_plan(const core::System& system, const ScfOptions& 
   return result;
 }
 
-static ScfResult run_uhf_cpu_plan(const core::System& system, const ScfOptions& options,
-                                  const integrals::IntegralData& ints, const CpuFockPlanView& plan,
-                                  const DensityFittingScfData* fitted,
-                                  const std::vector<double>* initial_density) {
+template <class Plan>
+static ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& options,
+                                   const integrals::IntegralData& ints, const Plan& plan,
+                                   const DensityFittingScfData* fitted,
+                                   const std::vector<double>* initial_density) {
   const std::size_t n = ints.nbf;
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (alpha_occupied > n || beta_occupied > n) {
@@ -1652,8 +1659,8 @@ ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* 
   const CpuFockPlanView plan(strategy, ints.nbf, ints.ncoord, provider(strategy.spec.coulomb),
                              provider(strategy.spec.exchange));
   return strategy.spec.spin == FockSpin::Unrestricted
-             ? run_uhf_cpu_plan(system, options, ints, plan, df ? &*df : nullptr, initial_density)
-             : run_rhf_cpu_plan(system, options, ints, plan, df ? &*df : nullptr, initial_density);
+             ? run_uhf_host_plan(system, options, ints, plan, df ? &*df : nullptr, initial_density)
+             : run_rhf_host_plan(system, options, ints, plan, df ? &*df : nullptr, initial_density);
 }
 
 ScfResult run_rhf(const core::System& system, const ScfOptions& options,
@@ -1789,6 +1796,94 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
     *output_diagnostics = diagnostics;
   }
   return owned_plan;
+}
+
+ScfResult run_cuda_independent_fock_strategy(const core::System& system,
+                                             const core::System* auxiliary,
+                                             const ScfOptions& options, int device_id,
+                                             const std::vector<double>* initial_density) {
+  if (!options.resolved_fock_build)
+    throw std::invalid_argument("CUDA Fock execution requires a resolved strategy");
+  auto strategy = *options.resolved_fock_build;
+  validate_resolved_fock_build(strategy);
+  if (strategy.backend != FockBackend::Cuda || device_id < 0 ||
+      strategy.screening_tolerance != options.screening_tolerance ||
+      (options.compute_forces && strategy.spec.derivative_order != 1) ||
+      (strategy.metric_relative_threshold != 0.0 &&
+       strategy.metric_relative_threshold != options.density_fitting_relative_threshold))
+    throw std::invalid_argument("CUDA Fock strategy disagrees with execution controls");
+  if (strategy.spec.spin == FockSpin::Restricted &&
+      (system.electron_count <= 0 || system.electron_count % 2 || system.multiplicity != 1))
+    throw std::invalid_argument("restricted Fock SCF requires a closed-shell electron count");
+  if (!options.compute_forces) {
+    auto spec = strategy.spec;
+    spec.derivative_order = 0;
+    strategy = resolve_fock_build(spec, FockBackend::Cuda, strategy.screening_tolerance,
+                                  strategy.metric_relative_threshold);
+  }
+  bool exact = false, fitted = false;
+  for (const auto* term : {&strategy.spec.coulomb, &strategy.spec.exchange}) {
+    exact |= term->present && term->approximation == FockApproximation::Exact;
+    fitted |= term->present && term->approximation == FockApproximation::DensityFitted;
+  }
+  auto check = [](vibeqc_status status, const std::string& detail) {
+    if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+    if (status == VIBEQC_STATUS_INVALID_ARGUMENT) throw std::invalid_argument(detail);
+    if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
+  };
+  std::string detail;
+  integrals::IntegralData cartesian;
+  check(build_cuda_one_electron_integrals(device_id, system, cartesian, detail,
+                                          options.compute_forces, options.compute_forces),
+        detail);
+  const auto ints = integrals::transform_integrals(cartesian, system);
+  cartesian = {};  // Release the Cartesian staging before persistent provider allocation.
+  // The independent schedule keeps host SCF control explicit. GPU integral
+  // consumers retain only their own metadata/tiles; no CPU ERI oracle or
+  // coordinate-indexed two-electron derivative tensor enters this route.
+  const auto budget = options.density_fitting_memory_budget_bytes
+                          ? options.density_fitting_memory_budget_bytes
+                          : 256U * 1024U * 1024U;
+  CudaDirectJkPlan* raw_exact{};
+  CudaDirectJkDiagnostic exact_info;
+  if (exact)
+    check(create_cuda_direct_jk_plan(device_id, {system}, strategy.spec.derivative_order,
+                                     strategy.screening_tolerance, fitted ? budget / 2 : budget,
+                                     &raw_exact, exact_info, detail),
+          detail);
+  std::unique_ptr<CudaDirectJkPlan, decltype(&destroy_cuda_direct_jk_plan)> direct(
+      raw_exact, &destroy_cuda_direct_jk_plan);
+  CudaDensityFittingPlanPtr df(nullptr, &destroy_cuda_density_fitting_jk_plan);
+  DensityFittingScfData data;
+  if (fitted) {
+    const auto& aux = auxiliary ? *auxiliary : system;
+    const auto available = budget - exact_info.device_bytes;
+    ScfOptions execution = options;
+    // Keep a disjoint allowance for generated DF response staging. An active
+    // outer ledger additionally enforces the complete prepared allocation cap.
+    execution.density_fitting_memory_budget_bytes = available / 2;
+    if (!execution.density_fitting_memory_budget_bytes) throw std::bad_alloc();
+    data.raw.nbf = ints.nbf;
+    data.raw.naux = molecule::ao_count(aux);
+    data.raw.ncoord = system.atoms.size() * 3;
+    data.metric_relative_threshold = strategy.metric_relative_threshold;
+    data.df_gradient_orbital = system;
+    data.df_gradient_auxiliary = aux;
+    data.df_gradient_mapping = cuda_policy::df_derivative_mapping_requested();
+    data.df_gradient_budget = available - execution.density_fitting_memory_budget_bytes;
+    df = make_cuda_density_fitting_plan(data, execution, device_id, ints.nbf, nullptr, &system,
+                                        &aux);
+  }
+  auto provider = [&](const FockTermSpec& term) -> std::optional<CudaFockProviderView> {
+    if (!term.present) return std::nullopt;
+    return term.approximation == FockApproximation::Exact ? CudaFockProviderView(direct.get())
+                                                          : CudaFockProviderView(df.get(), data);
+  };
+  const CudaFockPlanView plan(strategy, ints.nbf, system.atoms.size() * 3,
+                              provider(strategy.spec.coulomb), provider(strategy.spec.exchange));
+  return strategy.spec.spin == FockSpin::Unrestricted
+             ? run_uhf_host_plan(system, options, ints, plan, nullptr, initial_density)
+             : run_rhf_host_plan(system, options, ints, plan, nullptr, initial_density);
 }
 
 CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
@@ -3261,6 +3356,11 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_cached(
 #endif  // VIBEQC_HAS_CUDA
 
 #if !VIBEQC_HAS_CUDA
+ScfResult run_cuda_independent_fock_strategy(const core::System&, const core::System*,
+                                             const ScfOptions&, int, const std::vector<double>*) {
+  throw std::runtime_error("CUDA Fock providers are unavailable in this build");
+}
+
 // Keep diagnostics identical to the CUDA backend's small persistent-ERI
 // policy without exposing an implementation tuning threshold through the ABI.
 constexpr std::size_t kDiagnosticPersistentEriAoLimit = 16;

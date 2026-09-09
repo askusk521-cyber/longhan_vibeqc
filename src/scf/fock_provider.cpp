@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "scf/cuda_fock_provider.hpp"
+
 namespace vibeqc::scf {
 namespace {
 void require(bool condition, const char* message) {
@@ -110,19 +112,20 @@ std::vector<double> CpuFockProviderView::derivative(FockBuildSpec spec,
       .derivative;
 }
 
-CpuFockPlanView::CpuFockPlanView(ResolvedFockBuild strategy, std::size_t nbf, std::size_t ncoord,
-                                 std::optional<CpuFockProviderView> coulomb,
-                                 std::optional<CpuFockProviderView> exchange)
+template <class Provider>
+BasicFockPlanView<Provider>::BasicFockPlanView(ResolvedFockBuild strategy, std::size_t nbf,
+                                               std::size_t ncoord, std::optional<Provider> coulomb,
+                                               std::optional<Provider> exchange)
     : strategy_(std::move(strategy)),
       nbf_(nbf),
       ncoord_(ncoord),
       coulomb_(coulomb),
       exchange_(exchange) {
   validate_resolved_fock_build(strategy_);
-  require(strategy_.backend == FockBackend::Cpu, "CPU Fock plan cannot execute a CUDA strategy");
+  require(strategy_.backend == Provider::backend, "Fock plan/provider backend mismatch");
   require(nbf_ > 0, "empty Fock plan AO basis");
   (void)product(nbf_, nbf_);
-  auto bind = [&](const FockTermSpec& term, std::optional<CpuFockProviderView>& provider) {
+  auto bind = [&](const FockTermSpec& term, std::optional<Provider>& provider) {
     if (!term.present) {
       provider.reset();  // Irrelevant data cannot affect an absent term's identity or validation.
       return;
@@ -137,19 +140,24 @@ CpuFockPlanView::CpuFockPlanView(ResolvedFockBuild strategy, std::size_t nbf, st
   bind(strategy_.spec.exchange, exchange_);
 }
 
-void CpuFockPlanView::validate_density(const std::vector<double>& density,
-                                       const std::vector<double>& beta) const {
+template <class Provider>
+void BasicFockPlanView<Provider>::validate_density(const std::vector<double>& density,
+                                                   const std::vector<double>& beta,
+                                                   bool derivative) const {
   require(density.size() == nbf_ * nbf_ &&
               (strategy_.spec.spin == FockSpin::Restricted ? beta.empty()
                                                            : beta.size() == density.size()),
           "Fock provider density/spin layout mismatch");
   finite(density);
   finite(beta);
+  if (coulomb_) coulomb_->validate_density(density, beta, derivative);
+  if (exchange_ && exchange_ != coulomb_) exchange_->validate_density(density, beta, derivative);
 }
 
-DirectJkMatrices CpuFockPlanView::build(const std::vector<double>& density,
-                                        const std::vector<double>& beta) const {
-  validate_density(density, beta);
+template <class Provider>
+DirectJkMatrices BasicFockPlanView<Provider>::build(const std::vector<double>& density,
+                                                    const std::vector<double>& beta) const {
+  validate_density(density, beta, false);
   if (coulomb_ && exchange_ && *coulomb_ == *exchange_)
     return coulomb_->build(strategy_.spec, density, beta);
   DirectJkMatrices result;
@@ -164,10 +172,11 @@ DirectJkMatrices CpuFockPlanView::build(const std::vector<double>& density,
   return result;
 }
 
-std::vector<double> CpuFockPlanView::energy_derivative(const std::vector<double>& density,
-                                                       const std::vector<double>& beta) const {
+template <class Provider>
+std::vector<double> BasicFockPlanView<Provider>::energy_derivative(
+    const std::vector<double>& density, const std::vector<double>& beta) const {
   require(strategy_.spec.derivative_order == 1, "Fock derivatives were not requested");
-  validate_density(density, beta);
+  validate_density(density, beta, true);
   if (coulomb_ && exchange_ && *coulomb_ == *exchange_)
     return coulomb_->derivative(strategy_.spec, density, beta);
   std::vector<double> result(ncoord_);
@@ -180,5 +189,8 @@ std::vector<double> CpuFockPlanView::energy_derivative(const std::vector<double>
   }
   return result;
 }
+
+template class BasicFockPlanView<CpuFockProviderView>;
+template class BasicFockPlanView<CudaFockProviderView>;
 
 }  // namespace vibeqc::scf

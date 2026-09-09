@@ -18,6 +18,9 @@ ScfResult run_fock_strategy(const core::System& system, const core::System* auxi
     throw std::invalid_argument("Fock strategy disagrees with execution controls");
   if (strategy.backend == FockBackend::Cpu)
     return run_cpu_fock_strategy(system, auxiliary, options, initial_density);
+  if (strategy.schedule == FockSchedule::CudaIndependent || strategy.spec.derivative_order == 0)
+    return run_cuda_independent_fock_strategy(system, auxiliary, options, device_id,
+                                              initial_density);
 
   // Retain the established resident/streamed CUDA HF solver and its fused
   // Fock/force schedules. Backend choice never authorizes a fitted Hamiltonian.

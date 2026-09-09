@@ -29,6 +29,14 @@ ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* 
                                 const ScfOptions& options,
                                 const std::vector<double>* initial_density = nullptr);
 
+/** General independent CUDA route. Reuses host DIIS/eigensolve/finalization
+ * control with CUDA direct/DF J/K and matched two-electron derivatives. The
+ * standard HF entry retains its existing fused device solver separately. */
+ScfResult run_cuda_independent_fock_strategy(const core::System& system,
+                                             const core::System* auxiliary,
+                                             const ScfOptions& options, int device_id,
+                                             const std::vector<double>* initial_density = nullptr);
+
 /** Method-neutral single-item dispatch. CPU independent providers and existing
  * CUDA fused HF schedules share this boundary; callers supply semantics through
  * options.resolved_fock_build instead of branching on a combined DF enum.

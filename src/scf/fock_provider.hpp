@@ -8,6 +8,9 @@
 
 namespace vibeqc::scf {
 
+template <class Provider>
+class BasicFockPlanView;
+
 /** Typed, non-owning view of one immutable CPU provider's prepared integrals.
  * The enclosing geometry cache owns the data and must outlive this view and
  * every plan using it. Replacing geometry, AO representation, auxiliary basis,
@@ -16,6 +19,7 @@ namespace vibeqc::scf {
  */
 class CpuFockProviderView {
  public:
+  static constexpr FockBackend backend = FockBackend::Cpu;
   explicit CpuFockProviderView(const integrals::IntegralData& exact);
   explicit CpuFockProviderView(const DensityFittingScfData& fitted);
   // Do not allow a view of a temporary integral owner.
@@ -28,7 +32,9 @@ class CpuFockProviderView {
   bool operator==(const CpuFockProviderView&) const = default;
 
  private:
-  friend class CpuFockPlanView;
+  template <class>
+  friend class BasicFockPlanView;
+  void validate_density(const std::vector<double>&, const std::vector<double>&, bool) const {}
   void validate(const ResolvedFockBuild& strategy) const;
   DirectJkMatrices build(FockBuildSpec spec, const std::vector<double>& density,
                          const std::vector<double>& beta) const;
@@ -44,11 +50,11 @@ class CpuFockProviderView {
  * The plan returns results by value, so a failed provider cannot publish a
  * partial Fock or change a neighboring item's density/warm state.
  */
-class CpuFockPlanView {
+template <class Provider>
+class BasicFockPlanView {
  public:
-  CpuFockPlanView(ResolvedFockBuild strategy, std::size_t nbf, std::size_t ncoord,
-                  std::optional<CpuFockProviderView> coulomb = {},
-                  std::optional<CpuFockProviderView> exchange = {});
+  BasicFockPlanView(ResolvedFockBuild strategy, std::size_t nbf, std::size_t ncoord,
+                    std::optional<Provider> coulomb = {}, std::optional<Provider> exchange = {});
   const ResolvedFockBuild& strategy() const { return strategy_; }
   DirectJkMatrices build(const std::vector<double>& density,
                          const std::vector<double>& beta = {}) const;
@@ -58,11 +64,14 @@ class CpuFockPlanView {
                                         const std::vector<double>& beta = {}) const;
 
  private:
-  void validate_density(const std::vector<double>& density, const std::vector<double>& beta) const;
+  void validate_density(const std::vector<double>& density, const std::vector<double>& beta,
+                        bool derivative) const;
   ResolvedFockBuild strategy_;
   std::size_t nbf_{}, ncoord_{};
-  std::optional<CpuFockProviderView> coulomb_, exchange_;
+  std::optional<Provider> coulomb_, exchange_;
 };
+
+using CpuFockPlanView = BasicFockPlanView<CpuFockProviderView>;
 
 }  // namespace vibeqc::scf
 #endif

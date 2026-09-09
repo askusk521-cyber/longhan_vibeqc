@@ -1,6 +1,14 @@
 #include "scf/cuda_density_fitting.hpp"
 
 namespace vibeqc::scf {
+vibeqc_status execute_cuda_density_fitting_generated_force_response(
+    CudaDensityFittingJkPlan*, std::size_t, const core::System&, const core::System&,
+    std::span<const double>, const std::vector<double>&,
+    std::span<const DensityFittingDensityResponse>, unsigned, std::size_t, std::size_t,
+    std::vector<double>&, std::string& detail, DfGradientResources*) {
+  detail = "CUDA DF generated response is unavailable in this build";
+  return VIBEQC_STATUS_NOT_IMPLEMENTED;
+}
 
 CudaDensityFittingSourceDiagnostic cuda_density_fitting_integral_source_diagnostic(
     const CudaDensityFittingIntegralSource*) noexcept {
@@ -98,6 +106,10 @@ vibeqc_status execute_cuda_density_fitting_source_uhf_force_response(
 
 std::size_t cuda_density_fitting_jk_plan_batch_size(const CudaDensityFittingJkPlan*) noexcept {
   return 0U;
+}
+bool cuda_density_fitting_jk_plan_matches(const CudaDensityFittingJkPlan*, std::size_t, std::size_t,
+                                          std::size_t, double) noexcept {
+  return false;
 }
 
 namespace {

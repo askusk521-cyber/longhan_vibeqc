@@ -484,24 +484,30 @@ int main() {
     // choices including a final partial auxiliary block, to isolate the
     // energy reverse chain before testing its GPU consumer.
     const auto check_response_weights = [&](bool unrestricted, std::size_t budget,
-                                            std::size_t tile_cap) {
+                                            std::size_t tile_cap,
+                                            vibeqc::scf::JkCoefficients coefficients) {
       const std::size_t n = integrals.nbf, a = integrals.naux, matrix = n * n;
       const auto inverse = vibeqc::scf::density_fitting_metric_pseudoinverse(integrals, 1e-12);
       std::vector<double> symmetric_rhf(matrix);
       for (std::size_t i = 0; i < n; ++i)
         for (std::size_t j = 0; j < n; ++j)
           symmetric_rhf[i * n + j] = 0.5 * (rhf_density[i * n + j] + rhf_density[j * n + i]);
-      const auto expected = unrestricted ? uhf_gradient.derivative
-                                         : vibeqc::scf::build_density_fitting_rhf_gradient(
-                                               integrals, symmetric_rhf, 1e-12)
-                                               .derivative;
+      const auto expected = unrestricted
+                                ? vibeqc::scf::build_density_fitting_uhf_gradient(
+                                      integrals, alpha_density, beta_density, 1e-12, coefficients)
+                                      .derivative
+                                : vibeqc::scf::build_density_fitting_rhf_gradient(
+                                      integrals, symmetric_rhf, 1e-12, coefficients)
+                                      .derivative;
       std::vector<double> total(matrix);
       for (std::size_t ij = 0; ij < matrix; ++ij) total[ij] = alpha_density[ij] + beta_density[ij];
       std::vector<vibeqc::scf::DensityFittingDensityResponse> terms;
       if (unrestricted) {
-        terms = {{total, 1.0, 0.0}, {alpha_density, 0.0, 0.5}, {beta_density, 0.0, 0.5}};
+        terms = {{total, coefficients.coulomb, 0.0},
+                 {alpha_density, 0.0, -0.5 * coefficients.exchange},
+                 {beta_density, 0.0, -0.5 * coefficients.exchange}};
       } else {
-        terms = {{symmetric_rhf, 1.0, 0.25}};
+        terms = {{symmetric_rhf, coefficients.coulomb, -0.5 * coefficients.exchange}};
       }
       std::vector<double> derivative(integrals.ncoord, 0.0);
       const auto stats = vibeqc::scf::contract_density_fitting_response_weights(
@@ -528,8 +534,13 @@ int main() {
                            "HF external response weights differ from raw gradient oracle");
     };
     for (bool unrestricted : {false, true}) {
-      check_response_weights(unrestricted, 16384U, 3U);
-      check_response_weights(unrestricted, 65536U, 7U);
+      for (const auto coefficients :
+           {vibeqc::scf::JkCoefficients{1.0, unrestricted ? -1.0 : -0.5},
+            vibeqc::scf::JkCoefficients{-0.7, 0.2}, vibeqc::scf::JkCoefficients{0.0, -0.2},
+            vibeqc::scf::JkCoefficients{1.3, 0.0}, vibeqc::scf::JkCoefficients{0.0, 0.0}}) {
+        check_response_weights(unrestricted, 16384U, 3U, coefficients);
+        check_response_weights(unrestricted, 65536U, 7U, coefficients);
+      }
     }
 
     // The complete force helpers add the ordinary one-electron, overlap

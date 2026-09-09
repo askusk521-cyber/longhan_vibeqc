@@ -128,6 +128,11 @@ vibeqc_status execute_cuda_density_fitting_source_uhf_force_response(
 
 /** Return the fixed batch cardinality owned by a prepared plan. */
 std::size_t cuda_density_fitting_jk_plan_batch_size(const CudaDensityFittingJkPlan* plan) noexcept;
+/** Verify a borrowed item's dimensions and the value-side metric cutoff before
+ * binding an independent Fock/response view. */
+bool cuda_density_fitting_jk_plan_matches(const CudaDensityFittingJkPlan* plan, std::size_t item,
+                                          std::size_t nbf, std::size_t naux,
+                                          double relative_threshold) noexcept;
 
 /** Scalar state returned by the device-resident DF SCF loop. */
 struct CudaDensityFittingDeviceScfItem {

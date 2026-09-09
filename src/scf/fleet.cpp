@@ -161,9 +161,12 @@ FleetPlan::FleetPlan(std::vector<core::System> systems, vibeqc_method method, Sc
       (options_.compute_forces && strategy.spec.derivative_order != 1) ||
       (strategy.metric_relative_threshold != 0.0 &&
        strategy.metric_relative_threshold != options_.density_fitting_relative_threshold) ||
-      (backend == FockBackend::Cuda &&
+      (backend == FockBackend::Cuda && strategy.schedule != FockSchedule::CudaIndependent &&
        strategy.legacy_density_fitting != cuda_density_fitting_enabled_))
     throw std::invalid_argument("fleet options disagree with the resolved Fock strategy");
+  if (strategy.schedule == FockSchedule::CudaIndependent &&
+      (shell_class_profiling_enabled_ || inactive_eigensolver_profiling_enabled_))
+    throw std::invalid_argument("independent CUDA SCF does not expose fused-solver profiles");
   std::iota(execution_order_.begin(), execution_order_.end(), 0);
   std::stable_sort(execution_order_.begin(), execution_order_.end(),
                    [&](std::size_t a, std::size_t b) {
@@ -208,7 +211,9 @@ std::vector<FleetItemResult> FleetPlan::execute(
   const auto execute_one = [&](std::size_t system_index) {
     FleetItemResult& item = results[system_index];
     item.bucket_id = bucket_ids_[system_index];
-    item.executed_backend = VIBEQC_BACKEND_CPU_REFERENCE;
+    item.executed_backend = options_.resolved_fock_build->backend == FockBackend::Cuda
+                                ? VIBEQC_BACKEND_CUDA
+                                : VIBEQC_BACKEND_CPU_REFERENCE;
     core::System execution_system = systems_[system_index];
     if (!coordinates.empty() && coordinates[system_index].has_value()) {
       if (!valid_coordinates(*coordinates[system_index], execution_system.atoms.size())) {
@@ -281,7 +286,15 @@ std::vector<FleetItemResult> FleetPlan::execute(
     const std::size_t worker_count = std::min(
         bucket_size, requested_workers ? std::min<std::size_t>(hardware_threads, requested_workers)
                                        : hardware_threads);
-    if (cuda_fock_enabled_) {
+    if (options_.resolved_fock_build->backend == FockBackend::Cuda &&
+        (options_.resolved_fock_build->schedule == FockSchedule::CudaIndependent ||
+         options_.resolved_fock_build->spec.derivative_order == 0)) {
+      // General strategies share the host iteration control and execute one
+      // CUDA item at a time. This preserves the outer resource ledger and
+      // prevents an incompatible request from reaching either fused HF loop.
+      for (std::size_t position = bucket_begin; position < bucket_end; ++position)
+        execute_one(execution_order_[position]);
+    } else if (cuda_fock_enabled_) {
       std::vector<core::System> cuda_systems;
       std::vector<std::size_t> original_indices;
       std::vector<const std::vector<double>*> initial_densities;

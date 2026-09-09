@@ -31,6 +31,7 @@
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
+#include "scf/cuda_direct_jk.hpp"
 #include "scf/cuda_eigensolver_policy.hpp"
 #include "scf/cuda_weighted_eri.hpp"
 #include "scf/direct_task_layout.hpp"
@@ -13105,8 +13106,9 @@ std::vector<double> make_public_to_cartesian_transform(const core::System& syste
   return transform;
 }
 
-vibeqc_status source_upload(CudaDensityFittingIntegralSourceImpl& source, const void* host,
-                            std::size_t bytes, void** device, std::string& detail) {
+template <class Source>
+vibeqc_status source_upload(Source& source, const void* host, std::size_t bytes, void** device,
+                            std::string& detail) {
   if (bytes == 0U) {
     *device = nullptr;
     return VIBEQC_STATUS_SUCCESS;
@@ -19276,6 +19278,8 @@ vibeqc_status build_cuda_one_electron_integrals_batch_impl(
 }
 
 }  // namespace
+
+#include "scf/cuda/direct_jk.cuh"
 
 vibeqc_status build_cuda_density_fitting_integrals(int device_id,
                                                    const core::System& orbital_system,

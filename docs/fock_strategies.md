@@ -23,20 +23,33 @@ CUDA HF still uses its established fused solver. CUDA DF raw services now
 accept a typed output selection for resident, streamed, tiled, batch, item and
 device-pointer execution. Unselected device outputs may be null and are never
 accessed; host outputs are empty. Plan scratch capacity remains accounted and
-available for subsequent selections. This raw service change does not yet
-make arbitrary CUDA strategies executable through the full SCF/force layer.
+available for subsequent selections.
 
-Initial validation: 14 CPU native suites passed, including all independent
-exact/DF pairings against a separate dense contraction, central differences
-with a nonzero discarded metric eigenvalue, eight molecular spin/provider
-endpoints, warm replay, changed geometry and a ragged fleet with a rejected
-neighbor. CUDA validation is recorded in the working artifact directory.
+`CudaFockProviderView` now binds existing direct and DF plan items to the same
+`BasicFockPlanView` composition used by the CPU. The direct provider reuses the
+existing contracted-ERI value/Dual evaluator and retains metadata, AO matrices,
+and compact gradient storage without molecular ERI tensors. Bounds and computed
+outputs reject nonfinite results transactionally. Absent or zero-weight
+responses do not evaluate unused quadratic terms.
 
-Remaining: production independent CUDA direct bindings, matching CUDA
-derivative dispatch, public independent choices and diagnostics, available XC
-integration, full prepared identity checks and matched endpoint overhead
-evidence. The sections below preserve the baseline audit; they describe the
-coupling that existed before these implementation changes.
+General CUDA requests select `CudaIndependent`: CUDA one-electron generation,
+direct/DF J/K and matching two-electron response feed the shared host SCF
+iteration/finalization code. Standard HF keeps its fused CUDA schedules. The
+DF derivative reuses the generated external-weight service and its full
+spectrally truncated metric response, accepting signed coefficients. It
+requires symmetric densities; all raw providers accept nonsymmetric inputs.
+
+Validation includes 14 CPU native suites, through-f CUDA direct comparisons,
+s/p derivatives, independent DF device layouts and source/result failure
+cases. The composition suite checks every exact/DF/absent pair, both spins,
+signed derivatives, resident/source-backed DF storage, distinct batch items,
+and SCF/replay/changed-geometry endpoints. Exact run logs and build provenance
+are retained in the untracked artifact directory.
+
+Remaining: public independent choices and diagnostics, available XC
+integration, retained independent fleet plans, full prepared identity checks,
+and matched endpoint overhead evidence. The sections below preserve the
+baseline audit; they describe the coupling before these implementation changes.
 
 ## Existing mathematical contract
 

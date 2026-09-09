@@ -8,7 +8,9 @@
 
 namespace vibeqc::scf {
 
-/** A symmetric density contribution to .5*cJ*rho^T M+ rho - cK*Q:M+. */
+/** A symmetric density contribution to .5*cJ*rho^T M+ rho - cK*Q:M+.
+ * Coefficients may have either sign. Signed Fock weights map to cJ and
+ * cK=-0.5*FockExchange; absent terms use zero and skip their response work. */
 struct DensityFittingDensityResponse {
   std::span<const double> density;
   double coulomb_coefficient{}, exchange_coefficient{};
