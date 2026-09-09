@@ -67,6 +67,14 @@ def _provider_blocks(provider, snapshot, names):
 
 @dataclass(frozen=True)
 class SolverOptions:
+    """CPU iteration controls with fixed scientific acceptance limits.
+
+    Damping, level shifts and CC DIIS affect proposals only; final acceptance
+    uses the original physical equations. ``max_bytes`` bounds logical numeric
+    solver/interpreter storage independently of the provider's cache budget;
+    it is not a Python/BLAS process-RSS cap.
+    """
+
     max_iterations: int = 100
     energy_tolerance: float = 1e-11
     residual_tolerance: float = 1e-9
@@ -282,6 +290,13 @@ class _DIIS:
 
 @dataclass(frozen=True)
 class CCSDResult:
+    """Owned last finite state, convergence evidence and reproducible inputs.
+
+    A finite energy alone does not imply convergence: inspect ``converged`` or
+    ``status``. Failure results retain their reason and iteration history, and
+    can be written/replayed without turning exhaustion into successful CCSD.
+    """
+
     status: str
     reason: str
     correlation_energy: float | None
@@ -319,7 +334,15 @@ class CCSDResult:
 
 
 def solve(snapshot, provider, *, options=None, t1=None, t2=None):
-    """Iterate CCSD; only a fresh expanded R1/R2 and delta-E can accept a root."""
+    """Solve conventional RCCSD from an owned RHF reference and CPU provider.
+
+    Supply both real FP64 T1/T2 arrays or neither (the default is an MP2-like
+    guess). The provider is borrowed and must remain open during the call.
+    Invalid references, amplitudes, denominators or budgets raise before MO
+    conversion. Numerical failure/exhaustion returns a nonconverged result.
+    Only fresh expanded physical R1/R2 and delta-E can accept the final root;
+    the implementation never calls an external coupled-cluster solver.
+    """
     prepared = PreparedCCSD(snapshot, provider, options, t1, t2)
     options = prepared.options
     current = prepared.initial

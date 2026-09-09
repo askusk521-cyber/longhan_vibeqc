@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from tools.cc_endpoint_fixtures import load, snapshot_from_fixture, source_arguments
-from tools.vibeqc_cc.solver import PreparedCCSD, SolverOptions, solve
+from tools.vibeqc_cc import PreparedCCSD, SolverOptions, solve
 from tools.vibeqc_posthf import MOBlock
 from tools.vibeqc_posthf.export import export_rhf
 from tools.vibeqc_posthf.providers import BlockResult, ConventionalProvider

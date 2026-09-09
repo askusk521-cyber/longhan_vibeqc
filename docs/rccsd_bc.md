@@ -69,7 +69,7 @@ PYTHONPATH=.:python python -m tools.validate_ccsd --output /tmp/cc-b-evidence
 
 ## C: CPU iteration and final acceptance
 
-`tools.vibeqc_cc.solver.solve(snapshot, provider, options=SolverOptions(),
+`tools.vibeqc_cc.solve(snapshot, provider, options=SolverOptions(),
 t1=None, t2=None)` is the internal CPU facade. It consumes the existing #147
 reference and conventional CPU provider; it does not register a public method
 or call an external CC solver. `PreparedCCSD` first validates the reference,
@@ -126,6 +126,26 @@ replayed.json` rebuilds the same validated reference and repeats iterations
 using the saved MO blocks without new AO work. Timings need not reproduce;
 mathematical state and histories do. A failure replay is not convergence.
 
+The package-level facade exposes the solver without requiring callers to know
+its module layout. For a small validated RHF reference and open conventional
+CPU provider:
+
+```python
+from tools.vibeqc_cc import SolverOptions, solve
+
+result = solve(snapshot, provider, options=SolverOptions(
+    energy_tolerance=1e-12, residual_tolerance=1e-10,
+))
+if not result.converged:
+    raise RuntimeError(result.reason)
+print(result.correlation_energy, result.total_energy)
+result.write("ccsd-state.json")
+```
+
+This remains the internal correctness interface, with the reference/provider
+domain and failure rules above. GPU, open-shell, frozen-core, triples and
+derivative requests cannot be inferred from this CPU facade.
+
 ## Molecular evidence and reproduction
 
 `tools.generate_cc_endpoints` reuses exact #138 H2, He, H2O, NH3 and CH4 inputs.
@@ -163,3 +183,29 @@ python -m tools.validate_cc_solver --output /tmp/cc-solver-evidence
 
 GPU/#149, (T), Lambda and gradients remain outside #148. No performance or
 public capability promotion follows from these CPU correctness results.
+
+## CPU milestone acceptance map
+
+PR #215 delivered the scientific A/B/C implementation. The package facade now
+exposes that complete implementation and the documentation distinguishes its
+current capabilities from the historical A-only description.
+
+| #148 requirement | Implementation and verification |
+| --- | --- |
+| Restricted normalization, pair metric and full Fock dependence | `equations.py`, `inventory.py`; random-amplitude, polynomial-group and pack/unpack tests in `test_cc_equations.py` |
+| Complete physical R1/R2, permutation factors and shared/expanded equivalence | `doubles.py`; determinant projections, mutation tests and pinned PySCF intermediate comparisons in `test_cc_doubles*.py` |
+| Independent CC iteration controls and strict final root | `SolverOptions`, `PreparedCCSD`, `solve`; physical denominator, separate DIIS and expanded final-residual tests in `test_cc_solver.py` |
+| Native HF/provider integration, H2/He FCI and multielectron molecules | Five same-C and five fresh-native-HF endpoints in `tools.validate_cc_solver`; preserved independent inputs in `tests/reference_data/cc/endpoints/` |
+| Nonconvergence, invalid references/amplitudes, budgets and nonfinite states | Explicit solver/provider failures, preflight-before-AO-read regressions and replay failure tests |
+| Audited equations and replayable results | `source_manifest.json`, upstream license/NOTICE, `CCSDResult.write`, `tools.replay_ccsd`, `test_cc_provenance.py` |
+
+The completion audit reran all ten endpoints against pinned PySCF 2.14.0 on
+the existing scientific implementation (`ce3b6c89a418985d5b8a979e5adba5812b5a6145`).
+Every independent integral, aligned-amplitude, energy, FCI and physical-residual
+gate passed; the maximum independent residual was `1.1111840207404525e-11`.
+Two fresh generations had identical arrays for all five molecules. The
+package-facade change then passed all 24 solver/provenance tests, including
+the native-HF endpoints; it changes no equation or solver arithmetic. Earlier
+raw states and equation/reference provenance remain in
+`benchmarks/results/rccsd-148-{a,b,c}/`; the commands above reproduce the audit
+without committing another copy of temporary run logs or states.

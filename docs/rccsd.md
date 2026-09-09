@@ -3,10 +3,12 @@
 This document preserves the A-slice contract. Complete residuals and the
 subsequently implemented CPU solver are documented in [RCCSD B/C](rccsd_bc.md).
 
-`tools.vibeqc_cc` is an internal, small-system FP64 CPU equation baseline.
-It implements fixed-amplitude correlation energy and the physical T1 residual.
-It does **not** solve CCSD, evaluate T2 residuals, or register a public method.
-Issue #148 remains open for slices B (T2) and C (CPU solver/endpoints).
+`tools.vibeqc_cc` provides the internal small-system FP64 CPU RCCSD facade:
+`build_ccsd_program`, `PreparedCCSD`, `SolverOptions`, `CCSDResult`, and `solve`.
+It implements complete physical T1/T2 residuals and CPU iterations in addition
+to the fixed-amplitude energy/T1 interface documented below. The full A/B/C
+scope and molecular acceptance are described in [RCCSD B/C](rccsd_bc.md).
+It does not register a public `Calculator` method; GPU RCCSD remains #149.
 
 ## Mathematical contract
 
