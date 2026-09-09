@@ -109,3 +109,36 @@ def test_cpks_requires_converged_ks_reference_and_explicit_model_identity():
         )
     with pytest.raises(ValueError, match="functional and grid"):
         replace(ks, grid_identity=None)
+
+
+def test_same_occupancy_degeneracy_is_not_a_response_singularity():
+    """Occupied-occupied degeneracy must not trip the response stability gate.
+
+    The nonredundant layout solves only occupied-virtual rotations, so a
+    symmetry-degenerate occupied pair with a healthy occupied-virtual gap is a
+    valid response reference and ``require_stable`` must accept it.
+    """
+    meta, arrays = load_fixture("water")
+    reference = fixture_snapshot(meta, arrays)
+    energies = reference.orbital_energies.copy()
+    energies[1] = energies[0]
+    fock = (
+        reference.overlap
+        @ reference.coefficients
+        @ np.diag(energies)
+        @ reference.coefficients.T
+        @ reference.overlap
+    )
+    degenerate = replace(reference, orbital_energies=energies, fock=fock)
+    problem = ResponseProblem.from_reference(
+        degenerate, method="rhf", operator_identity="synthetic"
+    )
+    occupied = np.asarray(problem.layout.occupied)
+    virtual = np.asarray(problem.layout.virtual)
+    expected_gap = float(
+        np.min(np.abs(energies[virtual][:, None] - energies[occupied][None, :]))
+    )
+    assert expected_gap > 1e-8
+    assert problem.diagnostics["minimum_ov_gap"] == pytest.approx(expected_gap)
+    assert not problem.diagnostics["near_degenerate"]
+    assert problem.require_stable() is problem

@@ -292,13 +292,33 @@ class ResponseProblem:
     def reference_identity(self):
         return self.reference.identity
 
+    def _active_rotation_gaps(self):
+        """Return occupied-virtual energy denominators of active rotations.
+
+        The nonredundant response space contains only occupied-virtual
+        rotations. Occupied-occupied and virtual-virtual splittings are
+        redundant directions that are excluded from the unknowns, so they must
+        not enter the stability gate. The result is indexed
+        ``[virtual, occupied]``.
+        """
+        energies = np.asarray(self.reference.orbital_energies, dtype=float)
+        occupied = np.asarray(self.layout.occupied, dtype=int)
+        virtual = np.asarray(self.layout.virtual, dtype=int)
+        return energies[virtual][:, None] - energies[occupied][None, :]
+
     @property
     def diagnostics(self):
-        """Report response-relevant reference conditioning without clipping."""
-        gaps = np.diff(self.reference.orbital_energies)
-        minimum_gap = float(np.min(gaps)) if len(gaps) else float("inf")
+        """Report response-relevant reference conditioning without clipping.
+
+        ``minimum_ov_gap`` is the smallest absolute occupied-virtual orbital
+        energy denominator in the active rotation space. Same-occupancy
+        degeneracies are excluded because those rotations are redundant and
+        never appear as response unknowns.
+        """
+        gaps = self._active_rotation_gaps()
+        minimum_gap = float(np.min(np.abs(gaps))) if gaps.size else float("inf")
         return {
-            "minimum_orbital_gap": minimum_gap,
+            "minimum_ov_gap": minimum_gap,
             "near_degenerate": bool(minimum_gap <= 1e-8),
             "overlap_min_eigenvalue": float(
                 np.linalg.eigvalsh(self.reference.overlap)[0]
@@ -316,10 +336,10 @@ class ResponseProblem:
         if not np.isfinite(orbital_gap_tolerance) or orbital_gap_tolerance < 0:
             raise ValueError("orbital_gap_tolerance must be finite and nonnegative")
         diagnostics = self.diagnostics
-        if diagnostics["minimum_orbital_gap"] <= orbital_gap_tolerance:
+        if diagnostics["minimum_ov_gap"] <= orbital_gap_tolerance:
             raise ResponseUnsupported(
-                "near-degenerate orbital reference: minimum gap "
-                f"{diagnostics['minimum_orbital_gap']:.3e} <= "
+                "near-degenerate occupied-virtual response reference: "
+                f"minimum gap {diagnostics['minimum_ov_gap']:.3e} <= "
                 f"{orbital_gap_tolerance:.3e}; no denominator was clamped"
             )
         return self

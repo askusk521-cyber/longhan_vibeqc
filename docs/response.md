@@ -34,6 +34,12 @@ vector length is never treated as compatibility.
 `K[virt,occ] = -x` and `K[occ,virt] = x`. Occupied-occupied and
 virtual-virtual rotations are not independent unknowns.
 
+`ResponseProblem.diagnostics` gates on `minimum_ov_gap`, the smallest absolute
+occupied-virtual orbital-energy denominator of the active rotations. A
+same-occupancy (occupied-occupied or virtual-virtual) degeneracy is a redundant
+direction and does not trip `require_stable`; a symmetry-degenerate occupied or
+virtual subspace with a finite occupied-virtual gap remains solvable.
+
 ## RHF operator
 
 `RHFResponseOperator` applies the closed-shell RHF Jacobian without assembling
