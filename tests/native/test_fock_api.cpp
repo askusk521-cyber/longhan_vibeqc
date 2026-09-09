@@ -29,7 +29,7 @@ void exercise(vibeqc_backend backend, bool unrestricted, bool fitted) {
                                        atoms.data(),         2,
                                        shells.data(),        2,
                                        primitives.data(),    2,
-                                       unrestricted ? 1 : 0, unrestricted ? 2 : 1};
+                                       unrestricted ? 1 : 0, unrestricted ? 2U : 1U};
   vibeqc_system* system = nullptr;
   require(vibeqc_system_create(context, &system_spec, &system) == 0, "system create");
   vibeqc_fock_spec spec{
