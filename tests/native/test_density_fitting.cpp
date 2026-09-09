@@ -823,6 +823,32 @@ int main() {
             require_matrix_close(replay[0].scf.forces, initial_forces, 5.0e-9,
                                  "DF cache budget change altered forces");
           }
+          // A changed metric cutoff is a changed Hamiltonian even at fixed
+          // geometry. Compare cached replay with an independently built plan
+          // in both resident and source-backed storage modes.
+          require(vibeqc::scf::factor_density_fitting_metric(integrals.metric, integrals.naux, 0.05)
+                          .effective_rank < integrals.naux,
+                  "cache cutoff regression must discard a metric direction");
+          for (std::size_t budget : {0U, 1024U * 1024U}) {
+            bucket_options.density_fitting_memory_budget_bytes = budget;
+            for (double cutoff : {1.0e-10, 0.05, 1.0e-10}) {
+              bucket_options.density_fitting_relative_threshold = cutoff;
+              const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
+                                      bucket_initial, 0, nullptr, &prepared_cache);
+              PlanGuard fresh;
+              const auto expected = run(&fresh.plan, bucket_systems, auxiliary, bucket_options,
+                                        bucket_initial, 0, nullptr, nullptr);
+              for (std::size_t i = 0; i < bucket_systems.size(); ++i) {
+                require(replay[i].status == VIBEQC_STATUS_SUCCESS &&
+                            expected[i].status == VIBEQC_STATUS_SUCCESS,
+                        "metric cutoff replay failed");
+                require_close(replay[i].scf.energy, expected[i].scf.energy, 1.0e-10,
+                              "DF cache retained the previous metric Hamiltonian");
+                require_matrix_close(replay[i].scf.forces, expected[i].scf.forces, 5.0e-9,
+                                     "DF cache retained the previous metric response");
+              }
+            }
+          }
         }
       }
 

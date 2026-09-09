@@ -911,12 +911,22 @@ class Calculator:
                     "observation": observed.to_dict(),
                 }
                 observed.verify(resource_plan)
-            if resource_diagnostics is None:
-                _native.check(self._library, status)
-            else:
-                from .resources_native import check_resource_status
+            try:
+                if resource_diagnostics is None:
+                    _native.check(self._library, status)
+                else:
+                    from .resources_native import check_resource_status
 
-                check_resource_status(self._library, status, resource_diagnostics)
+                    check_resource_status(self._library, status, resource_diagnostics)
+            except (RuntimeError, MemoryError) as error:
+                # Preserve scientific diagnostics (for example a DF rank
+                # crossing) before this calculation's context is destroyed.
+                detail = self._library.vibeqc_context_get_last_detail(context)
+                if detail:
+                    # Keep structured resource evidence and allocation-space
+                    # classification on the same exception instance.
+                    error.args = (f"{error}: {detail.decode('utf-8')}",)
+                raise
             forces = np.ctypeslib.as_array(force_storage).copy().reshape(-1, 3)
             backend = (
                 "cuda"

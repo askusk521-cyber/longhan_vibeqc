@@ -1,0 +1,6 @@
+srun: job 9103 queued and waiting for resources
+srun: job 9103 has been allocated resources
+{'density_fitting_memory_budget_bytes': '22510', 'batch_execution': 'serialized buckets; all retained caches summed', 'scf_driver': 'CPU DIIS/eigensolvers; CUDA integral regeneration and J/K', 'bucket_inventory': '[{"batch": 1, "cartesian_naux": 10, "cartesian_nbf": 2, "coordinates": 6, "host_metadata": 4321280, "naux": 10, "nbf": 2, "occupied": 1, "preparation_minimum": 12920, "resident_device_bytes": 67129422, "resident_host_bytes": 4324672, "source_bytes": 2158, "tiles": {"ao_pair_tile": 4, "auxiliary_tile": 10, "batch_tile": 1, "budget_bytes": 22510, "fixed_device_bytes": 2158, "occupied_tile": 1, "peak_workspace_bytes": 22510, "stores_full_three_center": true}}]'}
+1 RuntimeError VIBEQC error 1: invalid argument: DF memory budget cannot hold the metric and one contraction tile
+2 -0.5385113483224758
+4 -0.5385113483224758

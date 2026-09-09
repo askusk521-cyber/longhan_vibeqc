@@ -44,6 +44,15 @@ struct DensityFittingScfData {
   integrals::IntegralData one_electron;
   integrals::DensityFittingIntegralData raw;
   DensityFittingThreeCenter three_center;
+  // The metric cutoff selects the retained Hamiltonian as well as its response.
+  // Cached plans must be rebuilt when callers change this numerical control.
+  double metric_relative_threshold{};
+  // Geometry and execution policy replace complete dA/dM tensors when the
+  // generated two-electron response is selected. Both bases keep real owners.
+  std::optional<core::System> df_gradient_orbital, df_gradient_auxiliary;
+  unsigned df_gradient_mapping{};
+  std::size_t df_gradient_budget{};
+
   /** A fused response retains topology instead of AO derivative tensors.
    * Geometry and mapping belong to this immutable per-geometry SCF data. */
   std::optional<core::System> one_electron_gradient_system;

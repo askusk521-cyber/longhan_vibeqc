@@ -36,6 +36,11 @@ def main() -> None:
     )
     parser.add_argument("--fitted", action="store_true")
     parser.add_argument("--df-budget", type=int, default=0)
+    parser.add_argument(
+        "--df-response",
+        choices=("reference", "generated"),
+        help="DF two-electron response selector, independent of one-electron mode",
+    )
     parser.add_argument("--repeats", type=int, default=1)
     parser.add_argument("--energy-tolerance", type=float, default=1.0e-12)
     parser.add_argument("--density-tolerance", type=float, default=1.0e-10)
@@ -52,6 +57,11 @@ def main() -> None:
         or args.screening_tolerance <= 0.0
     ):
         raise ValueError("SCF and screening tolerances must be positive")
+
+    if args.df_response is not None:
+        if not args.fitted:
+            parser.error("--df-response requires --fitted")
+        os.environ["VIBEQC_DF_DERIVATIVES"] = args.df_response
 
     if args.mode == "scalar":
         os.environ[_SCALAR_ENVIRONMENT] = "1"
@@ -126,6 +136,7 @@ def main() -> None:
         "mode": args.mode,
         "fitted": args.fitted,
         "df_budget": args.df_budget,
+        "df_response": args.df_response,
         "slurm_job_id": os.environ["SLURM_JOB_ID"],
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "energy_tolerance": args.energy_tolerance,

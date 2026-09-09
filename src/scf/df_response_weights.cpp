@@ -16,7 +16,8 @@ DensityFittingResponseWeightResources contract_density_fitting_response_weights(
     const std::function<void(unsigned, std::size_t, std::size_t, std::span<const double>)>&
         consume) {
   const auto maximum = std::numeric_limits<std::size_t>::max() / sizeof(double);
-  if (!n || !a || !maximum_bytes || terms.empty() || n > maximum / n || a > maximum / a ||
+  if (!std::isfinite(relative_threshold) || relative_threshold <= 0 || relative_threshold >= 1 ||
+      !n || !a || !maximum_bytes || terms.empty() || n > maximum / n || a > maximum / a ||
       n * n > maximum / a || terms.size() > maximum / a || metric.size() != a * a ||
       inverse.size() != a * a || !read_values || !consume)
     throw std::invalid_argument("invalid DF response weight dimensions or budget");

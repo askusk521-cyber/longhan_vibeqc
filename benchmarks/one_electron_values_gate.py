@@ -34,9 +34,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=cases, default="sp8")
     parser.add_argument("--batch", type=int, default=1)
-    parser.add_argument("--mapping", choices=("thread", "shell_warp"), default="thread")
+    parser.add_argument(
+        "--mapping", choices=("thread", "shell_warp", "serial"), default="thread"
+    )
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--derivatives", action="store_true")
+    parser.add_argument(
+        "--df-derivatives",
+        action="store_true",
+        help="compare complete DF derivative responses while sharing the generated one-electron backend",
+    )
     parser.add_argument("--fitted", action="store_true")
     parser.add_argument("--df-budget", type=int, default=0)
     parser.add_argument("--observe-resources", action="store_true")
@@ -52,6 +59,16 @@ def main():
         parser.error("run this real-GPU gate inside Slurm")
     if args.batch < 1 or args.repeats < 5:
         parser.error("batch must be positive and at least five repeats are required")
+    if args.df_derivatives:
+        if not args.fitted or args.derivatives or args.mapping == "shell_warp":
+            parser.error(
+                "DF derivatives require --fitted, thread/serial mapping and no --derivatives"
+            )
+        os.environ["VIBEQC_ONE_ELECTRON_DERIVATIVES"] = "generated"
+    elif args.mapping == "serial":
+        parser.error(
+            "serial mapping is only supported by this gate for --df-derivatives"
+        )
     case = cases[args.case]
     basis = case.vibeqc_basis
     if args.contraction_length:
@@ -114,6 +131,9 @@ def main():
         if args.derivatives
         else "VIBEQC_ONE_ELECTRON_VALUE_MAPPING"
     )
+    if args.df_derivatives:
+        selection_variable = "VIBEQC_DF_DERIVATIVES"
+        mapping_variable = "VIBEQC_DF_DERIVATIVE_MAPPING"
     os.environ[mapping_variable] = args.mapping
     library = _native.load_library()
     library.vibeqc_get_source_identity.restype = ctypes.c_char_p
@@ -249,19 +269,24 @@ def main():
         e["energy"] <= 3e-10 and e["force"] <= 3e-9 for e in paired_errors.values()
     )
     report = {
-        "schema": "vibeqc.one_electron_endpoint",
+        "schema": "vibeqc.df_derivative_endpoint"
+        if args.df_derivatives
+        else "vibeqc.one_electron_endpoint",
         "version": 1,
         "case": args.case,
         "batch": args.batch,
         "contraction_length_override": args.contraction_length,
         "mapping": args.mapping,
-        "operator": "derivatives" if args.derivatives else "values",
+        "operator": "df_derivatives"
+        if args.df_derivatives
+        else ("derivatives" if args.derivatives else "values"),
         "fitted": args.fitted,
         "df_budget": args.df_budget,
         "resource_observation_enabled": args.observe_resources,
         "paired_errors": paired_errors,
         "accuracy_passed": passed,
         "source_identity": source_identity(ROOT),
+        "df_derivatives": args.df_derivatives,
         "binary_hash": file_hash(library._name),
         "revision": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True

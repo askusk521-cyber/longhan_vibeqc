@@ -6,6 +6,7 @@ capacity allowance and is also charged by the native allocation ledger.
 """
 
 import json
+import os
 from dataclasses import asdict
 
 from .resources import ResourceCandidate, ResourceEstimate, checked_bytes
@@ -34,6 +35,7 @@ def cuda_df_candidates(
         key = orbital["nbf"], state["nalpha"], state["nbeta"], orbital["primitives"]
         buckets.setdefault(key, []).append(item)
     groups = [buckets[key] for key in sorted(buckets)]
+    generated_response = os.environ.get("VIBEQC_DF_DERIVATIVES") == "generated"
     rows = []
     for group in groups:
         first = group[0]
@@ -128,8 +130,37 @@ def cuda_df_candidates(
                 "default_tile": default_tile,
             }
         )
+        # The generated bridge owns packed AO metadata, two metric copies,
+        # the spectral map, density matrices and bounded auxiliary weights.
+        # This LP64 capacity allowance covers vector growth for public s/p/d/f
+        # expansions (at most three Cartesian terms) without a CUDA context.
+        response_metadata = max(
+            256
+            * (
+                1
+                + item["atoms"]
+                + n
+                + aux
+                + item["orbital"]["primitives"]
+                + item["auxiliary"]["primitives"]
+            )
+            for item in group
+        )
+        response_spectral = 8 * (12 * aux * aux + 10 * aux + n * n)
+        # Three density terms cover UHF; its total-density matrix is included.
+        response_fixed = 8 * (3 * aux * aux + 6 * aux + 4 * n * n)
+        rows[-1]["response_minimum"] = response_metadata + max(
+            response_spectral, response_fixed + 16 * n * n
+        )
+        rows[-1]["response_capacity"] = response_metadata + max(
+            response_spectral, response_fixed + 16 * n * n * aux
+        )
     source_budget = requested_budget or max(
-        max(row["preparation_minimum"], row["default_tile"].peak_workspace_bytes)
+        max(
+            row["preparation_minimum"],
+            (2 if generated_response else 1) * row["default_tile"].peak_workspace_bytes,
+            2 * row["response_minimum"] if generated_response else 0,
+        )
         for row in rows
     )
     choices = [("cuda-df-resident", 0, "resident", 0)] if requested_budget == 0 else []
@@ -162,7 +193,9 @@ def cuda_df_candidates(
                 n,
                 aux,
                 row["occupied"],
-                budget_bytes=sub_budget if source else 0,
+                budget_bytes=(sub_budget // 2 if generated_response else sub_budget)
+                if source
+                else 0,
                 fixed_device_bytes=row["source_bytes"] if source else 0,
             )
             pairs = (
@@ -195,6 +228,8 @@ def cuda_df_candidates(
                 + 16 * aux
                 + 8
             )
+            if generated_response:
+                force = max(force, row["response_capacity"])
             # Default raw-value/derivative generation is a separate temporary
             # phase; charge its complete chunk ceiling conservatively.
             generation = row["source_bytes"] + 8 * b * (d + 1) * (
@@ -228,6 +263,12 @@ def cuda_df_candidates(
                 raise ValueError(
                     "DF sub-budget cannot hold the native one-electron preparation minimum"
                 )
+            if generated_response:
+                if source and sub_budget // 2 < row["response_minimum"]:
+                    raise ValueError(
+                        "DF sub-budget cannot hold the generated response minimum"
+                    )
+                host_temporary += row["response_capacity"]
             host_resident.append(checked_bytes(persistent_host))
             device_resident.append(checked_bytes(persistent_device))
             host_work.append(checked_bytes(host_temporary))

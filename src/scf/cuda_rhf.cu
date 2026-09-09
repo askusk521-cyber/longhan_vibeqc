@@ -18231,7 +18231,7 @@ std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
 /** Generate Cartesian DF tensors without constructing the full four-center ERI. */
 vibeqc_status build_cuda_density_fitting_integrals_impl(
     int device_id, const core::System& orbital_system, const core::System& auxiliary_system,
-    integrals::DensityFittingIntegralData& output, std::string& detail) {
+    integrals::DensityFittingIntegralData& output, std::string& detail, bool include_derivatives) {
   if (device_id < 0) {
     detail = "CUDA density-fitting integral generation received an invalid device";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
@@ -18416,8 +18416,10 @@ vibeqc_status build_cuda_density_fitting_integrals_impl(
   output.ncoord = orbital_system.atoms.size() * 3U;
   output.metric.resize(metric_elements);
   output.three_center.resize(three_center_elements);
-  output.metric_derivative.resize(output.ncoord * metric_elements);
-  output.three_center_derivative.resize(output.ncoord * three_center_elements);
+  if (include_derivatives) {
+    output.metric_derivative.resize(output.ncoord * metric_elements);
+    output.three_center_derivative.resize(output.ncoord * three_center_elements);
+  }
   constexpr unsigned threads = 128U;
   const unsigned blocks = static_cast<unsigned>((total_elements + threads - 1U) / threads);
   build_cuda_df_integrals_kernel<false><<<blocks, threads, 0, stream>>>(
@@ -18434,7 +18436,8 @@ vibeqc_status build_cuda_density_fitting_integrals_impl(
     cuda_error = cudaMemcpy(output.three_center.data(), device_three_center,
                             three_center_elements * sizeof(double), cudaMemcpyDeviceToHost);
   }
-  for (std::size_t coordinate = 0; cuda_error == cudaSuccess && coordinate < output.ncoord;
+  for (std::size_t coordinate = 0;
+       include_derivatives && cuda_error == cudaSuccess && coordinate < output.ncoord;
        ++coordinate) {
     build_cuda_df_integrals_kernel<true><<<blocks, threads, 0, stream>>>(
         device_batch, orbital_count, auxiliary_count, dummy_index, metric_elements,
@@ -18466,7 +18469,7 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
     int device_id, const std::vector<core::System>& orbital_systems,
     const std::vector<core::System>& auxiliary_systems,
     std::vector<integrals::DensityFittingIntegralData>& outputs, std::string& detail,
-    std::size_t output_budget_bytes) {
+    std::size_t output_budget_bytes, bool include_derivatives) {
   outputs.clear();
   if (device_id < 0 || orbital_systems.empty() ||
       orbital_systems.size() != auxiliary_systems.size()) {
@@ -18568,7 +18571,8 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
   std::size_t output_elements_per_system = 0;
-  if (!checked_multiply(per_system, coordinate_count + 1U, output_elements_per_system)) {
+  if (!checked_multiply(per_system, (include_derivatives ? coordinate_count : 0U) + 1U,
+                        output_elements_per_system)) {
     detail = "CUDA DF integral batch output dimensions overflowed";
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
@@ -18717,9 +18721,11 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
       outputs[system].ncoord = atom_count * 3U;
       outputs[system].metric.resize(metric_elements);
       outputs[system].three_center.resize(three_center_elements);
-      outputs[system].metric_derivative.resize(outputs[system].ncoord * metric_elements);
-      outputs[system].three_center_derivative.resize(outputs[system].ncoord *
-                                                     three_center_elements);
+      if (include_derivatives) {
+        outputs[system].metric_derivative.resize(outputs[system].ncoord * metric_elements);
+        outputs[system].three_center_derivative.resize(outputs[system].ncoord *
+                                                       three_center_elements);
+      }
     }
   } catch (const std::bad_alloc&) {
     detail = "host allocation failed for CUDA DF batch output";
@@ -18775,7 +18781,8 @@ vibeqc_status build_cuda_density_fitting_integrals_batch_impl(
     }
   }
 
-  for (std::size_t coordinate = 0; cuda_error == cudaSuccess && coordinate < atom_count * 3U;
+  for (std::size_t coordinate = 0;
+       include_derivatives && cuda_error == cudaSuccess && coordinate < atom_count * 3U;
        ++coordinate) {
     for (std::size_t system_base = 0; cuda_error == cudaSuccess && system_base < batch_size;
          system_base += chunk_systems) {
@@ -19384,28 +19391,29 @@ vibeqc_status build_cuda_density_fitting_integrals(int device_id,
                                                    const core::System& orbital_system,
                                                    const core::System& auxiliary_system,
                                                    integrals::DensityFittingIntegralData& output,
-                                                   std::string& detail) {
+                                                   std::string& detail, bool include_derivatives) {
   if (!cuda_df_shell_domain(auxiliary_system, "auxiliary", detail) ||
       !cuda_df_shell_domain(orbital_system, "orbital", detail)) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   return build_cuda_density_fitting_integrals_impl(device_id, orbital_system, auxiliary_system,
-                                                   output, detail);
+                                                   output, detail, include_derivatives);
 }
 
 vibeqc_status build_cuda_density_fitting_integrals_batch(
     int device_id, const std::vector<core::System>& orbital_systems,
     const std::vector<core::System>& auxiliary_systems,
     std::vector<integrals::DensityFittingIntegralData>& outputs, std::string& detail,
-    std::size_t output_budget_bytes) {
+    std::size_t output_budget_bytes, bool include_derivatives) {
   for (const auto& system : auxiliary_systems) {
     if (!cuda_df_shell_domain(system, "auxiliary", detail)) return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   for (const auto& system : orbital_systems) {
     if (!cuda_df_shell_domain(system, "orbital", detail)) return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
-  return build_cuda_density_fitting_integrals_batch_impl(
-      device_id, orbital_systems, auxiliary_systems, outputs, detail, output_budget_bytes);
+  return build_cuda_density_fitting_integrals_batch_impl(device_id, orbital_systems,
+                                                         auxiliary_systems, outputs, detail,
+                                                         output_budget_bytes, include_derivatives);
 }
 
 vibeqc_status build_cuda_one_electron_integrals_batch(int device_id,

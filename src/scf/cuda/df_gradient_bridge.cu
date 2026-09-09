@@ -227,8 +227,10 @@ vibeqc_status execute_cuda_df_hf_gradient(
   const auto n = molecule::ao_count(orbital), a = molecule::ao_count(auxiliary),
              atoms = orbital.atoms.size();
   const auto maximum = std::numeric_limits<std::size_t>::max() / sizeof(double);
-  if (device < 0 || !stream_handle || schedule > 1 || !maximum_bytes || !n || !a || !atoms ||
-      n > maximum / n || a > maximum / a || n * n > maximum / a || atoms > maximum / 3 ||
+  const auto index_limit = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+  if (n > index_limit || a > index_limit || atoms > index_limit / 3 || device < 0 ||
+      !stream_handle || schedule > 1 || !maximum_bytes || !n || !a || !atoms || n > maximum / n ||
+      a > maximum / a || n * n > maximum / a || atoms > maximum / 3 ||
       atoms != auxiliary.atoms.size() || (!source && raw_a.size() != n * n * a) ||
       metric.size() != a * a || inverse.size() != a * a) {
     detail = "invalid generated DF-HF response dimensions or budget";

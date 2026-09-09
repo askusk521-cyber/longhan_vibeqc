@@ -17,12 +17,15 @@ namespace vibeqc::scf {
  * spherical representations can be obtained with
  * `integrals::transform_density_fitting_integrals`, which deliberately keeps
  * the accelerator evaluator independent from the reference transformation.
+ * include_derivatives=false omits both complete dM and dA arrays for a fused
+ * response consumer; value arrays and the physical coordinate count remain.
  */
 vibeqc_status build_cuda_density_fitting_integrals(int device_id,
                                                    const core::System& orbital_system,
                                                    const core::System& auxiliary_system,
                                                    integrals::DensityFittingIntegralData& output,
-                                                   std::string& detail);
+                                                   std::string& detail,
+                                                   bool include_derivatives = true);
 
 /**
  * Batched Cartesian DF generation for homogeneous orbital/auxiliary sizes.
@@ -33,7 +36,7 @@ vibeqc_status build_cuda_density_fitting_integrals_batch(
     int device_id, const std::vector<core::System>& orbital_systems,
     const std::vector<core::System>& auxiliary_systems,
     std::vector<integrals::DensityFittingIntegralData>& outputs, std::string& detail,
-    std::size_t output_budget_bytes = 0);
+    std::size_t output_budget_bytes = 0, bool include_derivatives = true);
 
 /** Batched Cartesian overlap/Hcore and nuclear-repulsion generation.
  * include_derivatives=false omits only AO derivative matrices, retaining the

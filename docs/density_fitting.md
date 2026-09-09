@@ -1,5 +1,10 @@
 # Density-fitting implementation boundary
 
+The opt-in [generated DF response](df_derivatives.md) contracts independent
+three-center and metric weights on CUDA without complete nuclear-derivative
+tensors. That page documents the RHF/UHF reverse chain, bounded host staging,
+metric rank-crossing diagnostics, and measured endpoint evidence.
+
 VibeQC provides CPU-reference and CUDA density-fitting execution for RHF and
 UHF.  Single systems and homogeneous prepared-batch buckets share the same
 metric-factorization and RI-J/K implementation; the CUDA bucket path uses one
