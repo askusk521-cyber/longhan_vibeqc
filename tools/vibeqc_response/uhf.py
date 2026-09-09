@@ -68,6 +68,11 @@ class UHFReferenceSnapshot:
             value = getattr(self, name)
             if not math.isfinite(value) or (name == "scf_residual" and value < 0):
                 raise ValueError(f"invalid {name}")
+        if self.scf_residual > self.validation_tolerance:
+            raise ValueError(
+                "UHF scf_residual exceeds validation_tolerance; "
+                "an unconverged reference cannot enter response"
+            )
         for name in (
             "geometry_hash",
             "basis_hash",
@@ -96,6 +101,7 @@ class UHFReferenceSnapshot:
                 ),
             )
         identity_spins = {}
+        occupied_counts = {}
         for spin in ("alpha", "beta"):
             coefficients = immutable(
                 getattr(self, f"coefficients_{spin}"), shape=(nbf, nbf)
@@ -116,10 +122,11 @@ class UHFReferenceSnapshot:
             nocc = int(np.sum(occupations))
             expected = np.zeros(nbf)
             expected[:nocc] = 1.0
-            if nocc < 1 or nocc >= nbf or not np.array_equal(occupations, expected):
+            if not np.array_equal(occupations, expected):
                 raise ValueError(
                     f"{spin} occupations require ordered occupied and virtual orbitals"
                 )
+            occupied_counts[spin] = nocc
             if np.any(np.diff(energies) < -self.validation_tolerance):
                 raise ValueError(f"{spin} canonical orbital energies must be ascending")
             fock = getattr(self, f"fock_{spin}")
@@ -144,6 +151,10 @@ class UHFReferenceSnapshot:
                     occupations.astype("<f8", copy=False).tobytes()
                 ).hexdigest(),
             }
+        if sum(occupied_counts.values()) == 0:
+            raise ValueError(
+                "UHF reference requires at least one occupied spin orbital"
+            )
         object.__setattr__(
             self,
             "identity",
@@ -202,14 +213,13 @@ class UHFSpinRotationLayout:
             virtual = tuple(getattr(self, f"{spin}_virtual"))
             object.__setattr__(self, f"{spin}_occupied", occupied)
             object.__setattr__(self, f"{spin}_virtual", virtual)
+            # A valid high-spin reference can have an empty occupied block in
+            # one spin channel. The packed response contribution is then
+            # zero-dimensional, while the other channel remains active.
             values = (*occupied, *virtual)
-            if (
-                not occupied
-                or not virtual
-                or any(type(i) is not int or i < 0 for i in values)
-            ):
+            if not values or any(type(i) is not int or i < 0 for i in values):
                 raise ValueError(
-                    f"{spin} layout requires nonempty nonnegative occupied/virtual spaces"
+                    f"{spin} layout requires nonnegative occupied/virtual spaces"
                 )
             if len(set(values)) != len(values) or sorted(values) != list(
                 range(max(values) + 1)

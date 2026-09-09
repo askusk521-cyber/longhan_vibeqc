@@ -159,6 +159,56 @@ def test_uhf_problem_rejects_stale_spin_reference_even_at_matching_dimension():
         problem.assert_compatible(other)
 
 
+def test_uhf_snapshot_rejects_reported_unconverged_residual():
+    """Canonical-looking orbitals cannot override a failed SCF diagnostic."""
+    with pytest.raises(ValueError, match="scf_residual exceeds"):
+        replace(_reference(), scf_residual=1e-4)
+
+
+def test_one_electron_doublet_has_a_zero_sized_beta_response_block():
+    """A physically valid N-beta=0 reference keeps its active alpha block."""
+    reference = replace(
+        _reference(),
+        occupations_alpha=np.array([1.0, 0.0, 0.0, 0.0]),
+        occupations_beta=np.zeros(4),
+    )
+    backend = DenseAOResponseBackend(_symmetric_eri())
+    problem = UHFResponseOperator.build_problem(reference, backend)
+    assert problem.layout.block_dimension("alpha") == 3
+    assert problem.layout.block_dimension("beta") == 0
+    assert problem.dimension == 3
+
+    operator = UHFResponseOperator(problem, backend)
+    vector = np.random.default_rng(176).normal(size=problem.dimension)
+    np.testing.assert_allclose(
+        operator.apply(vector),
+        _finite_action(reference, backend, vector),
+        atol=3e-8,
+        rtol=3e-8,
+    )
+
+
+def test_native_one_electron_uhf_export_accepts_an_empty_beta_spin():
+    """Export a real N-beta=0 SCF state through the response boundary."""
+    from tools.vibeqc_posthf.export import export_uhf
+    from tools.vibeqc_posthf.sources import NativeSource
+
+    try:
+        source = NativeSource([("H", (0.0, 0.0, 0.0))], "sto-3g", multiplicity=2)
+    except (OSError, FileNotFoundError, AttributeError) as error:
+        pytest.skip(f"native UHF export library unavailable: {error}")
+    with source:
+        snapshot, record = export_uhf(source, tolerance=1e-10, max_iterations=200)
+        assert snapshot.nocc("alpha") == 1
+        assert snapshot.nocc("beta") == 0
+        assert record["physical_residual"] < 1e-10
+        backend = NativeJKBackend(source, axis_tile=2)
+        problem = UHFResponseOperator.build_problem(snapshot, backend)
+        assert problem.layout.block_dimension("alpha") == 0
+        assert problem.layout.block_dimension("beta") == 0
+        assert problem.dimension == 0
+
+
 def test_native_open_shell_uhf_export_builds_a_response_problem():
     """Export Li doublet UHF from native SCF into the shared response layer."""
     from tools.vibeqc_posthf.export import export_uhf
