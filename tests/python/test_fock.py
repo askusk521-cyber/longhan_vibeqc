@@ -99,10 +99,10 @@ def test_native_failure_publication_and_preflight():
             in plan._library.vibeqc_fock_plan_last_error(plan._handle).decode()
         )
         assert np.all(shared == 79) and out.energy_one_electron == 79
-        with pytest.raises(ValueError, match="shape|finiteness"):
+        with pytest.raises(ValueError, match=r"shape|finiteness"):
             plan.evaluate(np.full((2, 2), np.nan))
         before = plan.evaluate(d)
-        with pytest.raises(ValueError, match="short|range"):
+        with pytest.raises(ValueError, match=r"short|range"):
             FockPlan(
                 basis,
                 replace(
@@ -133,7 +133,7 @@ def test_identity_and_zero_coefficients():
             np.testing.assert_allclose(rz.fock, ra.fock, atol=1e-12)
         with (
             FockPlan(basis, replace(zero, derivative_order=0), device=DEVICE) as values,
-            pytest.raises(ValueError, match="gradient|capability"),
+            pytest.raises(ValueError, match=r"gradient|capability"),
         ):
             values.evaluate(np.eye(2), derivative=True)
     with pytest.raises(RuntimeError, match="closed"):
@@ -268,7 +268,7 @@ def test_scf_failures_do_not_publish_or_poison_sources():
         assert np.all(density == 73) and np.all(forces == 73)
         with pytest.raises(RuntimeError, match="converge"):
             plan.solve(max_iterations=1)
-        with pytest.raises(ValueError, match="trace|occupation|density|electron"):
+        with pytest.raises(ValueError, match=r"trace|occupation|density|electron"):
             plan.solve(initial_density=0.4 * reference.density)
         with pytest.raises(ValueError, match="positive"):
             plan.solve(energy_tolerance=float("nan"))
@@ -277,7 +277,7 @@ def test_scf_failures_do_not_publish_or_poison_sources():
         with FockPlan(
             basis, FockBuildSpec.hf(derivative_order=0), device=DEVICE
         ) as values:
-            with pytest.raises(ValueError, match="force|capability"):
+            with pytest.raises(ValueError, match=r"force|capability"):
                 values.solve()
             assert values.solve(compute_forces=False).energy == pytest.approx(
                 reference.energy

@@ -142,7 +142,11 @@ struct InactiveEigensolverProfileEntry {
 
 using Coordinates = std::vector<std::optional<std::vector<double>>>;
 
-/** Prepared single-system method execution, independent of the public C ABI. */
+/** Prepared single-system method execution, independent of the public C ABI.
+ * Instances own mutable execution/cache state and are not concurrently
+ * reentrant. The caller must serialize execution and destruction per instance.
+ * Immutable scientific controls do not make the execution workspace shared.
+ */
 class PreparedCalculation {
  public:
   virtual ~PreparedCalculation() = default;
@@ -153,7 +157,10 @@ class PreparedCalculation {
   virtual Result execute(bool compute_forces) = 0;
 };
 
-/** Prepared ragged execution. Method families choose their own batching policy. */
+/** Prepared ragged execution. Method families choose their own batching policy.
+ * As for PreparedCalculation, serialize all calls and destruction per instance;
+ * diagnostics and warm-state access must not race execution or replacement.
+ */
 class PreparedBatch {
  public:
   virtual ~PreparedBatch() = default;

@@ -12,6 +12,10 @@ Both source trees were clean. Both libraries use native Release builds,
 CUDA 12.9.1, sm_120, AOT on, FAST_COMPILE off, and GCC 11.4.0. Measurements
 ran on the AMD EPYC 7K62 and NVIDIA RTX 5090 under finite Slurm job 9137,
 with the assigned device visibility preserved.
+Published library paths use baseline/candidate checkout placeholders; exact
+source/native identities and compiler locations remain recorded. Subsequent
+review follow-ups validate unused C API controls and clarify threading and
+test contracts; the measurements above identify their exact earlier revision.
 
 | Complete endpoints | CPU | CUDA |
 | --- | ---: | ---: |

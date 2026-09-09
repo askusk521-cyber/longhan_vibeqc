@@ -39,6 +39,8 @@ typedef struct vibeqc_fock_spec {
 
 /** NULL controls use screening=1e-12, metric cutoff=1e-10 and the default
  * buffer allowance. An explicit screening zero means unscreened execution.
+ * Screening must be finite and nonnegative. Metric cutoffs must be finite
+ * and in [0, 1), including when no fitted term is requested.
  * A zero metric cutoff selects 1e-10; zero device bytes selects 256 MiB for
  * the independent CUDA source. These controls never authorize a change from
  * exact to fitted mathematics. */
@@ -53,6 +55,8 @@ typedef struct vibeqc_fock_controls {
  * fitted terms; unused auxiliary data does not affect exact-only identity.
  * Failure leaves *output NULL. Independent CUDA execution uses host SCF
  * control and CUDA integral consumers; ordinary HF APIs retain fused solvers.
+ * A handle and its error/diagnostic state are not concurrently reentrant;
+ * serialize every call on a handle and its destruction.
  */
 VIBEQC_API vibeqc_status vibeqc_fock_plan_create(
     vibeqc_context* context, const vibeqc_system* system, const vibeqc_system* auxiliary,

@@ -281,6 +281,8 @@ class HfPreparedCalculation final : public PreparedCalculation {
     execution_options.compute_forces = compute_forces;
     const scf::ResolvedFockBuild& strategy = *execution_options.resolved_fock_build;
     const bool use_cuda = strategy.backend == scf::FockBackend::Cuda;
+    // PreparedCalculation's external-serialization contract covers both
+    // cache replacement and the entire solve on its non-reentrant workspace.
     auto native = scf::run_fock_strategy_cached(
         fock_cache_, system_, auxiliary_template_ ? &*auxiliary_template_ : nullptr,
         execution_options, context_->device_id);

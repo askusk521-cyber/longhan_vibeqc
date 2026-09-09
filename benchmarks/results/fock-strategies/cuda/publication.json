@@ -10,7 +10,7 @@
       "bytes": 26519,
       "path": "evidence.json",
       "role": "evidence",
-      "sha256": "b93137cba0a57d8bb09e015a9ce35e61b565f60e15596485d05370fd3a9f86ff"
+      "sha256": "070f6dfbec988ef76a62d6d70aae62453ded7f69ce4ffb63e9916a0f5d04b1c1"
     },
     {
       "bytes": 15236,
@@ -25,10 +25,10 @@
       "sha256": "7ea10df0b8c9616ede66380bcb010af55b4bc40f30152561ab15142cccfc8d56"
     },
     {
-      "bytes": 81047,
+      "bytes": 81254,
       "path": "provenance.json",
       "role": "input",
-      "sha256": "a0527b48c3bd5dd5ce82bde5393d91aad8e92d97c9cad7414c495a13c77eb8f9"
+      "sha256": "b9a1ba03095f036b472fc5627b52d36def3623aca17a5223e171af413f2e6aa9"
     }
   ],
   "reproduction": {

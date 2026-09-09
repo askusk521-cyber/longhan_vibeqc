@@ -22,9 +22,10 @@ void close(double a, double b, double tolerance, const char* message) {
     throw std::runtime_error(std::string(message) + ": " + std::to_string(a) + " vs " +
                              std::to_string(b));
 }
-void matrix(const std::vector<double>& a, const std::vector<double>& b, const char* message) {
+void matrix(const std::vector<double>& a, const std::vector<double>& b, const char* message,
+            double tolerance = 3e-13) {
   require(a.size() == b.size(), message);
-  for (std::size_t i = 0; i < a.size(); ++i) close(a[i], b[i], 3e-13, message);
+  for (std::size_t i = 0; i < a.size(); ++i) close(a[i], b[i], tolerance, message);
 }
 template <typename F>
 void rejected(F function, const char* message) {
@@ -249,7 +250,8 @@ void molecular_endpoints() {
         const auto warm = run_cpu_fock_strategy(system, nullptr, options, &result.density);
         require(warm.converged && warm.initial_density_used, "mixed-provider warm replay failed");
         close(warm.energy, result.energy, 1e-11, "warm energy drift");
-        matrix(warm.forces, result.forces, "warm force drift");
+        // SCF energy/density tolerances do not imply bitwise force equality.
+        matrix(warm.forces, result.forces, "warm force drift", 1e-9);
         constexpr double step = 1e-4;
         auto plus = system, minus = system;
         plus.atoms[1].position[2] += step;

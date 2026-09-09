@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 #include "vibeqc/fock.h"
@@ -50,6 +51,33 @@ void exercise(vibeqc_backend backend, bool unrestricted, bool fitted) {
                   VIBEQC_STATUS_ABI_MISMATCH &&
               failed == nullptr,
           "ABI failure handle");
+  // Invalid controls fail before source preparation even when a DF cutoff
+  // would be mathematically irrelevant to this exact-only request.
+  for (double value :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -1.0}) {
+    for (bool metric : {false, true}) {
+      vibeqc_fock_controls controls{sizeof(controls), VIBEQC_ABI_VERSION, 1e-12, 0, 0};
+      (metric ? controls.metric_relative_threshold : controls.screening_tolerance) = value;
+      failed = plan;
+      require(vibeqc_fock_plan_create(context, system, nullptr, &spec, &controls, &failed) ==
+                      VIBEQC_STATUS_INVALID_ARGUMENT &&
+                  failed == nullptr,
+              "invalid Fock controls must not publish a plan");
+    }
+  }
+  vibeqc_fock_controls controls{sizeof(controls), VIBEQC_ABI_VERSION, 1e-12, 1.0, 0};
+  require(vibeqc_fock_plan_create(context, system, nullptr, &spec, &controls, &failed) ==
+                  VIBEQC_STATUS_INVALID_ARGUMENT &&
+              failed == nullptr,
+          "unit metric cutoff rejected");
+  controls.metric_relative_threshold = 0;
+  require(vibeqc_fock_plan_create(context, system, nullptr, &spec, &controls, &failed) == 0,
+          "zero metric cutoff retains default behavior");
+  vibeqc_fock_diagnostic defaulted{sizeof(defaulted), VIBEQC_ABI_VERSION};
+  require(vibeqc_fock_plan_diagnostic(failed, &defaulted) == 0 &&
+              defaulted.metric_relative_threshold == (fitted ? 1e-10 : 0.0),
+          "default metric cutoff diagnostic");
+  vibeqc_fock_plan_destroy(failed);
   vibeqc_system_destroy(system);
   vibeqc_context_destroy(context);
   atoms[1].z = 70;

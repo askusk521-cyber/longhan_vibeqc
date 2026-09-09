@@ -88,9 +88,15 @@ extern "C" vibeqc_status vibeqc_fock_plan_create(
     const auto backend = context->state.executed_backend == VIBEQC_BACKEND_CUDA ? FockBackend::Cuda
                                                                                 : FockBackend::Cpu;
     const double screening = controls ? controls->screening_tolerance : 1e-12;
-    const double threshold = controls && controls->metric_relative_threshold != 0.0
-                                 ? controls->metric_relative_threshold
-                                 : 1e-10;
+    const double requested_threshold = controls ? controls->metric_relative_threshold : 0.0;
+    // Validate public controls even when resolution would discard an unused
+    // DF cutoff. A malformed request must not depend on its selected provider.
+    require(std::isfinite(screening) && screening >= 0.0,
+            "Fock screening tolerance must be finite and nonnegative");
+    require(std::isfinite(requested_threshold) && requested_threshold >= 0.0 &&
+                requested_threshold < 1.0,
+            "Fock metric cutoff must be finite and in [0, 1)");
+    const double threshold = requested_threshold == 0.0 ? 1e-10 : requested_threshold;
     const auto budget = controls ? controls->device_budget_bytes : 0;
     require(budget <= std::numeric_limits<std::size_t>::max(), "Fock budget overflows size_t");
     auto plan = std::make_unique<vibeqc_fock_plan>();

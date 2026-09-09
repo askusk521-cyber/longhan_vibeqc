@@ -17,7 +17,7 @@
     "environment": {
       "OMP_NUM_THREADS": "1",
       "OPENBLAS_NUM_THREADS": "1",
-      "VIBEQC_LIBRARY": "/home/jzzeng/codes/vibeqc-202-overhead-baseline/.artifacts/overhead-cuda-build/libvibeqc.so",
+      "VIBEQC_LIBRARY": "${baseline_checkout}/.artifacts/overhead-cuda-build/libvibeqc.so",
       "VIBEQC_PROFILE": "off"
     },
     "filters": {
@@ -823,7 +823,7 @@
     "environment": {
       "OMP_NUM_THREADS": "1",
       "OPENBLAS_NUM_THREADS": "1",
-      "VIBEQC_LIBRARY": "/home/jzzeng/codes/vibeqc-issue-202-strategies/.artifacts/overhead-cuda-build/libvibeqc.so",
+      "VIBEQC_LIBRARY": "${candidate_checkout}/.artifacts/overhead-cuda-build/libvibeqc.so",
       "VIBEQC_PROFILE": "off"
     },
     "filters": {
@@ -1610,5 +1610,8 @@
     "python": "3.11.14 (main, Feb 12 2026, 00:42:50) [Clang 21.1.4 ]",
     "revision": "913fb20a25aab87363b19e9d788580230493b688",
     "slurm_job_id": "9137"
+  },
+  "publication_normalization": {
+    "VIBEQC_LIBRARY": "Checkout-specific absolute prefixes replaced with baseline/candidate checkout placeholders. Exact source revisions, native source hashes, build configuration and toolchain identities are retained."
   }
 }
