@@ -63,6 +63,7 @@ class NativeSource:
             "shells",
             "auxiliary_shells",
             "charge",
+            "multiplicity",
             "electron_count",
             "representation",
             "geometry_hash",
@@ -91,6 +92,7 @@ class NativeSource:
         *,
         auxiliary_basis=None,
         charge=0,
+        multiplicity=None,
         representation="cartesian",
     ):
         self.atoms = tuple(Atom.from_value(a) for a in atoms)
@@ -114,6 +116,17 @@ class NativeSource:
         )
         self.charge = charge
         self.electron_count = sum(a.atomic_number for a in self.atoms) - charge
+        default_multiplicity = 1 if self.electron_count % 2 == 0 else 2
+        self.multiplicity = (
+            default_multiplicity if multiplicity is None else multiplicity
+        )
+        if (
+            type(self.multiplicity) is not int
+            or self.multiplicity < 1
+            or self.multiplicity > self.electron_count + 1
+            or (self.electron_count + self.multiplicity - 1) % 2
+        ):
+            raise ValueError("multiplicity is incompatible with the electron count")
         self.geometry_hash = canonical_hash([asdict(a) for a in self.atoms])
         self.basis_hash = canonical_hash(
             {
@@ -137,6 +150,7 @@ class NativeSource:
                 "basis": self.basis_hash,
                 "auxiliary": self.auxiliary_hash,
                 "charge": charge,
+                "multiplicity": self.multiplicity,
                 "screening": 0,
                 "backend": self.backend,
             }
@@ -184,6 +198,20 @@ class NativeSource:
             ct.c_char_p,
             ct.c_size_t,
         ]
+        lib.vibeqc_posthf_uhf_density_v1.argtypes = [
+            ct.c_void_p,
+            ct.c_int,
+            ct.c_int,
+            ct.c_uint,
+            ct.c_double,
+            ct.c_int,
+            ct.c_double,
+            _DOUBLE,
+            ct.c_size_t,
+            _DOUBLE,
+            ct.c_char_p,
+            ct.c_size_t,
+        ]
         lib.vibeqc_posthf_rhf_density_v1.argtypes = [
             ct.c_void_p,
             ct.c_int,
@@ -208,7 +236,7 @@ class NativeSource:
         try:
             # Multiplicity only validates the system descriptor here; sources
             # are also usable with imported references and synthetic tensors.
-            multiplicity = 1 if self.electron_count % 2 == 0 else 2
+            multiplicity = self.multiplicity
             orbital = calculator._create_native_system(
                 context, self.atoms, charge, multiplicity
             )
@@ -441,6 +469,53 @@ class NativeSource:
             self._check_open()
             self._call(
                 "vibeqc_posthf_rhf_density_v1",
+                self._handle,
+                int(backend == "cuda"),
+                device_id,
+                max_iterations,
+                tolerance,
+                int(df),
+                metric_threshold,
+                pointer(density),
+                density.size,
+                pointer(scalars),
+            )
+        return density, {
+            "energy": float(scalars[0]),
+            "energy_change": float(scalars[1]),
+            "density_rms": float(scalars[2]),
+            "iterations": int(scalars[3]),
+            "backend": backend,
+        }
+
+    def uhf_density(
+        self,
+        *,
+        backend="cpu",
+        device_id=0,
+        max_iterations=100,
+        tolerance=1e-11,
+        df=False,
+        metric_threshold=1e-10,
+    ):
+        """Run UHF and export detached alpha then beta AO densities.
+
+        This small-system snapshot bridge preserves the native UHF spin order
+        for checked host canonicalization. It does not claim device response.
+        """
+        if (
+            backend not in ("cpu", "cuda")
+            or type(max_iterations) is not int
+            or not 0 < max_iterations < 1 << 32
+            or not 0 < tolerance <= 1e-6
+        ):
+            raise ValueError("invalid UHF export controls")
+        density = np.empty((2, self.nbf, self.nbf))
+        scalars = np.empty(4)
+        with self._lock:
+            self._check_open()
+            self._call(
+                "vibeqc_posthf_uhf_density_v1",
                 self._handle,
                 int(backend == "cuda"),
                 device_id,

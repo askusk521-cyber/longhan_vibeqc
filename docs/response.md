@@ -165,3 +165,11 @@ unchanged.
 This is the HF UHF response layer only.  A native converged RKS/UKS CPKS
 endpoint remains a dependency of `#162`; this module does not relabel a UHF
 state as a KS endpoint or enable unsupported XC derivatives.
+
+The direct CPU bridge can export a converged open-shell UHF solution through
+`export_uhf`.  It canonicalizes the independently returned alpha and beta AO
+densities, rechecks both physical commutators and density/Fock reconstruction,
+and binds the result to the shared UHF response contract.  The bridge is
+intentionally limited to the small direct CPU Hamiltonian: CUDA/DF UHF response
+still fails closed until a spin-resolved device J/K response plan has separate
+numerical and resource evidence.

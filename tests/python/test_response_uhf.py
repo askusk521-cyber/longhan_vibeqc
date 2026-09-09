@@ -156,3 +156,26 @@ def test_uhf_problem_rejects_stale_spin_reference_even_at_matching_dimension():
     other = UHFResponseOperator.build_problem(changed, backend)
     with pytest.raises(ValueError, match="compatibility"):
         problem.assert_compatible(other)
+
+
+def test_native_open_shell_uhf_export_builds_a_response_problem():
+    """Export Li doublet UHF from native SCF into the shared response layer."""
+    from tools.vibeqc_posthf.export import export_uhf
+    from tools.vibeqc_posthf.sources import NativeSource
+
+    try:
+        source = NativeSource([("Li", (0.0, 0.0, 0.0))], "sto-3g", multiplicity=2)
+    except (OSError, FileNotFoundError, AttributeError) as error:
+        pytest.skip(f"native UHF export library unavailable: {error}")
+    with source:
+        snapshot, record = export_uhf(source, tolerance=1e-10, max_iterations=200)
+        assert snapshot.nocc("alpha") == 2
+        assert snapshot.nocc("beta") == 1
+        assert record["physical_residual"] < 1e-10
+        assert record["canonical_density_drift"] < 1e-10
+        assert record["physical_fock_drift"] < 1e-10
+        eri = source._read("four_center_eri", (0, 0, 0, 0), (source.nbf,) * 4)
+        problem = UHFResponseOperator.build_problem(
+            snapshot, DenseAOResponseBackend(eri)
+        )
+        assert problem.dimension == 10
