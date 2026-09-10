@@ -10,6 +10,11 @@ ASSETS = (
     "src/tensor/cuda_runtime.cuh",
     "src/dft/cuda_grid.cu",
     "src/dft/xc_runtime.cuh",
+    "src/integrals/range_moments.hpp",
+    "src/integrals/eri_geometry.hpp",
+    "src/scf/cuda_weighted_eri.hpp",
+    "src/scf/weighted_eri_runtime.hpp",
+    "include/vibeqc/vibeqc.h",
     *(
         str(path.relative_to(ROOT))
         for path in sorted((ROOT / "external/libxc-7.0.0").rglob("*"))

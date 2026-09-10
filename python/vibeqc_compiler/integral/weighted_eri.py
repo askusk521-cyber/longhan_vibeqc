@@ -61,6 +61,31 @@ def build_weighted_eri_ir(
     )
 
 
+def canonical_range_weighted_eri_ir(integral):
+    """Validate the public request, retaining unit factors in the native consumer."""
+    if not integral.operator.range_separated or integral.recurrence != "subset_wick":
+        raise ValueError(
+            "generated weighted execution requires a range subset_wick operator"
+        )
+    if integral.derivative is None or integral.derivative.order != 1:
+        raise ValueError(
+            "generated weighted execution requires first nuclear derivatives"
+        )
+    if len(integral.contractions) != 1 or not isinstance(
+        integral.contractions[0], WeightedDerivative
+    ):
+        raise ValueError(
+            "generated weighted execution requires the external-weight consumer"
+        )
+    if integral.operator.centers != (0, 1, 2, 3) or tuple(
+        s.center for s in integral.signature.shells
+    ) != (0, 1, 2, 3):
+        raise ValueError(
+            "generated weighted execution requires four canonical shell slots"
+        )
+    return build_weighted_eri_ir(integral.signature.angular, operator=integral.operator)
+
+
 @dataclass(frozen=True)
 class WeightedEriKernel:
     """One explicit component subset with no raw four-index derivative buffer."""

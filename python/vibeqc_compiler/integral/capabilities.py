@@ -84,7 +84,7 @@ class CapabilityCheck:
 
 
 def query_integral_capability(
-    integral: IntegralIR, *, backend: str = "cuda"
+    integral: IntegralIR, *, backend: str = "cuda", component_indices=None
 ) -> CapabilityCheck:
     """Query the existing backend's semantic input boundary without emitting code.
 
@@ -95,6 +95,38 @@ def query_integral_capability(
     a weighted request and silently apply an HF contraction.
     """
     reasons = []
+    if backend in ("cpu_range_weighted_eri", "cuda_range_weighted_eri"):
+        from .weighted_eri import canonical_range_weighted_eri_ir
+
+        # Eligibility describes the explicit prepared provider (including its
+        # raw unit-cotangent method), never a production HF/RSH selector. Large
+        # shells require an explicit bounded Cartesian subset at compilation.
+        try:
+            canonical = canonical_range_weighted_eri_ir(integral)
+            count = canonical.signature.component_count
+            indices = (
+                tuple(range(count))
+                if component_indices is None
+                else tuple(component_indices)
+            )
+            if (
+                not 1 <= len(indices) <= 64
+                or len(set(indices)) != len(indices)
+                or any(type(i) is not int or not 0 <= i < count for i in indices)
+            ):
+                raise ValueError(
+                    "select one to 64 distinct Cartesian components within the shell"
+                )
+        except (TypeError, ValueError) as error:
+            return CapabilityCheck(False, reasons=(str(error),))
+        return CapabilityCheck(True, schedules=("bounded_primitive_stream_v2",))
+    if component_indices is not None:
+        return CapabilityCheck(
+            False,
+            reasons=(
+                "this backend does not accept an explicit weighted component subset",
+            ),
+        )
     if backend == "cuda_one_electron_values":
         from .one_electron_values import build_one_electron_component_kernel
         from .shell_spec import cartesian_components

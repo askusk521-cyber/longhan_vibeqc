@@ -359,10 +359,10 @@ def test_generated_range_values_and_all_center_derivatives_against_libcint(
     with mol.with_range_coulomb(
         radial.omega if family == "long_range" else -radial.omega
     ):
-        reference = np.sum(
-            shaped_weights * mol.intor_by_shell("int2e", (0, 1, 2, 3)) / factors
-        )
+        raw_reference = mol.intor_by_shell("int2e", (0, 1, 2, 3)) / factors
+        reference = np.sum(shaped_weights * raw_reference)
         gradients = []
+        raw_gradients = []
         for permutation in ((0, 1, 2, 3), (1, 0, 2, 3), (2, 3, 0, 1), (3, 2, 0, 1)):
             block = mol.intor_by_shell("int2e_ip1", permutation)
             block = np.transpose(
@@ -370,12 +370,27 @@ def test_generated_range_values_and_all_center_derivatives_against_libcint(
             )
             # int2e_ip1 differentiates the electron coordinate of the first
             # Gaussian; its nuclear-center derivative has the opposite sign.
+            raw_gradients.append(-block / factors)
             gradients.append(
-                -np.sum(block / factors * shaped_weights, axis=(1, 2, 3, 4))
+                np.sum(raw_gradients[-1] * shaped_weights, axis=(1, 2, 3, 4))
             )
     np.testing.assert_allclose(actual, reference, atol=1e-11, rtol=1e-10)
     np.testing.assert_allclose(derivative, gradients, atol=1e-11, rtol=1e-10)
     np.testing.assert_allclose(derivative.sum(axis=0), 0, atol=1e-12)
+    if backend != "graph":
+        # A weighted sum alone can hide compensating component errors. Unit
+        # cotangents expose raw diagnostics through the exact same callable.
+        raw_gradients = np.asarray(raw_gradients).reshape(4, 3, -1)
+        for packed, component in enumerate(kernel.component_indices):
+            unit = np.zeros(len(kernel.component_indices))
+            unit[packed] = 1
+            raw, response = native(exponents, centers, unit)
+            np.testing.assert_allclose(
+                raw, raw_reference.flat[component], atol=1e-11, rtol=1e-10
+            )
+            np.testing.assert_allclose(
+                response, raw_gradients[:, :, component], atol=1e-11, rtol=1e-10
+            )
     errors = []
     for step in (0.003, 0.001, 0.0003):
         plus, minus = centers.copy(), centers.copy()
@@ -385,3 +400,78 @@ def test_generated_range_values_and_all_center_derivatives_against_libcint(
         errors.append(abs(finite - derivative[0, 2]))
     assert errors[2] < errors[1] < errors[0]
     assert errors[2] < 2e-7
+
+
+@pytest.mark.parametrize("backend", ["cpu", "cuda"])
+@pytest.mark.parametrize("family", ["long_range", "short_range"])
+@pytest.mark.parametrize("name", ["psss", "dpsp", "fsss"])
+def test_contracted_range_stream_and_public_basis_against_libcint(
+    backend, family, name, tmp_path
+):
+    """Use the established primitive normalization and public cotangent pullback."""
+    from vibeqc_compiler.integral.blocks import WeightTile
+    from vibeqc_compiler.integral.weighted_eri_inputs import (
+        PRIMITIVE_RANGE_RECORD,
+        prepare_weighted_eri_stream,
+    )
+
+    from tools.validate_weighted_eri import make_fixture
+
+    radial = CoulombKernel(family, 0.63)
+    integral = build_weighted_eri_ir(
+        tuple("spdf".index(c) for c in name), operator=four_center_eri_operator(radial)
+    )
+    kernel = build_weighted_eri_kernel(integral)
+    native = native_weighted_evaluator(kernel, tmp_path, backend)
+    indices = {
+        tuple(
+            component.count(axis) for component in components for axis in "xyz"
+        ): packed
+        for packed, components in enumerate(kernel.spec.components)
+    }
+    for variant in ("cartesian", "spherical", "coincident", "long"):
+        fixture = make_fixture(name, variant, coulomb_kernel=radial)
+        stream = prepare_weighted_eri_stream(
+            fixture["request"],
+            fixture["primitives"],
+            fixture["centers"],
+            lambda descriptor, _, fixture=fixture: WeightTile(
+                descriptor.layout, fixture["weights"].ravel()
+            ),
+            projections=fixture["projections"],
+        )
+        result = np.zeros(13)
+        packed = np.zeros(len(kernel.component_indices))
+        previous = None
+
+        def accumulate(key, packed=packed, result=result):
+            value, gradient = native(key[:4], np.array(key[4:]).reshape(4, 3), packed)
+            result[:] += np.r_[value, gradient.ravel()]
+
+        # The validation driver groups adjacent equal primitive geometries
+        # to exercise the generated shared-weight DAG, after the production
+        # stream has supplied all normalization and projection coefficients.
+        for blob in stream.records():
+            fields = PRIMITIVE_RANGE_RECORD.unpack(blob)
+            assert fields[0] >> 8 == (1 if family == "long_range" else 2)
+            assert fields[-2:] == (radial.omega, 2)
+            key = fields[14:30]
+            if previous is not None and key != previous:
+                accumulate(previous)
+                packed[:] = 0
+            previous = key
+            if fields[0] & 255:
+                assert name == "psss"
+                packed[:] += fields[30:33]
+            else:
+                packed[indices[fields[2:14]]] += fields[30]
+        if previous is not None:
+            accumulate(previous)
+        np.testing.assert_allclose(
+            result,
+            fixture["reference"],
+            atol=1e-11,
+            rtol=1e-10,
+            err_msg=f"{name}/{variant}/{family}/{backend}",
+        )
+        np.testing.assert_allclose(result[1:].reshape(4, 3).sum(axis=0), 0, atol=1e-12)

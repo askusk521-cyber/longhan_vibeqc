@@ -6,25 +6,13 @@ schedule search operates on CUDA target records rather than vendor CLI details.
 
 from __future__ import annotations
 
-import os
-import signal
 import subprocess
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .compiler_process import CompileResult as CudaCompileResult
+from .compiler_process import run_compiler
 from .cuda_target import CudaTargetInfo
-
-
-@dataclass(frozen=True, slots=True)
-class CudaCompileResult:
-    """Compiler outcome including deterministic timeout diagnostics."""
-
-    returncode: int
-    timed_out: bool
-    duration_seconds: float
-    stdout: str
-    stderr: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,43 +73,7 @@ class CudaCompilerAdapter:
 
     def _run_compiler(self, command: list[str]) -> CudaCompileResult:
         """Bound NVCC and every child for either object or shared-library builds."""
-        started = time.monotonic()
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        timed_out = False
-        try:
-            stdout, stderr = process.communicate(timeout=self.compile_timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                stdout, stderr = process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                stdout, stderr = process.communicate()
-        duration = time.monotonic() - started
-        if timed_out:
-            stderr += (
-                f"NVCC compilation timed out after {self.compile_timeout:g} seconds\n"
-            )
-        return CudaCompileResult(
-            returncode=124 if timed_out else process.returncode,
-            timed_out=timed_out,
-            duration_seconds=duration,
-            stdout=stdout,
-            stderr=stderr,
-        )
+        return run_compiler(command, self.compile_timeout, label="NVCC")
 
     def link(
         self,

@@ -11,13 +11,15 @@ from vibeqc_compiler.integral.blocks import (
     WeightTile,
 )
 from vibeqc_compiler.integral.capabilities import query_integral_capability
-from vibeqc_compiler.integral.ir import ContractionOutput
+from vibeqc_compiler.integral.ir import ContractionOutput, four_center_eri_operator
+from vibeqc_compiler.integral.range_separation import CoulombKernel
 from vibeqc_compiler.integral.shell_signature import BasisConvention, CenterBinding
 from vibeqc_compiler.integral.weighted_eri import (
     build_weighted_eri_ir,
     build_weighted_eri_kernel,
 )
 from vibeqc_compiler.integral.weighted_eri_inputs import (
+    PRIMITIVE_RANGE_RECORD,
     PRIMITIVE_RECORD,
     prepare_weighted_eri_stream,
     weighted_eri_response,
@@ -25,6 +27,32 @@ from vibeqc_compiler.integral.weighted_eri_inputs import (
 
 PRIMITIVES = (((0.6, 0.7), (1.1, -0.2)),) + (((0.8, 1.0),),) * 3
 CENTERS = ((0.0, 0.1, 0.2),) * 4
+
+
+@pytest.mark.parametrize("family,tag", [("long_range", 1), ("short_range", 2)])
+@pytest.mark.parametrize("generated", [False, True])
+def test_range_stream_reuses_weights_and_tags_exact_operator(family, tag, generated):
+    """V1 weight arithmetic stays identical; a v1 executor rejects the v2 prefix."""
+    ordinary = build_weighted_eri_ir((1, 0, 0, 0))
+    radial = replace(
+        ordinary, operator=four_center_eri_operator(CoulombKernel(family, 0.7))
+    )
+    provider = lambda descriptor, _: WeightTile(descriptor.layout, [1.0, -0.3, 0.2])
+    full = prepare_weighted_eri_stream(
+        request_for(ordinary), PRIMITIVES, CENTERS, provider, generated=generated
+    )
+    ranged = prepare_weighted_eri_stream(
+        request_for(radial), PRIMITIVES, CENTERS, provider, generated=generated
+    )
+    assert full.record_size == 208 and ranged.record_size == 224
+    assert full.record_count == ranged.record_count
+    assert ranged.host_peak_bytes == full.host_peak_bytes + 16
+    for old, new in zip(full.records(), ranged.records(), strict=True):
+        first, second = PRIMITIVE_RECORD.unpack(old), PRIMITIVE_RANGE_RECORD.unpack(new)
+        assert second[0] == first[0] | (tag << 8)
+        assert second[0] > 1  # Existing native service rejects before dispatch.
+        assert second[1:-2] == first[1:]
+        assert second[-2:] == (0.7, 2)
 
 
 def request_for(integral, offsets=None, shape=None):
