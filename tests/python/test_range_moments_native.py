@@ -14,6 +14,7 @@ from vibeqc_compiler.integral.range_separation import CoulombKernel, reference_m
 @pytest.fixture(scope="module", params=("cpu", "cuda"))
 def native_moments(request, tmp_path_factory):
     """Compile identical host/device arithmetic; CUDA execution is opt-in Slurm."""
+    pytest.importorskip("scipy")
     cuda = request.param == "cuda"
     if cuda and os.environ.get("VIBEQC_TEST_RANGE_CUDA") != "1":
         pytest.skip("set VIBEQC_TEST_RANGE_CUDA=1 inside a Slurm GPU job")

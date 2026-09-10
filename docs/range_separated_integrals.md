@@ -123,6 +123,10 @@ capabilities retain their full-Coulomb boundary.
 
 ## Reproducible validation
 
+Install `.[test,reference-test]` to run the independent reference suites.
+CI selects this extra, pinning PySCF 2.14.0. Ordinary runtime installation
+does not depend on PySCF or SciPy; reference tests skip when they are absent.
+
 Native CPU/CUDA tests compare LR and SR separately against Libcint values
 and all four center derivatives for psss, dpsp, fsss, and selected f/f/f/f
 components. Moment tests cover zero and enormous omega, small and enormous

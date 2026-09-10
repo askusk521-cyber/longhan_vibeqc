@@ -41,6 +41,7 @@ RADIAL = CoulombKernel("long_range", 0.63)
 @pytest.fixture(scope="module", params=("cpu", "cuda"))
 def runtime(request, tmp_path_factory):
     """Exercise the exported generated ABI, including CUDA's shared arena owner."""
+    pytest.importorskip("pyscf")
     cuda = request.param == "cuda"
     if cuda and os.environ.get("VIBEQC_TEST_RANGE_CUDA") != "1":
         pytest.skip("set VIBEQC_TEST_RANGE_CUDA=1 inside a Slurm GPU job")

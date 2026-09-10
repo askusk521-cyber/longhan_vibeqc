@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from scipy.special import gammainc, gammaln
 from vibeqc_compiler.common.provenance import canonical_hash
 from vibeqc_compiler.integral.capabilities import query_integral_capability
 from vibeqc_compiler.integral.ir import four_center_eri_operator
@@ -28,6 +27,11 @@ from vibeqc_compiler.integral.weighted_eri_native import (
 )
 
 from tools.vibeqc_validation.weighted_eri import primitive_variables
+
+# Reference engines are optional for ordinary package/test installations; CI
+# explicitly installs the pinned reference-test extra to exercise these gates.
+special = pytest.importorskip("scipy.special")
+gammainc, gammaln = special.gammainc, special.gammaln
 
 
 def native_weighted_evaluator(kernel, folder, backend):

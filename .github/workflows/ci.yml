@@ -207,7 +207,7 @@ jobs:
       - name: Install the Python package and test dependencies
         run: |
           uv venv --python 3.11
-          uv pip install --python .venv/bin/python --editable '.[test]'
+          uv pip install --python .venv/bin/python --editable '.[test,reference-test]'
       - name: Show ccache statistics
         run: ccache --show-stats
       - name: Run Python tests with coverage
