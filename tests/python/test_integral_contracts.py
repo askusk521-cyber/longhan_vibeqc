@@ -57,6 +57,8 @@ def request_ir(family, *, derivative=False, atoms=None, angular=None):
         OperatorFamily.COULOMB_METRIC: ("auxiliary", "auxiliary"),
         OperatorFamily.THREE_CENTER_ERI: ("orbital", "orbital", "auxiliary"),
         OperatorFamily.FOUR_CENTER_ERI: ("orbital",) * 4,
+        OperatorFamily.LONG_RANGE_ERI: ("orbital",) * 4,
+        OperatorFamily.SHORT_RANGE_ERI: ("orbital",) * 4,
     }[family]
     count = len(roles) + (family == OperatorFamily.NUCLEAR_ATTRACTION)
     atoms = tuple(range(count)) if atoms is None else atoms
@@ -75,6 +77,9 @@ def request_ir(family, *, derivative=False, atoms=None, angular=None):
         if family == OperatorFamily.NUCLEAR_ATTRACTION
         else (),
         permutations=(tuple([1, 0] + list(range(2, len(roles)))),),
+        omega=0.7
+        if family in (OperatorFamily.LONG_RANGE_ERI, OperatorFamily.SHORT_RANGE_ERI)
+        else 0.0,
     )
     deriv = operator.nuclear_derivative() if derivative else None
     shape = ((count, 3) if derivative else ()) + signature.component_shape

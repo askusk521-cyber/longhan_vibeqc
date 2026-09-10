@@ -17,11 +17,17 @@ import numpy as np
 
 from .blocks import BlockRequest, BlockResponse, BlockStatus, WeightedDerivative
 from .ir import OperatorFamily
+from .range_separation import CoulombKernelFamily
 from .shell_signature import BasisConvention, checked_index
 from .shell_spec import cartesian_components
 
 PRIMITIVE_RECORD = struct.Struct("<II12I4d12d3d")
 assert PRIMITIVE_RECORD.size == 208
+# V2 retains the primitive prefix and appends exact omega and its ABI version.
+# Family bits in the leading kind make even the first record fail closed if
+# accidentally submitted to the legacy full-Coulomb-only native service.
+PRIMITIVE_RANGE_RECORD = struct.Struct("<II12I4d12d3ddQ")
+assert PRIMITIVE_RANGE_RECORD.size == 224
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,24 @@ class WeightedEriPrimitiveStream:
         count = math.prod(len(shell) for shell in self.primitives)
         return count * (1 if self.fused_weights is not None else len(self.components))
 
+    @property
+    def record_size(self) -> int:
+        """Numeric upload stride; range-tagged records require the v2 executor."""
+        return (
+            PRIMITIVE_RANGE_RECORD.size
+            if self.request.integral.operator.range_separated
+            else PRIMITIVE_RECORD.size
+        )
+
+    def _record(self, kind, angular, exponents, positions, weights):
+        """Pack the same normalized primitive with explicit radial ABI identity."""
+        radial = self.request.integral.operator.coulomb_kernel
+        fields = (self.output_tile, *angular, *exponents, *positions, *weights)
+        if radial.family == CoulombKernelFamily.FULL_RANGE:
+            return PRIMITIVE_RECORD.pack(kind, *fields)
+        tag = 1 if radial.family == CoulombKernelFamily.LONG_RANGE else 2
+        return PRIMITIVE_RANGE_RECORD.pack(kind | (tag << 8), *fields, radial.omega, 2)
+
     def records(self):
         """Yield fixed little-endian native POD records without a product array."""
         if not self.components:
@@ -61,29 +85,14 @@ class WeightedEriPrimitiveStream:
                 weights = tuple(coefficient * w for w in self.fused_weights)
                 if not all(math.isfinite(w) for w in weights):
                     raise ValueError("primitive contraction weight overflow")
-                yield PRIMITIVE_RECORD.pack(
-                    1,
-                    self.output_tile,
-                    1,
-                    *([0] * 11),
-                    *exponents,
-                    *positions,
-                    *weights,
-                )
+                yield self._record(1, (1, *([0] * 11)), exponents, positions, weights)
             else:
                 for angular, weight in self.components:
                     weight *= coefficient
                     if not math.isfinite(weight):
                         raise ValueError("primitive contraction weight overflow")
-                    yield PRIMITIVE_RECORD.pack(
-                        0,
-                        self.output_tile,
-                        *angular,
-                        *exponents,
-                        *positions,
-                        weight,
-                        0.0,
-                        0.0,
+                    yield self._record(
+                        0, angular, exponents, positions, (weight, 0.0, 0.0)
                     )
 
 
@@ -105,9 +114,11 @@ def prepare_weighted_eri_stream(
     orbit-folded; this adapter applies neither symmetry factors nor screening.
     """
     integral, consumer = request.integral, request.consumer
-    if integral.operator.family != OperatorFamily.FOUR_CENTER_ERI or not isinstance(
-        consumer, WeightedDerivative
-    ):
+    if integral.operator.family not in (
+        OperatorFamily.FOUR_CENTER_ERI,
+        OperatorFamily.LONG_RANGE_ERI,
+        OperatorFamily.SHORT_RANGE_ERI,
+    ) or not isinstance(consumer, WeightedDerivative):
         raise ValueError(
             "native weighted input requires an external ERI derivative request"
         )
@@ -158,7 +169,11 @@ def prepare_weighted_eri_stream(
         consumer.weights.layout.storage_bytes
         + 16 * sum(map(len, primitives))
         + 12 * 8
-        + PRIMITIVE_RECORD.size
+        + (
+            PRIMITIVE_RANGE_RECORD.size
+            if integral.operator.range_separated
+            else PRIMITIVE_RECORD.size
+        )
     )
     if projections is not None:
         fixed_bytes += 8 * sum(math.prod(s) for s in matrix_shapes)

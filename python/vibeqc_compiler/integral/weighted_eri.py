@@ -14,7 +14,13 @@ from itertools import product
 
 from .blocks import TensorLayout, WeightDescriptor, WeightedDerivative
 from .expr import AlgebraForm, Expr, Graph
-from .ir import FOUR_CENTER_ERI_OPERATOR, IntegralIR, OperatorFamily, build_integral_ir
+from .ir import (
+    FOUR_CENTER_ERI_OPERATOR,
+    IntegralIR,
+    OperatorFamily,
+    OperatorSpec,
+    build_integral_ir,
+)
 from .shell_class import _component_quantums, _coulomb_derivative, _pair_expansion
 from .shell_signature import BasisConvention, ShellSignature
 from .shell_spec import AXES, ShellClassSpec
@@ -23,7 +29,10 @@ CENTERS = ("first", "second", "third", "fourth")
 
 
 def build_weighted_eri_ir(
-    angular: tuple[int, int, int, int], *, memory_budget_bytes=4 * 1024**2
+    angular: tuple[int, int, int, int],
+    *,
+    memory_budget_bytes=4 * 1024**2,
+    operator: OperatorSpec = FOUR_CENTER_ERI_OPERATOR,
 ) -> IntegralIR:
     """Describe a full Cartesian shell tile with arbitrary ordered weights.
 
@@ -46,9 +55,35 @@ def build_weighted_eri_ir(
     )
     return build_integral_ir(
         spec,
-        derivative=FOUR_CENTER_ERI_OPERATOR.nuclear_derivative(),
+        operator=operator,
+        derivative=operator.nuclear_derivative(),
         contractions=(consumer,),
     )
+
+
+def canonical_range_weighted_eri_ir(integral):
+    """Validate the public request, retaining unit factors in the native consumer."""
+    if not integral.operator.range_separated or integral.recurrence != "subset_wick":
+        raise ValueError(
+            "generated weighted execution requires a range subset_wick operator"
+        )
+    if integral.derivative is None or integral.derivative.order != 1:
+        raise ValueError(
+            "generated weighted execution requires first nuclear derivatives"
+        )
+    if len(integral.contractions) != 1 or not isinstance(
+        integral.contractions[0], WeightedDerivative
+    ):
+        raise ValueError(
+            "generated weighted execution requires the external-weight consumer"
+        )
+    if integral.operator.centers != (0, 1, 2, 3) or tuple(
+        s.center for s in integral.signature.shells
+    ) != (0, 1, 2, 3):
+        raise ValueError(
+            "generated weighted execution requires four canonical shell slots"
+        )
+    return build_weighted_eri_ir(integral.signature.angular, operator=integral.operator)
 
 
 @dataclass(frozen=True)
@@ -77,7 +112,12 @@ def build_weighted_eri_kernel(
     Uncompiled subsets retain the unscreened native external-weight fallback.
     """
     if (
-        integral.operator.family != OperatorFamily.FOUR_CENTER_ERI
+        integral.operator.family
+        not in (
+            OperatorFamily.FOUR_CENTER_ERI,
+            OperatorFamily.LONG_RANGE_ERI,
+            OperatorFamily.SHORT_RANGE_ERI,
+        )
         or integral.operator.centers != (0, 1, 2, 3)
         or tuple(s.center for s in integral.signature.shells) != (0, 1, 2, 3)
     ):

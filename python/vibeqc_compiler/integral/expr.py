@@ -575,11 +575,19 @@ class Graph:
             node = self.nodes[identifier]
             if node.operation != operation:
                 return (identifier,)
-            return tuple(
-                operand
-                for argument in node.arguments
-                for operand in associative_arguments(argument, operation)
-            )
+            # Through-f weighted contractions can contain thousands of
+            # left-associated terms. An explicit stack preserves the same
+            # operand order without depending on Python's recursion limit.
+            pending = list(reversed(node.arguments))
+            operands = []
+            while pending:
+                current = pending.pop()
+                child = self.nodes[current]
+                if child.operation == operation:
+                    pending.extend(reversed(child.arguments))
+                else:
+                    operands.append(current)
+            return tuple(operands)
 
         @cache
         def structural_key(

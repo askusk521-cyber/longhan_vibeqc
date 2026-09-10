@@ -1042,9 +1042,18 @@ def build_dppp_contraction_kernel(
     )
 
 
+def _require_full_coulomb_emission(integral: IntegralIR | None) -> None:
+    """Legacy complete helpers initialize ordinary Boys moments internally."""
+    if integral is not None and integral.operator.range_separated:
+        raise ValueError(
+            "legacy CUDA shell helpers do not initialize range-separated moments"
+        )
+
+
 def emit_psss_cuda(kernel: PsssKernel) -> str:
     """Emit one AOT-ready CUDA device function for the pilot shell class."""
 
+    _require_full_coulomb_emission(kernel.integral)
     variable_code = {
         "alpha": "alpha",
         "beta": "beta",
@@ -1095,6 +1104,7 @@ def emit_psss_cuda(kernel: PsssKernel) -> str:
 def emit_dppp_component_cuda(kernel: DpppComponentKernel) -> str:
     """Emit scalar analytic CUDA for one generated ``dppp`` component."""
 
+    _require_full_coulomb_emission(kernel.integral)
     variable_code = {
         "alpha": "alpha",
         "beta": "beta",
@@ -1147,6 +1157,7 @@ def emit_dppp_contraction_cuda(kernel: DpppContractionKernel) -> str:
     """Emit a component evaluator that consumes cooperative common geometry."""
 
     selected_integral = kernel.integral or build_integral_ir(DPPP_SPEC)
+    _require_full_coulomb_emission(selected_integral)
     variable_code = {
         "inverse_two_p": "geometry.inverse_two_p",
         "inverse_two_q": "geometry.inverse_two_q",

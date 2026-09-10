@@ -39,6 +39,8 @@ from vibeqc_compiler.integral.eri_weights import (
     fold_dense_eri_weight,
     fold_normalized_pair_weight,
 )
+from vibeqc_compiler.integral.ir import four_center_eri_operator
+from vibeqc_compiler.integral.range_separation import CoulombKernel, CoulombKernelFamily
 from vibeqc_compiler.integral.shell_signature import BasisConvention, CenterBinding
 from vibeqc_compiler.integral.weighted_eri import build_weighted_eri_ir
 from vibeqc_compiler.integral.weighted_eri_inputs import (
@@ -63,8 +65,13 @@ CENTERS = np.array(
 )
 
 
-def make_fixture(name, variant, *, displacement=None, unit_component=None):
+def make_fixture(
+    name, variant, *, displacement=None, unit_component=None, coulomb_kernel=None
+):
     """Use independent libcint center derivatives and normalized public AOs."""
+    radial = CoulombKernel() if coulomb_kernel is None else coulomb_kernel
+    if not isinstance(radial, CoulombKernel):
+        raise TypeError("fixture requires explicit CoulombKernel semantics")
     angular = tuple("spdf".index(letter) for letter in name)
     centers = CENTERS.copy()
     atoms = (0, 1, 2, 3)
@@ -95,7 +102,7 @@ def make_fixture(name, variant, *, displacement=None, unit_component=None):
     }
     cart_mol, scales, _ = pyscf_molecule(inputs)
     projections = None
-    integral = build_weighted_eri_ir(angular)
+    integral = build_weighted_eri_ir(angular, operator=four_center_eri_operator(radial))
     if variant == "spherical":
         # cart2sph maps libcint Cartesian functions; divide by their unit-AO
         # scales to obtain the normalized Cartesian-to-public pullback.
@@ -129,21 +136,39 @@ def make_fixture(name, variant, *, displacement=None, unit_component=None):
         )
     else:
         mol = cart_mol
-    reference = quartet_data(mol, scales)
+    with mol.with_range_coulomb(
+        -radial.omega
+        if radial.family == CoulombKernelFamily.SHORT_RANGE
+        else radial.omega
+    ):
+        reference = quartet_data(mol, scales)
     eri, gradient = np.asarray(reference["eri"]), np.asarray(reference["gradient"])
+    if radial.family == CoulombKernelFamily.LONG_RANGE and radial.omega == 0:
+        # Libcint uses signed zero for ordinary Coulomb; the exact LR limit
+        # instead vanishes. Do not mislabel a full-Coulomb reference as LR.
+        eri, gradient = np.zeros_like(eri), np.zeros_like(gradient)
     weights = np.random.default_rng(144).normal(size=eri.shape)
     reference_weights = weights.copy()
     offsets = mol.ao_loc_nr()
-    if variant in ("orbit", "normalized_pair"):
+    if variant in ("orbit", "normalized_pair", "exchange"):
         # Explicit independent orbit / pair-matrix contractions serve as the
         # scalar/gradient oracle, while production folding prepares CUDA input.
         dense = lambda q: float(
             np.sin(0.7 * q[0] + 1.1 * q[1] - 0.3 * q[2] + 0.2 * q[3])
         )
+        if variant == "exchange":
+            # A fixed, nontrivial restricted density and an explicit exchange
+            # coefficient. The range family belongs to the integral; it does
+            # not change the existing ordered/orbit cotangent convention.
+            orbitals = np.random.default_rng(166).normal(size=(mol.nao_nr(), 3))
+            density = orbitals @ orbitals.T / 7
+            dense = lambda q: float(
+                -0.25 * 0.37 * density[q[0], q[2]] * density[q[1], q[3]]
+            )
         pair = lambda i, j: float(np.sin(0.37 * i - 0.21 * j))
         for component in np.ndindex(eri.shape):
             i, j, k, l = (int(offsets[s] + c) for s, c in enumerate(component))
-            if variant == "orbit":
+            if variant in ("orbit", "exchange"):
                 weights[component] = fold_dense_eri_weight(dense, (i, j, k, l))
                 orbit = {
                     (i, j, k, l),
@@ -191,7 +216,16 @@ def make_fixture(name, variant, *, displacement=None, unit_component=None):
         "weights": weights,
         "reference": result,
         "input_hash": canonical_hash(
-            {"inputs": inputs, "weights": weights.tolist(), "atoms": atoms}
+            {
+                "inputs": inputs,
+                "weights": weights.tolist(),
+                "atoms": atoms,
+                **(
+                    {"coulomb_kernel": radial.to_payload()}
+                    if radial.family != CoulombKernelFamily.FULL_RANGE
+                    else {}
+                ),
+            }
         ),
     }
 

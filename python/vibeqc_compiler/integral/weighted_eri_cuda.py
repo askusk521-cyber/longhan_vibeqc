@@ -18,14 +18,23 @@ from .weighted_eri import (
 
 
 def emit_weighted_eri_function(
-    kernel: WeightedEriKernel, name: str, *, inline_single_use=False
+    kernel: WeightedEriKernel,
+    name: str,
+    *,
+    inline_single_use=False,
+    backend="cuda",
+    packed_weights=False,
 ) -> str:
     """Emit one complete center-gradient result with shared scalar CSE.
 
     A component subset yields its additive contribution only. Every required
     geometry field is mapped by meaning rather than a density/task ABI; the
     same helper therefore serves HF adapters and arbitrary external weights.
+    Packed weights follow component_indices order, bounding a sparse through-f
+    helper's input to its selected subset rather than a full shell weight array.
     """
+    if backend not in ("cpu", "cuda"):
+        raise ValueError("weighted scalar emission supports cpu or cuda")
     if not name.isascii() or not name.isidentifier():
         raise ValueError("CUDA helper name must be an ASCII identifier")
     roots = (kernel.value, *(value for row in kernel.gradients for value in row))
@@ -50,16 +59,26 @@ def emit_weighted_eri_function(
         variables[f"{prefix}_product_scale"] = f"geometry.product_scales[{center}]"
     for order in range(kernel.integral.maximum_coulomb_order + 1):
         variables[f"boys_{order}"] = f"geometry.boys[{order}]"
-    for index in kernel.component_indices:
-        variables[f"component_weight_{index}"] = f"component_weights[{index}]"
+    for packed, index in enumerate(kernel.component_indices):
+        offset = packed if packed_weights else index
+        variables[f"component_weight_{index}"] = f"component_weights[{offset}]"
     emitter = CudaEmitter(graph, variables, plan)
     emitter.emit(roots)
     lines = [
         f"/** Unscreened {kernel.spec.name} external-weight derivatives; {len(kernel.component_indices)} components. */",
-        f"__device__ __forceinline__ Gradient {name}(const Geometry& geometry, const double* component_weights) {{",
+        f"{'__device__ __forceinline__' if backend == 'cuda' else 'inline'} Gradient {name}(const Geometry& geometry, const double* component_weights) {{",
         *emitter.lines,
         "  Gradient result{};",
     ]
+    if kernel.integral.operator.range_separated:
+        radial = kernel.integral.operator.coulomb_kernel
+        # The geometry-factored helper consumes modified moments supplied by
+        # its caller. Retain exact operator identity even when the arithmetic
+        # DAG is shared with full Coulomb; legacy native streams reject this IR.
+        lines.insert(
+            0,
+            f"/** Requires {radial.family.value} moments; omega={radial.omega.hex()} inverse bohr, held fixed. */",
+        )
     lines.append(f"  result.value = {emitter.reference(roots[0])};")
     for i, value in enumerate(roots[1:]):
         lines.append(
@@ -70,7 +89,11 @@ def emit_weighted_eri_function(
 
 
 def emit_weighted_eri_header(
-    functions: tuple[tuple[WeightedEriKernel, str], ...], *, inline_single_use=False
+    functions: tuple[tuple[WeightedEriKernel, str], ...],
+    *,
+    inline_single_use=False,
+    backend="cuda",
+    packed_weights=False,
 ) -> str:
     """Wrap bounded helpers in one shared geometry/result interface.
 
@@ -79,6 +102,8 @@ def emit_weighted_eri_header(
     those fields only. Coefficients and Cartesian normalization are multiplied
     into weights/prefactor once by the existing primitive contraction layer.
     """
+    if backend not in ("cpu", "cuda"):
+        raise ValueError("weighted scalar emission supports cpu or cuda")
     names = [name for _, name in functions]
     if len(names) != len(set(names)):
         raise ValueError("generated weighted helper names must be unique")
@@ -98,8 +123,16 @@ struct Geometry {
 /** Nuclear derivatives in original shell-center order, before atom accumulation. */
 struct Gradient { double value; double center[4][3]; };
 """
+    if backend == "cpu":
+        prefix = prefix.replace("#include <cuda_runtime.h>\n", "")
     body = "\n".join(
-        emit_weighted_eri_function(kernel, name, inline_single_use=inline_single_use)
+        emit_weighted_eri_function(
+            kernel,
+            name,
+            inline_single_use=inline_single_use,
+            backend=backend,
+            packed_weights=packed_weights,
+        )
         for kernel, name in functions
     )
     return (

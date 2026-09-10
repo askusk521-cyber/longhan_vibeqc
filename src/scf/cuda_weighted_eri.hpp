@@ -33,6 +33,21 @@ struct CudaWeightedEriPrimitive {
 };
 static_assert(sizeof(CudaWeightedEriPrimitive) == 208);
 
+/** Versioned range-separated extension of the same normalized weight record.
+ * The leading primitive.kind contains its ordinary kind (0/1) in bits 0..7
+ * and the radial family (1=LR, 2=SR) in bits 8..15. All other bits are zero.
+ * Omega is finite, nonnegative and in inverse Bohr; nuclear derivatives hold
+ * it fixed. The family tag makes legacy full-Coulomb execution reject this
+ * prefix before evaluating anything. A v2 generated provider must additionally
+ * validate the complete stride/version and its compiled operator identity.
+ */
+struct CudaWeightedEriRangePrimitive {
+  CudaWeightedEriPrimitive primitive;
+  double omega{};
+  std::uint64_t abi_version{2};
+};
+static_assert(sizeof(CudaWeightedEriRangePrimitive) == 224);
+
 /** Weighted integral scalar and its four shell-center derivatives. */
 struct CudaWeightedEriResult {
   double value{};
