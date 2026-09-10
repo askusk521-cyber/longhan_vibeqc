@@ -119,6 +119,36 @@ def test_arbitrary_raw_fused_and_two_budgets_with_auxiliary_motion(
             )
 
 
+@pytest.mark.parametrize("tile_elements", [1, 7, 13])
+def test_cooperative_sparse_weights_and_ragged_primitive_partitions(tile_elements):
+    """Zero-weight groups and partial warps must preserve the shuffle mask.
+
+    Unequal odd contraction lengths leave different primitive remainders in
+    each subgroup. The oracle contracts libcint derivatives with the original
+    sparse weights, independently of CUDA lane ownership and reduction order.
+    """
+    assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
+    oi, xi = fixture_inputs("spherical", False)
+    oi["shells"][0]["primitives"].append([0.31, 0.12])
+    xi["shells"][0]["primitives"].extend([[0.27, 0.13], [0.41, -0.08], [2.2, 0.07]])
+    a, m, da, dm = reference_df_matrices(oi, xi)
+    wa, wm = np.zeros_like(a), np.zeros_like(m)
+    wa.flat[::5] = np.linspace(-0.2, 0.3, wa.flat[::5].size)
+    wm.flat[::3] = np.linspace(0.1, -0.4, wm.flat[::3].size)
+    expected = np.einsum("axijp,ijp->ax", da, wa) + np.einsum("axpq,pq->ax", dm, wm)
+    atoms = [(z, tuple(r)) for z, r in zip(("He", "H", "H"), oi["coordinates"])]
+    actual, _ = execute_df_gradient(
+        calculator(oi),
+        calculator(xi),
+        atoms,
+        wa,
+        wm,
+        schedule=0,
+        maximum_tile_elements=tile_elements,
+    )
+    np.testing.assert_allclose(actual, expected, atol=2e-9, rtol=2e-11)
+
+
 @pytest.mark.parametrize(
     "orbital_rep,auxiliary_rep",
     [("cartesian", "spherical"), ("spherical", "cartesian")],
@@ -165,16 +195,24 @@ def test_complete_hf_replay_two_budgets_and_force_components(
         screening_tolerance=1e-14,
     )
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "reference")
+    oracle = Calculator(
+        device="cpu",
+        method=method,
+        basis="def2-svp",
+        basis_representation=representation,
+        density_fitting="cpu",
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+        screening_tolerance=1e-14,
+    )
     expected = [
-        calc.singlepoint(
+        oracle.singlepoint(
             [("H", tuple(r)) for r in positions],
             charge=charge,
             multiplicity=multiplicity,
         )
         for positions in (base, base, moved, base)
     ]
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "generated")
     monkeypatch.setenv("VIBEQC_DF_DERIVATIVE_MAPPING", "thread")
     with calc.prepare_batch(
         [atoms], charges=[charge], multiplicities=[multiplicity]
@@ -187,21 +225,20 @@ def test_complete_hf_replay_two_budgets_and_force_components(
                 actual.forces, reference.forces, atol=3e-9, rtol=0
             )
             np.testing.assert_allclose(actual.forces.sum(axis=0), 0, atol=3e-9)
-        # Both native caches and Python provenance must notice selector changes
-        # even when the geometry and warm density remain unchanged.
-        for selection, mapping in (
-            ("generated", "serial"),
-            ("reference", "thread"),
-            ("generated", "thread"),
-        ):
-            monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", selection)
+        # Mapping changes must invalidate the response cache. Retired selector
+        # values have no dispatch/provenance effect and cannot resurrect an oracle.
+        for mapping in ("serial", "thread"):
+            monkeypatch.setenv(
+                "VIBEQC_DF_DERIVATIVES",
+                "reference" if mapping == "serial" else "generated",
+            )
             monkeypatch.setenv("VIBEQC_DF_DERIVATIVE_MAPPING", mapping)
             actual = batch.execute([base], strict=True).items[0]
             np.testing.assert_allclose(
                 actual.forces, expected[0].forces, atol=3e-9, rtol=0
             )
             policy = batch._warm_metadata[0]["controls"]["runtime_policy"]
-            assert policy["VIBEQC_DF_DERIVATIVES"] == selection
+            assert "VIBEQC_DF_DERIVATIVES" not in policy
             assert policy["VIBEQC_DF_DERIVATIVE_MAPPING"] == mapping
 
 
@@ -231,7 +268,6 @@ def test_generated_df_hf_matches_pyscf_and_two_energy_difference_steps(
     reference.kernel()
     assert reference.converged
     expected = -reference.nuc_grad_method().kernel()
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "generated")
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
     calc = Calculator(
         device="cuda",
@@ -348,9 +384,17 @@ def test_auxiliary_only_atom_hf_energy_derivative(
         density_tolerance=1e-10,
         screening_tolerance=1e-14,
     )
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "reference")
-    expected = calc.singlepoint(atoms, charge=charge, multiplicity=multiplicity)
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "generated")
+    oracle = Calculator(
+        device="cpu",
+        method=method,
+        basis=shells(oi),
+        auxiliary_basis=shells(xi),
+        density_fitting="cpu",
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+        screening_tolerance=1e-14,
+    )
+    expected = oracle.singlepoint(atoms, charge=charge, multiplicity=multiplicity)
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
     actual = calc.singlepoint(atoms, charge=charge, multiplicity=multiplicity)
     np.testing.assert_allclose(actual.forces, expected.forces, atol=3e-9, rtol=0)
@@ -377,7 +421,8 @@ def test_auxiliary_only_atom_hf_energy_derivative(
 def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
     monkeypatch, method, representation
 ):
-    from test_one_electron_values_cuda import run_case
+    from pyscf import gto, scf
+    from test_one_electron_values_cuda import run_case, sdf_case_inputs
 
     assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
     kwargs = {
@@ -387,22 +432,52 @@ def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
         "count": 3,
     }
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "reference")
-    expected = run_case(monkeypatch, mapping="thread", **kwargs)
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "generated")
     actual = run_case(monkeypatch, mapping="thread", **kwargs)
-    for reference, result in zip(expected, actual):
-        np.testing.assert_allclose(
-            result.energies, reference.energies, atol=3e-10, rtol=0
-        )
-        for left, right in zip(reference.items, result.items):
+    basis, systems, charge, multiplicity = sdf_case_inputs(method, kwargs["count"])
+    # Libcint/PySCF provides an independent complete-force oracle, including
+    # the moving auxiliary basis. Reuse only identical reference geometries;
+    # the CUDA calculation above still executes all four prepared phases.
+    expected = {}
+    for moved, result in zip((False, False, True, False), actual, strict=True):
+        for item, right in enumerate(result.items):
+            if (moved, item) not in expected:
+                atoms = [
+                    (f"{z}{i}", np.array(r)) for i, (z, r) in enumerate(systems[item])
+                ]
+                if moved:
+                    atoms[1][1][0] += 0.013 * (item + 1)
+                reference_basis = {label: [] for label, _ in atoms}
+                for shell in basis:
+                    reference_basis[atoms[shell.atom_index][0]].append(
+                        [shell.angular_momentum]
+                        + [[p.exponent, p.coefficient] for p in shell.primitives]
+                    )
+                molecule = gto.M(
+                    atom=atoms,
+                    basis=reference_basis,
+                    unit="Bohr",
+                    cart=representation == "cartesian",
+                    charge=charge,
+                    spin=multiplicity - 1,
+                    verbose=0,
+                )
+                reference = (scf.RHF if method == "rhf" else scf.UHF)(
+                    molecule
+                ).density_fit(auxbasis=reference_basis)
+                reference.conv_tol, reference.conv_tol_grad = 1e-13, 1e-10
+                reference.kernel()
+                assert reference.converged
+                gradient = reference.nuc_grad_method()
+                gradient.auxbasis_response = True
+                expected[moved, item] = reference.e_tot, -gradient.kernel()
+            energy, forces = expected[moved, item]
             assert right.executed_backend == "cuda"
-            np.testing.assert_allclose(right.forces, left.forces, atol=3e-9, rtol=0)
+            np.testing.assert_allclose(right.energy, energy, atol=3e-10, rtol=0)
+            np.testing.assert_allclose(right.forces, forces, atol=3e-9, rtol=0)
 
 
 def test_df_generated_failed_item_preserves_successful_neighbor(monkeypatch):
     assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "generated")
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
     atoms = [("H", (0, 0, -0.7)), ("H", (0.1, 0, 0.7))]
     other = [("He", (0, 0, -0.7)), ("H", (0.1, 0, 0.7))]
@@ -442,6 +517,5 @@ def test_df_rank_crossing_is_reported_without_oracle_retry(monkeypatch):
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
     )
-    monkeypatch.setenv("VIBEQC_DF_DERIVATIVES", "generated")
     with pytest.raises(RuntimeError, match="rank crossing|subspaces are unresolved"):
         calc.singlepoint([("H", tuple(r)) for r in inputs["coordinates"]])

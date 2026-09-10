@@ -16,12 +16,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def run_case(monkeypatch, mapping, *, method, representation, fitted, count):
-    """Exercise cold, unchanged and changed geometry on one fixed topology."""
-    if mapping is None:
-        monkeypatch.delenv("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", raising=False)
-    else:
-        monkeypatch.setenv("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", mapping)
+def sdf_case_inputs(method, count):
+    """Share physical fixtures between replay tests and independent oracles."""
     # An s/d/f atom plus a separate s atom covers sparse real-spherical f
     # expansions without making this one-electron gate a large ERI benchmark.
     basis = (
@@ -35,12 +31,24 @@ def run_case(monkeypatch, mapping, *, method, representation, fitted, count):
         for i in range(count)
     ]
     charge, multiplicity = (1, 1) if method == "rhf" else (0, 2)
+    return basis, systems, charge, multiplicity
+
+
+def run_case(
+    monkeypatch, mapping, *, method, representation, fitted, count, device="cuda"
+):
+    """Exercise cold, unchanged and changed geometry on one fixed topology."""
+    if mapping is None:
+        monkeypatch.delenv("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", raising=False)
+    else:
+        monkeypatch.setenv("VIBEQC_ONE_ELECTRON_VALUE_MAPPING", mapping)
+    basis, systems, charge, multiplicity = sdf_case_inputs(method, count)
     calculator = Calculator(
         method=method,
-        device="cuda",
+        device=device,
         basis=basis,
         basis_representation=representation,
-        density_fitting="cuda" if fitted else "none",
+        density_fitting=device if fitted else "none",
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
         screening_tolerance=1e-14,

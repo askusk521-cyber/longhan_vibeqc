@@ -92,8 +92,22 @@
       "subsystem": "runtime"
     },
     {
+      "path": "src/runtime/cuda_gaussian_products.cuh",
+      "reason": "Rank-generic normalized primitive/AO tensor products, cyclic lane ownership and physical-center projection/scatter; generated policies own all operator formulas.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
       "path": "src/runtime/cuda_runtime.cu",
       "reason": "Device availability, discovery and stable runtime ABI.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/runtime/cuda_subgroup.cuh",
+      "reason": "Power-of-two subgroup reduction of fixed channel arrays; masks and arithmetic are independent of integral family.",
       "regions": [],
       "role": "runtime",
       "subsystem": "runtime"
@@ -106,6 +120,12 @@
       "subsystem": "runtime"
     },
     {
+      "path": "src/runtime/strided_range.hpp",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Generic two-dimensional strided tile indexing shared by bounded host producers and CUDA consumers; no scientific expressions."
+    },
+    {
       "path": "src/scf/aot_shell_registry.hpp",
       "reason": "Typed registry and task interfaces; generated entries own class mathematics.",
       "regions": [],
@@ -114,9 +134,9 @@
     },
     {
       "path": "src/scf/cuda/df_derivatives.cu",
-      "reason": "Generated derivative contraction/AO traversal glue; compiler owns primitive recurrence math.",
+      "reason": "Full dense weight indexing and bounded launch adapter to the shared generated response policy and generic normalized-basis traversal.",
       "regions": [],
-      "role": "scientific",
+      "role": "runtime",
       "subsystem": "df_derivatives"
     },
     {
@@ -128,7 +148,7 @@
     },
     {
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "reason": "Method-specific density/metric response weights plus native bridge; pending reusable generated contractions.",
+      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned.",
       "regions": [],
       "role": "scientific",
       "subsystem": "df_derivatives"
@@ -208,12 +228,6 @@
       "reason": "RI planning, ownership, generic eigensolver/DIIS and library runtime.",
       "regions": [
         {
-          "reason": "RI force-response contraction coefficients and reductions.",
-          "role": "scientific",
-          "start": "__global__ void gather_force_auxiliary_matrices_kernel",
-          "stop": "__global__ void gather_auxiliary_tile_kernel"
-        },
-        {
           "reason": "Streamed RI J/K, density and energy equations.",
           "role": "scientific",
           "start": "__global__ void accumulate_streamed_auxiliary_density_kernel",
@@ -226,9 +240,9 @@
           "stop": "vibeqc_status prepare_outputs("
         },
         {
-          "reason": "Source and generated derivative force-response equation assembly.",
+          "reason": "Generated response bridge and shared spectral-factor composition; counted conservatively with its native adapter.",
           "role": "scientific",
-          "start": "vibeqc_status source_force_response_impl(",
+          "start": "vibeqc_status execute_cuda_density_fitting_generated_force_response(",
           "stop": "vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl("
         }
       ],
@@ -355,6 +369,12 @@
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
           "stop": null
+        },
+        {
+          "reason": "Packed basis ABI adapter and generated-policy instantiation; no DF recurrence or operator-specific primitive contraction.",
+          "role": "runtime",
+          "start": "/** Borrow the packed integral metadata through the common normalized-basis ABI. */",
+          "stop": "#include \"scf/cuda/weighted_eri.cuh\""
         }
       ],
       "role": "scientific",
@@ -465,6 +485,15 @@
       ],
       "owner": "python/vibeqc_compiler/dft/ao_cuda.py",
       "scope": "Shared CMake/JIT through-f/order-three AO polynomials and spin-density ingredient arithmetic; generated policy included before the same dense/local native runtime."
+    },
+    {
+      "name": "df_policies",
+      "outputs": [
+        "generated/generated_df_policy.cuh",
+        "generated/generated_df_derivative_policy.cuh",
+        "generated/generated_df_derivative_schedule.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_policy.py"
     }
   ],
   "schema": "vibeqc.cuda-ownership.v1",
@@ -484,26 +513,30 @@
       "status": "partial"
     },
     "df_derivatives": {
-      "current_default": "native Dual/source derivative path; generated explicit derivative bridge",
+      "current_default": "Generated two-/three-center center derivatives on shared normalized primitive/AO traversal; bounded cooperative weighted response is the sole CUDA HF force route.",
       "evidence": [
-        "benchmarks/results/df-derivatives-rtx5090/raw-summary.json"
+        "benchmarks/results/cuda-ownership/df/publication.json",
+        "benchmarks/results/cuda-ownership/df/validation.json",
+        "benchmarks/results/cuda-ownership/df/raw-source.json",
+        "benchmarks/results/cuda-ownership/df/README.md"
       ],
-      "generated_capability": "generated two-/three-center first derivatives and density weights",
-      "missing_capability": "complete schedule/resource/endpoint replacement of old derivatives",
+      "generated_capability": "Bulk and bounded raw coordinate derivatives and externally weighted responses share generated center channels. The compiler directs four-lane primitive partitions; generic runtime owns traversal, subgroup reduction, range mapping and physical-atom scatter.",
+      "missing_capability": "None for the retired DF integral/coordinate-response duplicate. Host HF density-weight construction and the spectral inverse reverse map remain native method adapters; a complete equivalent TensorIR method consumer is not yet integrated.",
       "owner": "df_derivatives",
-      "retirement_condition": "retire old derivative recurrence/contraction only after its own complete gates",
-      "status": "performance_exception"
+      "retirement_condition": "Completed: removed coordinate-wise RHF/UHF production responses, their CUDA allocations and estimates, and the DF derivative selector after final numerical/resource/complete endpoint gates. Retain generated raw APIs and independent CPU/libcint oracles.",
+      "status": "retired"
     },
     "df_values": {
-      "current_default": "Generated Rys values only; primitive-oriented source mapping by default",
+      "current_default": "Generated Rys values only; bounded transformed outputs use compiler-directed four-lane primitive groups across eight source terms per warp.",
       "evidence": [
         "benchmarks/results/generated-df-values-142/promotion.json",
-        "benchmarks/results/generated-df-values-142/README.md"
+        "benchmarks/results/generated-df-values-142/README.md",
+        "benchmarks/results/cuda-ownership/df/publication.json"
       ],
-      "generated_capability": "all two-/three-center values through f, public spherical transforms",
-      "missing_capability": "None for promoted values; shared ERI/Dual recurrences still serve other scientific domains",
+      "generated_capability": "All two-/three-center values through f and public spherical transforms instantiate the same rank-generic normalized traversal as derivatives.",
+      "missing_capability": "None for promoted DF values; shared ERI/Dual recurrences remain for Direct and separately gated one-electron derivatives.",
       "owner": "df_values",
-      "retirement_condition": "Completed: legacy Hermite value selection and dispatch removed from bulk and bounded sources; retain derivative-only shared recurrence",
+      "retirement_condition": "Completed: legacy Hermite value selection/dispatch and parallel DF derivative recurrence/contraction are removed; retain metric factors, planning and cuBLAS/cuSOLVER runtime.",
       "status": "retired"
     },
     "direct_integrals": {
@@ -512,10 +545,11 @@
         "docs/shell_codegen.md",
         "docs/weighted_eri.md",
         "docs/second_integral_derivatives.md",
-        "python/vibeqc_compiler/integral/production_shell_classes.json"
+        "python/vibeqc_compiler/integral/production_shell_classes.json",
+        "benchmarks/results/weighted-eri-144/README.md"
       ],
       "generated_capability": "IntegralIR values/first derivatives, weighted ERI and second-order providers through f",
-      "missing_capability": "complete replacement is class/schedule-specific; retain unpromoted fallback classes",
+      "missing_capability": "Class/consumer-specific lowering and complete endpoint promotion remain necessary. The archived 72-run weighted-ERI comparison has ratios crossing one, so psss remains a measured production exception. Unpromoted registry classes retain their bounded fallback; generated source existence alone does not authorize class retirement.",
       "owner": "direct_integrals",
       "retirement_condition": "remove each old scientific class when numerical/resource/full endpoint gates pass and no independent role remains",
       "status": "partial"
@@ -534,10 +568,13 @@
     "one_electron_derivatives": {
       "current_default": "native scalar/cooperative force and Dual response paths; generated derivative opt-in",
       "evidence": [
-        "benchmarks/results/one-electron-derivatives-rtx5090/validation-summary.json"
+        "benchmarks/results/one-electron-derivatives-rtx5090/validation-summary.json",
+        "docs/one_electron_derivatives.md",
+        "benchmarks/results/one-electron-derivatives-rtx5090/sp8-df-b3-thread.json",
+        "benchmarks/results/one-electron-derivatives-rtx5090/sdf18-thread.json"
       ],
       "generated_capability": "generated fixed-density S/T/V first derivatives and public spherical weights",
-      "missing_capability": "generated complete endpoint/resource performance still needs promotion",
+      "missing_capability": "Generated response needs schedules that remove measured complete-endpoint regressions: resident DF warm replay 4.586/5.429 ms and Direct sdf18 changed geometry 36.667/39.352 ms (native/generated, archived revisions). These measurements justify retention, not a completed derivative migration.",
       "owner": "one_electron_derivatives",
       "retirement_condition": "retire only after derivative/force gates, independently of values promotion",
       "status": "performance_exception"
