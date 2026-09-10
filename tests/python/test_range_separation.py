@@ -413,6 +413,7 @@ def test_contracted_range_stream_and_public_basis_against_libcint(
     backend, family, name, tmp_path
 ):
     """Use the established primitive normalization and public cotangent pullback."""
+    pytest.importorskip("pyscf")
     from vibeqc_compiler.integral.blocks import WeightTile
     from vibeqc_compiler.integral.weighted_eri_inputs import (
         PRIMITIVE_RANGE_RECORD,
