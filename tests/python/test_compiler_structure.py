@@ -12,8 +12,42 @@ from vibeqc_compiler.common.structure import audit_structure
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_grid_native_generator_matches_jit_policy(tmp_path):
+    """Native and JIT builds must compile exactly one scientific grid policy."""
+    from vibeqc_compiler.dft.ao_cuda import emit_grid_source
+
+    output = tmp_path / "grid.cu"
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/generate_grid_kernels.py"),
+            "--output",
+            str(output),
+        ],
+        check=True,
+        cwd=tmp_path,
+    )
+    assert output.read_text() == emit_grid_source()[0]
+
+
 def test_dependency_directions():
     assert audit_structure()["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "module,target,allowed",
+    [
+        ("ao_cuda", "expr", True),
+        ("ao_cuda", "cuda", True),
+        ("ao_cuda", "df_cuda", False),
+        ("spatial", "expr", False),
+    ],
+)
+def test_ao_lowering_scalar_dependency_is_narrow(tmp_path, module, target, allowed):
+    dft = tmp_path / "dft"
+    dft.mkdir()
+    (dft / (module + ".py")).write_text(f"import vibeqc_compiler.integral.{target}\n")
+    assert (not audit_structure(tmp_path)["errors"]) == allowed
 
 
 def test_installed_package_does_not_consume_neighbor_checkout(tmp_path, monkeypatch):
