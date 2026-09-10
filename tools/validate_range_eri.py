@@ -49,6 +49,25 @@ def command(*argv):
     return subprocess.check_output(argv, cwd=ROOT, text=True, timeout=30).strip()
 
 
+def cpu_model(cpuinfo_path=Path("/proc/cpuinfo")):
+    """Keep completed evidence publishable when Linux model metadata is absent.
+
+    Missing/unreadable procfs and CPUs with different field names do not
+    invalidate the completed native numerical run. The fallback explicitly
+    retains an unknown model when the platform cannot identify it either.
+    """
+    fallback = platform.processor() or "unknown CPU model"
+    try:
+        lines = cpuinfo_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return fallback
+    for line in lines:
+        key, separator, value = line.partition(":")
+        if separator and key.strip().casefold() == "model name" and value.strip():
+            return value.strip()
+    return fallback
+
+
 def run(args):
     """Measure explicit operator endpoints without changing a production profile."""
     if args.backend == "cuda" and not os.environ.get("SLURM_JOB_ID"):
@@ -239,13 +258,7 @@ def run(args):
             "--format=csv,noheader",
         )
         if args.backend == "cuda"
-        else platform.platform()
-        + " "
-        + next(
-            line.split(":", 1)[1].strip()
-            for line in Path("/proc/cpuinfo").read_text().splitlines()
-            if line.startswith("model name")
-        )
+        else platform.platform() + " " + cpu_model()
     )
     evidence.update(
         revision=revision,

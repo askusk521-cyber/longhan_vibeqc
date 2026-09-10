@@ -95,7 +95,10 @@ class CompiledWeightedEri:
         ):
             raise ValueError("weighted ERI mathematical metadata identity mismatch")
         spec = ShellClassSpec(
-            "".join("spdf"[l] for l in canonical.signature.angular),
+            "".join(
+                "spdf"[angular_momentum]
+                for angular_momentum in canonical.signature.angular
+            ),
             canonical.signature.angular,
         )
         indices = self.component_indices
