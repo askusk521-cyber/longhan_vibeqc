@@ -3730,7 +3730,7 @@ def test_bounded_streaming_fock_forwards_mixed_precision_policy():
         "const bool requested_mixed_precision_fock", threshold_begin
     )
     assert re.search(
-        r"requested_quartet_direct\s*\?\s*configured_mixed_precision_fock_threshold",
+        r"requested_quartet_direct\s*\?\s*resolve_mixed_precision_fock_threshold",
         source[threshold_begin:threshold_end],
     )
     assert "allow_mixed_precision && mixed_precision_fock" in source
