@@ -635,6 +635,15 @@ if(VIBEQC_BUILD_TESTS)
   add_test(NAME vibeqc_mixed_precision_tests
     COMMAND vibeqc_mixed_precision_tests)
 
+  # Pure host policy controller and CPU provenance; no CUDA device required.
+  add_executable(vibeqc_precision_policy_tests
+    tests/native/test_precision_policy.cpp)
+  target_link_libraries(vibeqc_precision_policy_tests PRIVATE vibeqc)
+  target_include_directories(vibeqc_precision_policy_tests
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME vibeqc_precision_policy_tests
+    COMMAND vibeqc_precision_policy_tests)
+
   # This test requires a tuned registry and deliberately rejects the portable
   # stub used when AOT shells are disabled. Other CUDA tests use either build.
   if(VIBEQC_ENABLE_CUDA)
