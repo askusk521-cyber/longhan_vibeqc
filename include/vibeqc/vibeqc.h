@@ -630,6 +630,18 @@ VIBEQC_API vibeqc_status vibeqc_calculation_get_precision_provenance(
     const vibeqc_calculation* calculation, vibeqc_precision_provenance* out);
 
 /**
+ * Read one batch item's precision record by its original input index.
+ * The descriptor and NULL availability probe follow the single-calculation
+ * query. Records are cleared on each execution and populated independently for
+ * SUCCESS/NOT_CONVERGED items; rejected or throwing items return
+ * VIBEQC_STATUS_PRECISION_UNAVAILABLE without writing to out. An out-of-range
+ * index returns VIBEQC_STATUS_INVALID_ARGUMENT.
+ */
+VIBEQC_API vibeqc_status vibeqc_batch_get_precision_provenance(const vibeqc_batch* batch,
+                                                               uint32_t index,
+                                                               vibeqc_precision_provenance* out);
+
+/**
  * Prepare a persistent ragged fleet plan. Systems may have different atom,
  * shell, primitive, and AO counts; no global padding is introduced.
  */

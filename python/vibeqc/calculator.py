@@ -454,23 +454,29 @@ class Calculator:
             self._precision_mode,
         )
 
-    def _precision_provenance(self, calculation: ctypes.c_void_p) -> dict | None:
-        """Read the resolved precision policy for a prepared calculation.
+    def _precision_provenance(
+        self, calculation: ctypes.c_void_p, index: int | None = None
+    ) -> dict | None:
+        """Read a calculation's policy, or an input-indexed batch item's policy.
 
         Returns ``None`` when the loaded library predates the query or when no
         completed execution has populated the record yet (the native getter
         reports :data:`STATUS_PRECISION_UNAVAILABLE`), so older builds and
         pre-run queries both degrade to ``None`` instead of an error.
         """
-        getter = getattr(
-            self._library, "vibeqc_calculation_get_precision_provenance", None
+        name = (
+            "vibeqc_calculation_get_precision_provenance"
+            if index is None
+            else "vibeqc_batch_get_precision_provenance"
         )
+        getter = getattr(self._library, name, None)
         if getter is None:
             return None
         provenance = _native.PrecisionProvenance(
             ctypes.sizeof(_native.PrecisionProvenance), _native.ABI_VERSION
         )
-        status = getter(calculation, ctypes.byref(provenance))
+        arguments = (calculation,) if index is None else (calculation, index)
+        status = getter(*arguments, ctypes.byref(provenance))
         if status == _native.STATUS_PRECISION_UNAVAILABLE:
             return None
         _native.check(self._library, status)

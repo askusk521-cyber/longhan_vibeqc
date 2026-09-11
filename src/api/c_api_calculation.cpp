@@ -3,6 +3,7 @@
 
 #include "api/error.hpp"
 #include "api/handles.hpp"
+#include "api/precision.hpp"
 #include "methods/method.hpp"
 #include "vibeqc/vibeqc.h"
 
@@ -93,26 +94,7 @@ vibeqc_status vibeqc_calculation_get_precision_provenance(const vibeqc_calculati
   if (!calculation->precision_available) {
     return VIBEQC_STATUS_PRECISION_UNAVAILABLE;
   }
-  if (out == nullptr) {
-    return VIBEQC_STATUS_SUCCESS;
-  }
-  // Both descriptor fields are part of the contract: a sufficient struct_size
-  // with a foreign abi_version must not be filled with the current layout. This
-  // is the same descriptor rule the other public entry points use.
-  if (!vibeqc::api::valid_descriptor(out)) {
-    return VIBEQC_STATUS_ABI_MISMATCH;
-  }
-  const vibeqc::scf::PrecisionProvenance& p = calculation->precision;
-  out->struct_size = sizeof(vibeqc_precision_provenance);
-  out->abi_version = VIBEQC_ABI_VERSION;
-  out->policy_version = p.policy_version;
-  out->requested_mode = p.requested_mode;
-  out->effective_bits = p.effective_bits;
-  out->mixed_precision_fock_threshold = p.mixed_precision_fock_threshold;
-  out->strict_refinement_applied = p.strict_refinement_applied ? 1 : 0;
-  out->mixed_precision_reserved_error = p.mixed_precision_reserved_error;
-  out->refinement_iterations = static_cast<int32_t>(p.refinement_iterations);
-  return VIBEQC_STATUS_SUCCESS;
+  return vibeqc::api::copy_precision_provenance(calculation->precision, out);
 }
 
 }  // extern "C"

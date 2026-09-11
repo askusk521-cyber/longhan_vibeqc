@@ -13,6 +13,7 @@ from pathlib import Path
 ABI_VERSION = 0
 STATUS_SUCCESS = 0
 STATUS_INVALID_ARGUMENT = 1
+STATUS_ABI_MISMATCH = 2
 STATUS_NOT_IMPLEMENTED = 3
 STATUS_NOT_CONVERGED = 4
 STATUS_SCF_NOT_CONVERGED = 4
@@ -455,6 +456,15 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
         ctypes.POINTER(ctypes.c_uint64),
     ]
     library.vibeqc_batch_get_last_fock_builds.restype = ctypes.c_int
+    # Optional queries preserve loading of libraries built before provenance.
+    for name, arguments in (
+        ("vibeqc_calculation_get_precision_provenance", [ctypes.c_void_p]),
+        ("vibeqc_batch_get_precision_provenance", [ctypes.c_void_p, ctypes.c_uint32]),
+    ):
+        getter = getattr(library, name, None)
+        if getter is not None:
+            getter.argtypes = [*arguments, ctypes.POINTER(PrecisionProvenance)]
+            getter.restype = ctypes.c_int
     library.vibeqc_calculation_prepare.argtypes = [
         ctypes.c_void_p,
         ctypes.c_void_p,
