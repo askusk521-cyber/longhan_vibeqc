@@ -75,6 +75,23 @@ enum {
   VIBEQC_DENSITY_FITTING_AUTO = 3
 };
 
+/**
+ * Floating-point execution policy for the selected mean-field method.
+ *
+ * \p fp64 keeps the current bit-for-bit exact execution. \p auto enables the
+ * profile-backed lower-precision contraction route, deriving its tile
+ * threshold from the requested tolerances and always finishing with a strict
+ * FP64 refinement of the converged density.
+ */
+typedef int32_t vibeqc_precision_mode;
+enum {
+  /** Preserve the existing double-precision execution (the default). */
+  VIBEQC_PRECISION_FP64 = 0,
+  /** Select a lower-precision contraction route when it is profitable and
+   *  safe, finishing with a strict FP64 target refinement. */
+  VIBEQC_PRECISION_AUTO = 1
+};
+
 typedef int32_t vibeqc_basis_representation;
 enum {
   /** CCA-ordered Cartesian functions: 1, 3, 6, and 10 AOs for s-p-d-f. */
@@ -353,7 +370,32 @@ typedef struct vibeqc_method_descriptor {
   double density_fitting_relative_threshold;
   /** Planner budget in bytes; zero selects the implementation default. */
   uint64_t density_fitting_memory_budget_bytes;
+  /**
+   * Optional floating-point execution policy. Absent or zero callers keep the
+   * double-precision default; \p auto enables the safe lower-precision route.
+   */
+  vibeqc_precision_mode precision_mode;
 } vibeqc_method_descriptor;
+
+/**
+ * Read-only record of how the requested precision policy resolved. Populated by
+ * \p vibeqc_calculation_get_precision_provenance after a prepared run; callers
+ * that predate this field never see it because the out-parameter is optional.
+ */
+typedef struct vibeqc_precision_provenance {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  /** Policy version the resolver honored. */
+  uint32_t policy_version;
+  /** Requested mode (\p vibeqc_precision_mode). */
+  int32_t requested_mode;
+  /** Effective Fock precision: 64 for FP64, 32 when a mixed route is active. */
+  uint32_t effective_bits;
+  /** Tile threshold for \p auto; zero when the mixed route is not active. */
+  double mixed_precision_fock_threshold;
+  /** The strict FP64 target refinement ran at the end of the run. */
+  int32_t strict_refinement_applied;
+} vibeqc_precision_provenance;
 
 /** Executable capabilities for one method identifier. */
 typedef struct vibeqc_method_capabilities_descriptor {
@@ -544,6 +586,15 @@ VIBEQC_API void vibeqc_calculation_destroy(vibeqc_calculation* calculation);
  */
 VIBEQC_API vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculation,
                                                     vibeqc_result_descriptor* result);
+
+/**
+ * Read the precision policy that resolved for a prepared run. The out-parameter
+ * must carry the current struct_size/abi_version; a NULL \p out is allowed and
+ * only reports whether provenance is available. Adding this query never changes
+ * existing descriptors.
+ */
+VIBEQC_API vibeqc_status vibeqc_calculation_get_precision_provenance(
+    const vibeqc_calculation* calculation, vibeqc_precision_provenance* out);
 
 /**
  * Prepare a persistent ragged fleet plan. Systems may have different atom,

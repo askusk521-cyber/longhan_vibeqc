@@ -48,10 +48,17 @@ vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculation,
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
 
+  // Reset to the conservative FP64 record before the run so a failed or
+  // fallback execution can never expose the previous successful mixed run.
+  calculation->precision = {};
+  calculation->precision_available = false;
   try {
     // NULL/zero is an execution request, not merely a copy-out choice: the
     // backend must not launch or assemble analytic-force work in this mode.
     vibeqc::methods::Result native = calculation->plan->execute(!omit_forces);
+    // A normal return (converged or not) is a completed run: record what ran.
+    calculation->precision = native.precision;
+    calculation->precision_available = true;
     output->energy = native.energy;
     output->iterations = native.convergence.iterations;
     output->energy_change = native.convergence.energy_change;
@@ -71,6 +78,28 @@ vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculation,
   } catch (...) {
     return vibeqc::api::map_exception(&calculation->context->last_detail);
   }
+}
+
+vibeqc_status vibeqc_calculation_get_precision_provenance(const vibeqc_calculation* calculation,
+                                                          vibeqc_precision_provenance* out) {
+  if (calculation == nullptr) {
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+  if (out == nullptr) {
+    return VIBEQC_STATUS_SUCCESS;
+  }
+  if (out->struct_size < sizeof(vibeqc_precision_provenance)) {
+    return VIBEQC_STATUS_ABI_MISMATCH;
+  }
+  const vibeqc::scf::PrecisionProvenance& p = calculation->precision;
+  out->struct_size = sizeof(vibeqc_precision_provenance);
+  out->abi_version = VIBEQC_ABI_VERSION;
+  out->policy_version = p.policy_version;
+  out->requested_mode = p.requested_mode;
+  out->effective_bits = p.effective_bits;
+  out->mixed_precision_fock_threshold = p.mixed_precision_fock_threshold;
+  out->strict_refinement_applied = p.strict_refinement_applied ? 1 : 0;
+  return VIBEQC_STATUS_SUCCESS;
 }
 
 }  // extern "C"

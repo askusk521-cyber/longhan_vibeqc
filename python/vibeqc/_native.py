@@ -33,6 +33,8 @@ DENSITY_FITTING_NONE = 0
 DENSITY_FITTING_CPU_REFERENCE = 1
 DENSITY_FITTING_CUDA = 2
 DENSITY_FITTING_AUTO = 3
+PRECISION_FP64 = 0
+PRECISION_AUTO = 1
 BASIS_CARTESIAN = 0
 BASIS_SPHERICAL = 1
 BATCH_ENABLE_WARM_STARTS = 1 << 0
@@ -171,6 +173,7 @@ class MethodDescriptor(ctypes.Structure):
         ("density_fitting_auxiliary_basis", ctypes.c_void_p),
         ("density_fitting_relative_threshold", ctypes.c_double),
         ("density_fitting_memory_budget_bytes", ctypes.c_uint64),
+        ("precision_mode", ctypes.c_int32),
     ]
 
 
@@ -198,6 +201,18 @@ class ResultDescriptor(ctypes.Structure):
         ("density_rms", ctypes.c_double),
         ("converged", ctypes.c_int32),
         ("executed_backend", ctypes.c_int),
+    ]
+
+
+class PrecisionProvenance(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("policy_version", ctypes.c_uint32),
+        ("requested_mode", ctypes.c_int32),
+        ("effective_bits", ctypes.c_uint32),
+        ("mixed_precision_fock_threshold", ctypes.c_double),
+        ("strict_refinement_applied", ctypes.c_int32),
     ]
 
 

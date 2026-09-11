@@ -160,6 +160,7 @@ add_library(vibeqc SHARED
   src/scf/fock_prepared.cpp
   src/scf/fock_execution.cpp
   src/scf/rhf.cpp
+  src/scf/cuda/rhf_policy.cpp
 )
 
 # A local tuned library may replace this build only when its scientific source
@@ -285,7 +286,6 @@ if(VIBEQC_ENABLE_CUDA)
   target_sources(vibeqc PRIVATE
     "${VIBEQC_GRID_SOURCE}"
     src/posthf/df_bridge.cu
-    src/scf/cuda/rhf_policy.cpp
     src/runtime/cuda_runtime.cu
     src/scf/cuda_density_fitting.cu
     src/scf/cuda_eigensolver_probe.cu

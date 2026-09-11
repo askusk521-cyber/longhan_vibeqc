@@ -82,6 +82,7 @@ using cuda_policy::ppss_signature_bucketing_requested;
 using cuda_policy::psps_signature_bucketing_requested;
 using cuda_policy::resident_ppps_bra_requested;
 using cuda_policy::resident_psss_bra_requested;
+using cuda_policy::resolve_mixed_precision_fock_threshold;
 using cuda_policy::reuse_converged_fock_requested;
 using cuda_policy::xsyev_probe_skip_diagnostic_requested;
 
@@ -14127,6 +14128,7 @@ bool same_options(const ScfOptions& first, const ScfOptions& second) {
          first.density_tolerance == second.density_tolerance &&
          first.screening_tolerance == second.screening_tolerance &&
          first.compute_forces == second.compute_forces &&
+         first.precision_mode == second.precision_mode &&
          first.resolved_fock_build == second.resolved_fock_build;
 }
 
@@ -14619,7 +14621,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   }
   const std::optional<double> requested_mixed_precision_fock_threshold =
       requested_quartet_direct
-          ? configured_mixed_precision_fock_threshold(options.screening_tolerance)
+          ? resolve_mixed_precision_fock_threshold(options.precision_mode, options.energy_tolerance,
+                                                   options.screening_tolerance)
           : std::nullopt;
   const bool requested_mixed_precision_fock = requested_mixed_precision_fock_threshold.has_value();
   // An iterative mixed Fock is not the exact final matrix associated with the
@@ -18061,6 +18064,11 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     plan.resident_previous_energy.clear();
   }
 
+  // The mixed-precision Fock decision (already gated on quartet-direct) and its
+  // forced final FP64 rebuild are fixed for the plan; report what actually ran.
+  const int32_t requested_precision_mode = options.precision_mode.value_or(VIBEQC_PRECISION_FP64);
+  const bool precision_mixed_active = plan.mixed_precision_fock;
+  const double precision_mixed_threshold = plan.mixed_precision_fock_threshold;
   for (std::size_t system = 0; system < batch_size; ++system) {
     RhfBucketItem& output = outputs[system];
     ScfResult& result = output.scf;
@@ -18070,6 +18078,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     result.density_rms = host_density_rms[system];
     result.converged = host_converged[system] != 0 && host_failed[system] == 0;
     result.initial_density_used = host.warm_mask[system] != 0;
+    result.precision.requested_mode = requested_precision_mode;
+    result.precision.effective_bits = precision_mixed_active ? 32U : 64U;
+    result.precision.mixed_precision_fock_threshold = precision_mixed_threshold;
+    result.precision.strict_refinement_applied = precision_mixed_active;
     const std::size_t density_stride = spin_count * matrix_size;
     result.density.assign(host_density.begin() + system * density_stride,
                           host_density.begin() + (system + 1) * density_stride);
@@ -18232,7 +18244,8 @@ std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
   }
   const std::optional<double> mixed_precision_fock_threshold =
       *plan != nullptr && (*plan)->quartet_direct
-          ? configured_mixed_precision_fock_threshold(options.screening_tolerance)
+          ? resolve_mixed_precision_fock_threshold(options.precision_mode, options.energy_tolerance,
+                                                   options.screening_tolerance)
           : std::nullopt;
   const bool mixed_precision_fock = mixed_precision_fock_threshold.has_value();
   const bool reuse_converged_fock = reuse_converged_fock_requested() && !mixed_precision_fock;

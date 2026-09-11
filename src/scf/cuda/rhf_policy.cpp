@@ -8,6 +8,12 @@ namespace vibeqc::scf::cuda_policy {
 namespace {
 
 constexpr double kDefaultMixedPrecisionFockThreshold = 1.0e-6;
+/**
+ * Fraction of the requested energy tolerance reserved for the iterative mixed
+ * Fock. The factor is anchored so the default 1.0e-10 target resolves to the
+ * legacy measured-accurate 1.0e-6 threshold; tighter targets resolve smaller.
+ */
+constexpr double kAutoPrecisionFactor = 1.0e4;
 constexpr double kTightConvergedFockReuseDensityRms = 1.0e-12;
 constexpr double kExpandedConvergedFockReuseDensityTolerance = 1.0e-9;
 constexpr double kExpandedConvergedFockReuseDensityRms = 2.0e-9;
@@ -24,6 +30,21 @@ bool selected(const char* variable, const char* value) noexcept {
          (std::strcmp(selection, "1") == 0 || std::strcmp(selection, value) == 0);
 }
 
+std::optional<double> parsed_mixed_precision_override(double screening_tolerance) noexcept {
+  // A user-supplied explicit numeric threshold from the legacy switch; the
+  // absent / 0 / none / auto / invalid spellings yield std::nullopt.
+  const char* selection = std::getenv("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD");
+  if (selection == nullptr) return std::nullopt;
+  if (std::strcmp(selection, "0") == 0 || std::strcmp(selection, "none") == 0 ||
+      std::strcmp(selection, "auto") == 0) {
+    return std::nullopt;
+  }
+  char* end = nullptr;
+  const double value = std::strtod(selection, &end);
+  if (end == selection || end == nullptr || *end != '\0') return std::nullopt;
+  if (!std::isfinite(value) || value <= screening_tolerance) return std::nullopt;
+  return value;
+}
 }  // namespace
 
 bool reuse_converged_fock_requested() noexcept {
@@ -53,6 +74,43 @@ std::optional<double> configured_mixed_precision_fock_threshold(
     return std::nullopt;
   }
   return threshold;
+}
+
+std::optional<double> auto_mixed_precision_fock_threshold(double energy_tolerance,
+                                                          double screening_tolerance) noexcept {
+  if (!(energy_tolerance > 0.0) || !std::isfinite(energy_tolerance)) {
+    return std::nullopt;
+  }
+  const double threshold = kAutoPrecisionFactor * energy_tolerance;
+  if (threshold <= screening_tolerance) {
+    // The requested accuracy is tight enough that per-tile FP32 rounding could
+    // reach the target; keep the operator in FP64 rather than rely on the
+    // final rebuild alone to absorb the rounding.
+    return std::nullopt;
+  }
+  return threshold;
+}
+
+std::optional<double> resolve_mixed_precision_fock_threshold(
+    std::optional<vibeqc_precision_mode> precision_mode, double energy_tolerance,
+    double screening_tolerance) noexcept {
+  if (!precision_mode.has_value()) {
+    // No explicit public policy: preserve the legacy diagnostic switch exactly.
+    return configured_mixed_precision_fock_threshold(screening_tolerance);
+  }
+  switch (*precision_mode) {
+    case VIBEQC_PRECISION_FP64:
+      return std::nullopt;
+    case VIBEQC_PRECISION_AUTO: {
+      const std::optional<double> override_value =
+          parsed_mixed_precision_override(screening_tolerance);
+      if (override_value.has_value()) return override_value;
+      return auto_mixed_precision_fock_threshold(energy_tolerance, screening_tolerance);
+    }
+    default:
+      // An unrecognized public policy must never relax the default.
+      return std::nullopt;
+  }
 }
 
 bool graph_native_eigensolver_override_requested() noexcept {
