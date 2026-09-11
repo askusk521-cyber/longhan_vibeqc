@@ -4,8 +4,9 @@
 semilocal-KS orbital response. It separates the problem snapshot, the
 matrix-free operator, and the linear-solver/recycling state so downstream
 property, Hessian, and correlated-gradient code can reuse one implementation.
-This slice is partial: UHF response and the native converged RKS/UKS CPKS
-endpoint remain open acceptance items for `#179`/`#162`.
+This slice is partial: the RHF response layer and the direct-CPU UHF response
+layer (including `export_uhf`) are delivered, while the native converged
+RKS/UKS CPKS endpoint remains an open acceptance item for `#179`/`#162`.
 
 This layer is not a new public electronic-structure method. RHF remains the
 registered HF method, and `#162` still owns the converged RKS/UKS SCF endpoint.
@@ -178,4 +179,6 @@ densities, rechecks both physical commutators and density/Fock reconstruction,
 and binds the result to the shared UHF response contract.  The bridge is
 intentionally limited to the small direct CPU Hamiltonian: CUDA/DF UHF response
 still fails closed until a spin-resolved device J/K response plan has separate
-numerical and resource evidence.
+numerical and resource evidence. That gate is pinned by
+`tests/python/test_response_uhf.py`, so neither the UHF CPU bridge nor the RHF
+CUDA/DF backend is inferred as spin-resolved device support.
