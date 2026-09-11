@@ -15,6 +15,8 @@
 
 #include "integrals/s_integrals.hpp"
 #include "molecule/basis.hpp"
+#include "posthf/capacity.hpp"
+#include "posthf/raw_source.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/density_fitting.hpp"
@@ -1035,14 +1037,116 @@ void finalize_density_fitting_uhf(const DensityFittingScfData& data, const Matri
 
 }  // namespace
 
+void validate_physical_reference(PhysicalReference& ref) {
+  const auto n = ref.nbf;
+  if (!n || !ref.nocc || ref.nocc >= n || n > SIZE_MAX / n || ref.orbital_energies.size() != n)
+    throw std::invalid_argument("invalid physical reference dimensions/occupations");
+  for (const auto* a : {&ref.overlap, &ref.hcore, &ref.fock, &ref.coefficients, &ref.density})
+    if (a->size() != n * n) throw std::invalid_argument("invalid physical reference matrix shape");
+  for (const auto* a : {&ref.overlap, &ref.hcore, &ref.fock, &ref.coefficients, &ref.density,
+                        &ref.orbital_energies})
+    if (!std::all_of(a->begin(), a->end(), [](double x) { return std::isfinite(x); }))
+      throw std::runtime_error("nonfinite physical RHF reference");
+  if (!std::is_sorted(ref.orbital_energies.begin(), ref.orbital_energies.end()))
+    throw std::invalid_argument("physical RHF orbitals must be energy-ordered");
+  const auto d = density_from_orbitals(ref.coefficients, n, ref.nocc);
+  const auto residual = commutator_residual(ref.fock, ref.density, ref.overlap, n);
+  const auto fc = multiply(ref.fock, ref.coefficients, n);
+  const auto sc = multiply(ref.overlap, ref.coefficients, n);
+  const auto ct = transpose(ref.coefficients, n);
+  const auto csc = multiply(ct, sc, n), cfc = multiply(ct, fc, n);
+  for (const auto* a : {&d, &residual, &fc, &sc, &csc, &cfc})
+    if (!std::all_of(a->begin(), a->end(), [](double x) { return std::isfinite(x); }))
+      throw std::runtime_error("nonfinite physical reference validation");
+  ref.commutator_residual = ref.canonical_density_drift = ref.eigen_residual = 0;
+  double ortho = 0, canonical = 0;
+  for (std::size_t mu = 0; mu < n; ++mu)
+    for (std::size_t p = 0; p < n; ++p) {
+      const auto k = index(mu, p, n);
+      ref.commutator_residual = std::max(ref.commutator_residual, std::abs(residual[k]));
+      ref.canonical_density_drift =
+          std::max(ref.canonical_density_drift, std::abs(d[k] - ref.density[k]));
+      ref.eigen_residual =
+          std::max(ref.eigen_residual, std::abs(fc[k] - sc[k] * ref.orbital_energies[p]));
+      ortho = std::max(ortho, std::abs(csc[k] - (mu == p ? 1.0 : 0.0)));
+      canonical = std::max(canonical, std::abs(cfc[k] - (mu == p ? ref.orbital_energies[p] : 0.0)));
+    }
+  if (std::max({ref.commutator_residual, ref.canonical_density_drift, ref.eigen_residual, ortho,
+                canonical}) > 1e-8)
+    throw std::runtime_error("invalid physical RHF reference: residual/canonicality drift");
+}
+
 ScfResult run_rhf(const core::System& system, const ScfOptions& options,
                   const std::vector<double>* initial_density) {
-  const integrals::IntegralData ints = integrals::build_cartesian_integrals(system);
+  std::unique_ptr<posthf::RawSource> source;
+  integrals::IntegralData ints;
+  std::size_t reference_bytes = 0;
+  if (options.export_physical_reference) {
+    if (system.multiplicity != 1 || system.electron_count <= 0 || system.electron_count % 2)
+      throw std::invalid_argument("physical reference requires closed-shell RHF");
+    if (options.screening_tolerance != 0)
+      throw std::invalid_argument("physical reference requires unscreened conventional integrals");
+    reference_bytes = posthf::rhf_reference_capacity(system, options.diis_history);
+    if (reference_bytes > options.reference_memory_budget_bytes)
+      throw std::length_error("bounded RHF reference exceeds numeric memory budget");
+    source = std::make_unique<posthf::RawSource>(system);
+    ints.nbf = source->nbf();
+    ints.overlap.resize(ints.nbf * ints.nbf);
+    ints.hcore.resize(ints.nbf * ints.nbf);
+    source->read(posthf::RawSource::Operator::overlap, {}, {ints.nbf, ints.nbf, 1, 1},
+                 ints.overlap.data(), ints.overlap.size());
+    source->read(posthf::RawSource::Operator::hcore, {}, {ints.nbf, ints.nbf, 1, 1},
+                 ints.hcore.data(), ints.hcore.size());
+    for (std::size_t a = 0; a < system.atoms.size(); ++a) {
+      for (std::size_t b = 0; b < a; ++b) {
+        double r2 = 0;
+        for (unsigned k = 0; k < 3; ++k) {
+          const double d = system.atoms[a].position[k] - system.atoms[b].position[k];
+          r2 += d * d;
+        }
+        if (!(r2 > 0) || !std::isfinite(r2))
+          throw std::invalid_argument("invalid nuclear separation");
+        ints.nuclear_repulsion += static_cast<double>(system.atoms[a].atomic_number) *
+                                  system.atoms[b].atomic_number / std::sqrt(r2);
+      }
+    }
+  } else {
+    ints = integrals::build_cartesian_integrals(system);
+  }
   const std::size_t n = ints.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
     throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
   }
+  // The existing SCF iteration is shared. Only the source of F[D] changes for
+  // a values-only correlated reference; no AO ERI or derivative tensor exists.
+  auto fock_from_density = [&](const Matrix& d) {
+    if (!source) return build_fock(ints.hcore, ints.eri, d, n);
+    Matrix f = ints.hcore;
+    std::array<double, 16> tile{};
+    for (std::size_t u = 0; u < n; u += 2)
+      for (std::size_t v = 0; v < n; v += 2)
+        for (std::size_t w = 0; w < n; w += 2)
+          for (std::size_t x = 0; x < n; x += 2) {
+            std::array<std::size_t, 4> shape{
+                std::min<std::size_t>(2, n - u), std::min<std::size_t>(2, n - v),
+                std::min<std::size_t>(2, n - w), std::min<std::size_t>(2, n - x)};
+            const auto elements = shape[0] * shape[1] * shape[2] * shape[3];
+            source->read(posthf::RawSource::Operator::eri, {u, v, w, x}, shape, tile.data(),
+                         elements);
+            std::size_t q = 0;
+            for (std::size_t a = 0; a < shape[0]; ++a)
+              for (std::size_t b = 0; b < shape[1]; ++b)
+                for (std::size_t c = 0; c < shape[2]; ++c)
+                  for (std::size_t e = 0; e < shape[3]; ++e) {
+                    const double g = tile[q++];
+                    if (!std::isfinite(g)) throw std::runtime_error("nonfinite RHF integral");
+                    f[index(u + a, v + b, n)] += g * d[index(w + c, x + e, n)];
+                    f[index(u + a, w + c, n)] -= 0.5 * g * d[index(v + b, x + e, n)];
+                  }
+          }
+    return f;
+  };
   const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
   EigenResult orbitals;
   Matrix density =
@@ -1053,7 +1157,7 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
   result.initial_density_used = initial_density != nullptr;
   double previous_energy = std::numeric_limits<double>::infinity();
   for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
-    const Matrix fock = build_fock(ints.hcore, ints.eri, density, n);
+    const Matrix fock = fock_from_density(density);
     const double energy = electronic_energy(density, ints.hcore, fock) + ints.nuclear_repulsion;
     const Matrix residual = commutator_residual(fock, density, ints.overlap, n);
     const Matrix effective_fock = diis.update(fock, residual);
@@ -1079,7 +1183,33 @@ ScfResult run_rhf(const core::System& system, const ScfOptions& options,
 
   // Rebuild and diagonalize the un-extrapolated converged Fock matrix. The
   // resulting orbitals define the energy-weighted density in the Pulay term.
-  finalize_scf(ints, orthogonalizer, occupied, density, result);
+  if (options.export_physical_reference) {
+    if (occupied >= n) throw std::invalid_argument("RHF reference has no virtual orbitals");
+    auto ref = std::make_shared<PhysicalReference>();
+    ref->nbf = n;
+    ref->nocc = occupied;
+    ref->overlap = ints.overlap;
+    ref->hcore = ints.hcore;
+    ref->density = density;
+    ref->fock = fock_from_density(density);
+    auto canonical = generalized_eigen(ref->fock, orthogonalizer, n);
+    ref->coefficients = std::move(canonical.vectors);
+    ref->orbital_energies = std::move(canonical.values);
+    const auto canonical_density = density_from_orbitals(ref->coefficients, n, occupied);
+    const auto canonical_fock = fock_from_density(canonical_density);
+    validate_physical_reference(*ref);
+    for (std::size_t k = 0; k < n * n; ++k)
+      if (!std::isfinite(canonical_fock[k]) || std::abs(canonical_fock[k] - ref->fock[k]) > 1e-8)
+        throw std::runtime_error("physical RHF canonical Fock drift exceeds tolerance");
+    ref->energy = electronic_energy(density, ref->hcore, ref->fock) + ints.nuclear_repulsion;
+    if (!std::isfinite(ref->energy)) throw std::runtime_error("nonfinite RHF reference energy");
+    ref->numeric_capacity_bytes = reference_bytes;
+    result.energy = ref->energy;
+    result.density = density;
+    result.reference = std::move(ref);
+  } else {
+    finalize_scf(ints, orthogonalizer, occupied, density, result);
+  }
   return result;
 }
 

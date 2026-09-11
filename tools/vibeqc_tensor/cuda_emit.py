@@ -227,7 +227,7 @@ for (I n0 = 0; n0 < {g.n}LL; n0 += {nt}LL) {{
 }}"""
 
 
-def emit_cuda(plan: TensorPlan) -> str:
+def emit_cuda(plan: TensorPlan, *, symbol_prefix: str = "") -> str:
     """Return standalone C++17 CUDA source with a versioned, exception-safe ABI."""
     parts = ['#include "cuda_runtime.cuh"', "using namespace vibeqc_tensor;"]
     initialize = []
@@ -304,7 +304,9 @@ extern "C" int tensor_create(int device, void** result, char* error, size_t size
         cuda_check(cudaStreamSynchronize(ctx->stream));
         *result = ctx.release();
         return 0;
-    }} catch (const std::exception& e) {{ error_text(error, size, e.what()); return 1; }}
+    }} catch (const std::bad_alloc& e) {{ error_text(error, size, e.what()); return 2; }}
+      catch (const std::length_error& e) {{ error_text(error, size, e.what()); return 2; }}
+      catch (const std::exception& e) {{ error_text(error, size, e.what()); return 1; }}
 }}
 extern "C" void tensor_destroy(void* pointer) {{ delete static_cast<Context*>(pointer); }}
 extern "C" int tensor_run(void* pointer, const double* const* inputs, double* const* outputs,
@@ -340,6 +342,12 @@ extern "C" int tensor_run(void* pointer, const double* const* inputs, double* co
         if (arithmetic_error)
             throw std::runtime_error(std::string(arithmetic_error < 0 ? "tensor division by zero at step " : "non-finite tensor at step ") + std::to_string(std::abs(arithmetic_error)-1));
         return 0;
+    }} catch (const std::bad_alloc& e) {{
+        cudaStreamSynchronize(ctx.stream);
+        error_text(error, size, e.what()); return 2;
+    }} catch (const std::length_error& e) {{
+        cudaStreamSynchronize(ctx.stream);
+        error_text(error, size, e.what()); return 2;
     }} catch (const std::exception& e) {{
         // Drain queued host transfers before Python may release their arrays.
         cudaStreamSynchronize(ctx.stream);
@@ -366,4 +374,20 @@ extern "C" int tensor_probe(int device, char* result, size_t size) {{
     }} catch (const std::exception& e) {{ error_text(result, size, e.what()); return 1; }}
 }}
 """)
-    return "\n\n".join(parts) + "\n"
+    result = "\n\n".join(parts) + "\n"
+    if symbol_prefix:
+        import re
+
+        if not re.fullmatch(r"[A-Za-z_]\w*", symbol_prefix, flags=re.ASCII):
+            raise ValueError("invalid native CUDA symbol prefix")
+        for name in (
+            "tensor_plan_identity",
+            "tensor_create",
+            "tensor_destroy",
+            "tensor_run",
+            "tensor_probe",
+        ):
+            result = re.sub(r"\b" + name + r"\b", symbol_prefix + name, result)
+        first, body = result.split("\n", 1)
+        result = first + f"\nnamespace {symbol_prefix}generated {{\n" + body + "\n}\n"
+    return result

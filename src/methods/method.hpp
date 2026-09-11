@@ -146,6 +146,11 @@ class PreparedCalculation {
   [[nodiscard]] virtual std::size_t atom_count() const noexcept = 0;
   [[nodiscard]] virtual const Capabilities& capabilities() const noexcept = 0;
   virtual Result execute() = 0;
+  virtual void invalidate_result() {}
+  [[nodiscard]] virtual std::optional<vibeqc_correlation_diagnostic> correlation_diagnostic()
+      const {
+    return std::nullopt;
+  }
 };
 
 /** Prepared ragged execution. Method families choose their own batching policy. */

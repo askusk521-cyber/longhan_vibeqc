@@ -24,6 +24,7 @@ vibeqc_status vibeqc_batch_prepare(vibeqc_context* context, const vibeqc_system*
     return VIBEQC_STATUS_ABI_MISMATCH;
   }
 
+  std::lock_guard<std::recursive_mutex> context_lock(context->mutex);
   try {
     std::vector<vibeqc::core::System> native_systems;
     native_systems.reserve(system_count);
@@ -58,6 +59,7 @@ vibeqc_status vibeqc_batch_get_last_shell_class_profile(const vibeqc_batch* batc
   if (batch == nullptr || entries == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     const auto profile = batch->plan->last_direct_shell_class_profile();
     if (!profile.has_value()) return VIBEQC_STATUS_NOT_IMPLEMENTED;
@@ -78,6 +80,7 @@ vibeqc_status vibeqc_batch_get_last_ppps_queue_profile(const vibeqc_batch* batch
   if (batch == nullptr || profile == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     const auto source = batch->plan->last_direct_ppps_queue_profile();
     if (!source.has_value()) return VIBEQC_STATUS_NOT_IMPLEMENTED;
@@ -125,6 +128,7 @@ vibeqc_status vibeqc_batch_get_last_eigensolver_diagnostics(const vibeqc_batch* 
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   *written_count = 0U;
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     const auto source = batch->plan->last_eigensolver_diagnostics();
     if (source.empty()) return VIBEQC_STATUS_NOT_IMPLEMENTED;
@@ -184,6 +188,7 @@ vibeqc_status vibeqc_batch_get_last_density_fitting_metric_diagnostics(
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   *written_count = 0U;
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     const auto& source = batch->plan->last_density_fitting_metric_diagnostics();
     if (source.empty()) return VIBEQC_STATUS_NOT_IMPLEMENTED;
@@ -224,6 +229,7 @@ vibeqc_status vibeqc_batch_get_last_inactive_eigensolver_profile(
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   *written_count = 0U;
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     const auto source = batch->plan->last_inactive_eigensolver_profile();
     if (source.empty()) return VIBEQC_STATUS_NOT_IMPLEMENTED;
@@ -259,6 +265,7 @@ vibeqc_status vibeqc_batch_get_last_inactive_eigensolver_profile(
 
 vibeqc_status vibeqc_batch_clear_warm_starts(vibeqc_batch* batch) {
   if (batch == nullptr) return VIBEQC_STATUS_INVALID_ARGUMENT;
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     batch->plan->clear_warm_starts();
     return VIBEQC_STATUS_SUCCESS;
@@ -271,6 +278,7 @@ vibeqc_status vibeqc_batch_set_warm_start_updates(vibeqc_batch* batch, int32_t e
   if (batch == nullptr || (enabled != 0 && enabled != 1)) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     batch->plan->set_warm_start_updates(enabled != 0);
     return VIBEQC_STATUS_SUCCESS;
@@ -304,6 +312,7 @@ vibeqc_status vibeqc_batch_execute(vibeqc_batch* batch, const vibeqc_batch_input
     }
   }
 
+  std::lock_guard<std::recursive_mutex> context_lock(batch->context->mutex);
   try {
     vibeqc::methods::Coordinates coordinates;
     if (inputs != nullptr) {

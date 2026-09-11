@@ -48,6 +48,7 @@ def emit_cuda(program, schedule=None):
                 root / "tools/vibeqc_codegen/expr.py",
                 root / "tools/vibeqc_codegen/cuda.py",
                 root / "src/tensor/cuda_runtime.cuh",
+                root / "src/tensor/metrics.hpp",
                 root / "src/dft/xc_runtime.cuh",
             )
         },
@@ -123,5 +124,9 @@ def emit_cuda(program, schedule=None):
     return (
         source,
         {**contract, "identity": identity, "static_models": models},
-        (root / "src/tensor/cuda_runtime.cuh", root / "src/dft/xc_runtime.cuh"),
+        (
+            root / "src/tensor/cuda_runtime.cuh",
+            root / "src/tensor/metrics.hpp",
+            root / "src/dft/xc_runtime.cuh",
+        ),
     )

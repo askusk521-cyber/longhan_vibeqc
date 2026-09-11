@@ -52,6 +52,7 @@ vibeqc_status vibeqc_system_create(vibeqc_context* context,
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
 
+  std::lock_guard<std::recursive_mutex> context_lock(context->mutex);
   try {
     auto candidate = std::make_unique<vibeqc_system>();
     candidate->data.charge = descriptor->charge;

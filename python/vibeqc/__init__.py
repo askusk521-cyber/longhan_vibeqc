@@ -13,6 +13,7 @@ from .batch import (
 from .calculator import (
     Atom,
     Calculator,
+    CorrelationResult,
     MethodCapabilities,
     Primitive,
     Result,
@@ -25,6 +26,7 @@ __all__ = [
     "BatchItemResult",
     "BatchResult",
     "Calculator",
+    "CorrelationResult",
     "DensityFittingMetricDiagnostic",
     "EigensolverDiagnostic",
     "InactiveEigensolverProfileEntry",

@@ -14,13 +14,17 @@
 #include <stdexcept>
 #include <string>
 
+#include "metrics.hpp"
+
 namespace vibeqc_tensor {
 using I = int64_t;
 
 inline void cuda_check(cudaError_t status) {
+  if (status == cudaErrorMemoryAllocation) throw std::bad_alloc();
   if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
 }
 inline void blas_check(cublasStatus_t status) {
+  if (status == CUBLAS_STATUS_ALLOC_FAILED) throw std::bad_alloc();
   if (status != CUBLAS_STATUS_SUCCESS)
     throw std::runtime_error("cuBLAS status " + std::to_string(status));
 }
@@ -39,19 +43,6 @@ struct DeviceGuard {
   ~DeviceGuard() { cudaSetDevice(previous); }
 };
 
-struct Metrics {
-  uint64_t owned_device_bytes = 0;
-  uint64_t provider_retained_bytes = 0;
-  uint64_t prepare_device_delta = 0;
-  uint64_t observed_device_delta = 0;
-  double device_ms = 0;
-  double input_ms = 0;
-  double output_ms = 0;
-  double packing_ms = 0;
-  double library_ms = 0;
-  double kernel_ms = 0;
-};
-
 struct Context {
   int device = 0;
   unsigned char* arena = nullptr;
@@ -68,6 +59,7 @@ struct Context {
   void prepare(int ordinal, int major, int minor, size_t bytes, size_t error_offset,
                size_t library_offset, size_t library_bytes, size_t provider_bytes,
                bool needs_blas) {
+    std::lock_guard<std::mutex> allocation_lock(allocation_measurement_mutex);
     device = ordinal;
     DeviceGuard guard(device);
     cudaDeviceProp property{};
@@ -82,8 +74,7 @@ struct Context {
       // A supplied workspace does not release cuBLAS's internal retained
       // allocations (64 MiB plus small buffers on the audited provider).
       // Charge a configurable allowance and check it before allocating tensor
-      // storage. Preparation/destruction are serialized by the Python owner
-      // so another owned handle cannot distort this conservative device delta.
+      // storage. The native lock also covers callers without a Python owner.
       size_t provider_before = 0, provider_after = 0;
       cuda_check(cudaMemGetInfo(&provider_before, &total));
       blas_check(cublasCreate(&handle));
@@ -91,7 +82,7 @@ struct Context {
       metrics.provider_retained_bytes =
           provider_before > provider_after ? provider_before - provider_after : 0;
       if (metrics.provider_retained_bytes > provider_bytes)
-        throw std::runtime_error(
+        throw std::length_error(
             "cuBLAS retained allocations exceed the provider allowance: observed " +
             std::to_string(metrics.provider_retained_bytes) + " bytes, allowed " +
             std::to_string(provider_bytes));
@@ -141,6 +132,7 @@ struct Context {
     }
   }
   ~Context() {
+    std::lock_guard<std::mutex> allocation_lock(allocation_measurement_mutex);
     // Cleanup remains nonthrowing, including partial preparation failures.
     int previous = 0;
     cudaGetDevice(&previous);
@@ -172,7 +164,7 @@ inline unsigned blocks(I count, int threads) {
   // A grid-stride loop bounds the grid, including on older CUDA devices.
   return static_cast<unsigned>(std::min<I>((count + threads - 1) / threads, 65535));
 }
-__global__ void check_scale(double* values, I count, double scale, int* error, int node) {
+static __global__ void check_scale(double* values, I count, double scale, int* error, int node) {
   for (I i = I(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += I(blockDim.x) * gridDim.x) {
     double value = finite(values[i], error, node);
     values[i] = finite(__dmul_rn(value, scale), error, node);

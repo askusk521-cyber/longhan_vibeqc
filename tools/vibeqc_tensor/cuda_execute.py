@@ -81,6 +81,7 @@ def tensor_source_identity() -> str:
     """
     root = Path(__file__).resolve().parents[2]
     paths = [*Path(__file__).parent.glob("*.py"), *(root / "src/tensor").glob("*.cuh")]
+    paths += list((root / "src/tensor").glob("*.hpp"))
     paths += list((root / "tools/vibeqc_codegen").glob("*.py"))
     paths += list((root / "tools/vibeqc_validation").glob("*.py"))
     paths += [root / "benchmarks/aot_shell_batch_gate.py"]

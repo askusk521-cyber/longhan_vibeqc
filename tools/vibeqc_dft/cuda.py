@@ -26,7 +26,7 @@ def compile_cuda(compiler, cache):
         compiler,
         cache,
         root / "src/dft/cuda_grid.cu",
-        headers=(root / "src/tensor/cuda_runtime.cuh",),
+        headers=(root / "src/tensor/cuda_runtime.cuh", root / "src/tensor/metrics.hpp"),
         libraries=("cublas",),
     )
 

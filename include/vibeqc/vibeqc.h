@@ -40,7 +40,8 @@ enum {
   VIBEQC_METHOD_RHF = 1,
   VIBEQC_METHOD_UHF = 2,
   VIBEQC_METHOD_WB97M_V = 3,
-  VIBEQC_METHOD_RCCSD_T = 4
+  VIBEQC_METHOD_RCCSD_T = 4,
+  VIBEQC_METHOD_MP2 = 5
 };
 
 /** Broad algorithm family used for capability discovery and dispatch. */
@@ -48,7 +49,8 @@ typedef int32_t vibeqc_method_family;
 enum {
   VIBEQC_METHOD_FAMILY_HARTREE_FOCK = 1,
   VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL = 2,
-  VIBEQC_METHOD_FAMILY_COUPLED_CLUSTER = 3
+  VIBEQC_METHOD_FAMILY_COUPLED_CLUSTER = 3,
+  VIBEQC_METHOD_FAMILY_PERTURBATION = 4
 };
 
 typedef uint32_t vibeqc_property_flags;
@@ -353,7 +355,35 @@ typedef struct vibeqc_method_descriptor {
   double density_fitting_relative_threshold;
   /** Planner budget in bytes; zero selects the implementation default. */
   uint64_t density_fitting_memory_budget_bytes;
+  /** Optional combined numeric capacity for correlated reference/energy phases.
+   * Zero selects
+   * 256 MiB; this is not a process-RSS or CUDA-context bound. */
+  uint64_t correlation_memory_budget_bytes;
+  /** Positive MP2 absolute denominator threshold in Hartree; zero uses 1e-10. */
+  double mp2_denominator_threshold;
 } vibeqc_method_descriptor;
+
+typedef struct vibeqc_correlation_diagnostic {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  double reference_energy;
+  double opposite_spin_energy;
+  double same_spin_energy;
+  double minimum_absolute_denominator;
+  double reference_residual;
+  uint64_t numeric_capacity_bytes;
+  uint64_t energy_tile_count;
+  /** Actual MO transfer staging; not an assertion that the whole method is resident. */
+  int32_t mo_host_staging;
+  uint64_t correlation_owned_device_bytes;
+  uint64_t correlation_provider_retained_bytes;
+  uint64_t mo_transfer_bytes;
+  double host_to_device_ms;
+  double device_to_host_ms;
+  double transform_library_ms;
+  double tensor_kernel_ms;
+  char equation_hash[65];
+} vibeqc_correlation_diagnostic;
 
 /** Executable capabilities for one method identifier. */
 typedef struct vibeqc_method_capabilities_descriptor {
@@ -408,6 +438,15 @@ typedef struct vibeqc_batch_item_result_descriptor {
 
 /** Return the ABI version implemented by the loaded shared library. */
 VIBEQC_API uint32_t vibeqc_get_abi_version(void);
+/** Thread-local UTF-8 copy of this context's most recent error detail.
+ * Valid until the next
+ * query on the same thread. Same-context operations
+ * serialize; destroying a context/handle
+ * requires caller synchronization. */
+VIBEQC_API const char* vibeqc_context_last_error(const vibeqc_context* context);
+/** Most recent successful correlated execution; failure/absence is explicit. */
+VIBEQC_API vibeqc_status vibeqc_calculation_get_correlation_diagnostic(
+    const vibeqc_calculation* calculation, vibeqc_correlation_diagnostic* diagnostic);
 
 /** Source/codegen identity, independent of checkout paths and selected kernels. */
 VIBEQC_API const char* vibeqc_get_source_identity(void);
