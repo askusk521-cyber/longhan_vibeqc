@@ -85,6 +85,14 @@ vibeqc_status vibeqc_calculation_get_precision_provenance(const vibeqc_calculati
   if (calculation == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  // A completed run (converged or not) populates \p precision and sets
+  // \p precision_available; execute() resets it to false before the run so a
+  // failed or not-yet-run execution never exposes a stale record. Gate both the
+  // availability query (a NULL \p out) and the copy-out on it so callers see
+  // an honest non-success result until a run has actually resolved.
+  if (!calculation->precision_available) {
+    return VIBEQC_STATUS_PRECISION_UNAVAILABLE;
+  }
   if (out == nullptr) {
     return VIBEQC_STATUS_SUCCESS;
   }
@@ -99,6 +107,8 @@ vibeqc_status vibeqc_calculation_get_precision_provenance(const vibeqc_calculati
   out->effective_bits = p.effective_bits;
   out->mixed_precision_fock_threshold = p.mixed_precision_fock_threshold;
   out->strict_refinement_applied = p.strict_refinement_applied ? 1 : 0;
+  out->mixed_precision_reserved_error = p.mixed_precision_reserved_error;
+  out->refinement_iterations = static_cast<int32_t>(p.refinement_iterations);
   return VIBEQC_STATUS_SUCCESS;
 }
 

@@ -17,6 +17,8 @@ STATUS_NOT_IMPLEMENTED = 3
 STATUS_NOT_CONVERGED = 4
 STATUS_SCF_NOT_CONVERGED = 4
 STATUS_OUT_OF_MEMORY = 7
+STATUS_INTERNAL_ERROR = 8
+STATUS_PRECISION_UNAVAILABLE = 9
 METHOD_RHF = 1
 METHOD_UHF = 2
 METHOD_WB97M_V = 3
@@ -213,6 +215,8 @@ class PrecisionProvenance(ctypes.Structure):
         ("effective_bits", ctypes.c_uint32),
         ("mixed_precision_fock_threshold", ctypes.c_double),
         ("strict_refinement_applied", ctypes.c_int32),
+        ("mixed_precision_reserved_error", ctypes.c_double),
+        ("refinement_iterations", ctypes.c_int32),
     ]
 
 

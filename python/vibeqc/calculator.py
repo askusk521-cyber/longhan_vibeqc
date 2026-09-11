@@ -457,8 +457,10 @@ class Calculator:
     def _precision_provenance(self, calculation: ctypes.c_void_p) -> dict | None:
         """Read the resolved precision policy for a prepared calculation.
 
-        Returns ``None`` when the loaded library predates the query, so older
-        builds keep working against this client.
+        Returns ``None`` when the loaded library predates the query or when no
+        completed execution has populated the record yet (the native getter
+        reports :data:`STATUS_PRECISION_UNAVAILABLE`), so older builds and
+        pre-run queries both degrade to ``None`` instead of an error.
         """
         getter = getattr(
             self._library, "vibeqc_calculation_get_precision_provenance", None
@@ -468,10 +470,10 @@ class Calculator:
         provenance = _native.PrecisionProvenance(
             ctypes.sizeof(_native.PrecisionProvenance), _native.ABI_VERSION
         )
-        _native.check(
-            self._library,
-            getter(calculation, ctypes.byref(provenance)),
-        )
+        status = getter(calculation, ctypes.byref(provenance))
+        if status == _native.STATUS_PRECISION_UNAVAILABLE:
+            return None
+        _native.check(self._library, status)
         return {
             "policy_version": provenance.policy_version,
             "requested_mode": (
@@ -482,6 +484,10 @@ class Calculator:
             "effective_bits": provenance.effective_bits,
             "mixed_precision_fock_threshold": provenance.mixed_precision_fock_threshold,
             "strict_refinement_applied": bool(provenance.strict_refinement_applied),
+            "mixed_precision_reserved_error": (
+                provenance.mixed_precision_reserved_error
+            ),
+            "refinement_iterations": provenance.refinement_iterations,
         }
 
     def _shells_for_atoms(

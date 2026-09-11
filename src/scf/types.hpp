@@ -21,6 +21,10 @@ struct PrecisionProvenance {
   double mixed_precision_fock_threshold{0.0};
   /** The strict FP64 target refinement ran at the end of the run. */
   bool strict_refinement_applied{false};
+  /** Accumulated FP32 Fock rounding the admission budget certified; 0 if none. */
+  double mixed_precision_reserved_error{0.0};
+  /** FP64 target-precision iterations run after the mixed iterative stage. */
+  uint32_t refinement_iterations{0};
 };
 
 /** Numerical controls shared by the implemented mean-field solvers. */
