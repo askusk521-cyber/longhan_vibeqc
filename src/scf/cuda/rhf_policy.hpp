@@ -8,6 +8,12 @@
 
 namespace vibeqc::scf::cuda_policy {
 
+/**
+ * IEEE-754 binary32 unit roundoff (2^-24). Published from the shared header so
+ * the host admission and the CUDA tile gate resolve the identical cutoff.
+ */
+inline constexpr double kMixedPrecisionFloat32UnitRoundoff = 5.9604644775390625e-08;
+
 /** Runtime policy switches kept in a host-only translation unit. */
 bool reuse_converged_fock_requested() noexcept;
 std::optional<double> configured_mixed_precision_fock_threshold(
@@ -48,15 +54,51 @@ AutoMixedPrecisionAdmission admit_auto_mixed_precision_fock(double energy_tolera
                                                             double eligible_tiles) noexcept;
 /** Complete resolution of the requested precision policy, including its audit. */
 struct MixedPrecisionFockPolicy {
-  /** Resolved FP32 tile cutoff; empty keeps the FP64 operator. */
+  /** Resolved FP32 tile cutoff for the whole batch; empty keeps the FP64 path. */
   std::optional<double> threshold;
   /** The cutoff came from the certified accumulated-error budget. */
   bool budget_certified{false};
   /** Error reserved for the iterative operator; zero when uncertified. */
   double reserved_error{0.0};
-  /** Mixed-capable tile census the budget was evaluated against. */
+  /** Mixed-capable tile census ceiling the budget was evaluated against. */
   double eligible_tiles{0.0};
+  /**
+   * Cutoff ceiling for one item. For \p auto this is the tolerance anchor that
+   * the item's own budget may tighten; for an explicit diagnostic cutoff it is
+   * the diagnostic value itself.
+   */
+  double item_cutoff_ceiling{0.0};
+  /**
+   * Error each item's own census divides. Zero means the cutoff does not depend
+   * on a per-item census (explicit diagnostic override), so every item shares
+   * the ceiling.
+   */
+  double item_budget_error{0.0};
 };
+/** Per-item admission for one system of a prepared batch. */
+struct MixedPrecisionItemPolicy {
+  /** The item may run the mixed iterative operator. */
+  bool admitted{false};
+  /** Item contribution cutoff the device applies; zero keeps the item FP64. */
+  double threshold{0.0};
+  /** Mixed-capable tile census the cutoff was resolved from (1 if census-free). */
+  std::uint32_t census{0};
+};
+/**
+ * Resolve one item's precision policy from the resolved batch policy.
+ *
+ * A budget-resolved \p auto policy is per item: the accumulated bound uses the
+ * item's own mixed-capable tile census, and the item is only admitted when its
+ * own starting state is a validated warm density, because the reserved budget
+ * bounds the perturbation of a known state rather than of a cold guess. An item
+ * that cannot be certified keeps the exact FP64 operator without affecting the
+ * other items of the batch. A census-free diagnostic cutoff stays item
+ * agnostic, so the legacy switch behaves exactly as before.
+ */
+MixedPrecisionItemPolicy resolve_mixed_precision_item(const MixedPrecisionFockPolicy& policy,
+                                                      bool validated_warm_state,
+                                                      std::size_t item_tile_census,
+                                                      double screening_tolerance) noexcept;
 /**
  * Resolve the mixed-precision Fock policy from the requested public policy and
  * the tolerances. \p nullopt preserves the legacy

@@ -96,7 +96,10 @@ vibeqc_status vibeqc_calculation_get_precision_provenance(const vibeqc_calculati
   if (out == nullptr) {
     return VIBEQC_STATUS_SUCCESS;
   }
-  if (out->struct_size < sizeof(vibeqc_precision_provenance)) {
+  // Both descriptor fields are part of the contract: a sufficient struct_size
+  // with a foreign abi_version must not be filled with the current layout. This
+  // is the same descriptor rule the other public entry points use.
+  if (!vibeqc::api::valid_descriptor(out)) {
     return VIBEQC_STATUS_ABI_MISMATCH;
   }
   const vibeqc::scf::PrecisionProvenance& p = calculation->precision;

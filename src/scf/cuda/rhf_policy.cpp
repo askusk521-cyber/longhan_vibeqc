@@ -14,8 +14,6 @@ constexpr double kDefaultMixedPrecisionFockThreshold = 1.0e-6;
  * upper bound: the accumulated-error budget below resolves the value used.
  */
 constexpr double kAutoPrecisionFactor = 1.0e4;
-/** IEEE-754 binary32 unit roundoff (2^-24), the relative rounding of one tile. */
-constexpr double kFloat32UnitRoundoff = 5.9604644775390625e-08;
 /**
  * Fraction of the requested energy tolerance reserved for the accumulated FP32
  * rounding of the iterative mixed Fock. The target-precision refinement makes
@@ -99,7 +97,8 @@ AutoMixedPrecisionAdmission admit_auto_mixed_precision_fock(double energy_tolera
   // eps32 * cutoff * eligible_tiles. Solve that bound for the largest cutoff the
   // reserved budget certifies, and never exceed the legacy measured anchor.
   const double reserved_error = kAutoMixedPrecisionErrorBudgetFraction * energy_tolerance;
-  const double budget_threshold = reserved_error / (kFloat32UnitRoundoff * eligible_tiles);
+  const double budget_threshold =
+      reserved_error / (kMixedPrecisionFloat32UnitRoundoff * eligible_tiles);
   const double anchor_threshold = kAutoPrecisionFactor * energy_tolerance;
   const double threshold = std::min(anchor_threshold, budget_threshold);
   if (!(threshold > screening_tolerance)) {
@@ -119,7 +118,9 @@ MixedPrecisionFockPolicy resolve_mixed_precision_fock_policy(
   MixedPrecisionFockPolicy policy;
   if (!precision_mode.has_value()) {
     // No explicit public policy: preserve the legacy diagnostic switch exactly.
+    // The diagnostic cutoff is item agnostic, so every item shares the ceiling.
     policy.threshold = configured_mixed_precision_fock_threshold(screening_tolerance);
+    policy.item_cutoff_ceiling = policy.threshold.value_or(0.0);
     return policy;
   }
   switch (*precision_mode) {
@@ -130,8 +131,10 @@ MixedPrecisionFockPolicy resolve_mixed_precision_fock_policy(
           parsed_mixed_precision_override(screening_tolerance);
       if (override_value.has_value()) {
         // An explicit diagnostic cutoff is deliberately unbudgeted, so it is
-        // reported as uncertified rather than as budgeted evidence.
+        // reported as uncertified rather than as budgeted evidence, and it
+        // applies to every item without a census.
         policy.threshold = override_value;
+        policy.item_cutoff_ceiling = *override_value;
         return policy;
       }
       const AutoMixedPrecisionAdmission admission =
@@ -141,6 +144,10 @@ MixedPrecisionFockPolicy resolve_mixed_precision_fock_policy(
         policy.budget_certified = true;
         policy.reserved_error = admission.reserved_error;
         policy.eligible_tiles = admission.eligible_tiles;
+        // The certified batch ceiling keeps the tolerance anchor; each item
+        // tightens it with its own census below.
+        policy.item_cutoff_ceiling = kAutoPrecisionFactor * energy_tolerance;
+        policy.item_budget_error = admission.reserved_error;
       }
       return policy;
     }
@@ -148,6 +155,34 @@ MixedPrecisionFockPolicy resolve_mixed_precision_fock_policy(
       // An unrecognized public policy must never relax the default.
       return policy;
   }
+}
+
+MixedPrecisionItemPolicy resolve_mixed_precision_item(const MixedPrecisionFockPolicy& policy,
+                                                      bool validated_warm_state,
+                                                      std::size_t item_tile_census,
+                                                      double screening_tolerance) noexcept {
+  MixedPrecisionItemPolicy item;
+  if (!policy.threshold.has_value()) return item;
+  if (!(policy.item_budget_error > 0.0)) {
+    // An explicit diagnostic cutoff is not a budget: keep it item agnostic.
+    item.admitted = true;
+    item.threshold = policy.item_cutoff_ceiling;
+    item.census = 1U;
+    return item;
+  }
+  // The accumulated bound needs the item's own census, and the reserved budget
+  // only bounds the perturbation of a known state, so a cold item (or one whose
+  // census is unavailable) keeps the exact operator for its whole solve.
+  if (!validated_warm_state || item_tile_census == 0) return item;
+  const double budget_threshold =
+      policy.item_budget_error /
+      (kMixedPrecisionFloat32UnitRoundoff * static_cast<double>(item_tile_census));
+  const double threshold = std::min(policy.item_cutoff_ceiling, budget_threshold);
+  if (!(threshold > screening_tolerance)) return item;
+  item.admitted = true;
+  item.threshold = threshold;
+  item.census = static_cast<std::uint32_t>(item_tile_census);
+  return item;
 }
 
 bool graph_native_eigensolver_override_requested() noexcept {

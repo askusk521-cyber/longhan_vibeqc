@@ -221,6 +221,26 @@ void verify_precision_provenance_gate() {
     require(vibeqc_calculation_get_precision_provenance(he.calculation, nullptr) ==
                 VIBEQC_STATUS_SUCCESS,
             "availability query must be available after a completed run");
+    // Both descriptor fields are part of the contract: an exactly sized struct
+    // that advertises a foreign ABI must be rejected and left untouched rather
+    // than filled with the current layout.
+    vibeqc_precision_provenance foreign_abi{sizeof(vibeqc_precision_provenance),
+                                            VIBEQC_ABI_VERSION + 1U};
+    foreign_abi.policy_version = 4242U;
+    foreign_abi.requested_mode = 4242;
+    require(vibeqc_calculation_get_precision_provenance(he.calculation, &foreign_abi) ==
+                VIBEQC_STATUS_ABI_MISMATCH,
+            "a foreign abi_version must be rejected");
+    require(foreign_abi.policy_version == 4242U && foreign_abi.requested_mode == 4242 &&
+                foreign_abi.struct_size == sizeof(vibeqc_precision_provenance) &&
+                foreign_abi.mixed_precision_reserved_error == 0.0 &&
+                foreign_abi.refinement_iterations == 0,
+            "a rejected descriptor must not be modified");
+    vibeqc_precision_provenance short_size{sizeof(vibeqc_precision_provenance) - 1U,
+                                           VIBEQC_ABI_VERSION};
+    require(vibeqc_calculation_get_precision_provenance(he.calculation, &short_size) ==
+                VIBEQC_STATUS_ABI_MISMATCH,
+            "a short descriptor must be rejected");
     vibeqc_calculation_destroy(he.calculation);
     vibeqc_system_destroy(he.system);
     vibeqc_context_destroy(he.context);

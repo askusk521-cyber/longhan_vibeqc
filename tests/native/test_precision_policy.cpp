@@ -9,6 +9,7 @@
 
 #include "molecule/basis.hpp"
 #include "scf/cuda/rhf_policy.hpp"
+#include "scf/direct_task_layout.hpp"
 #include "scf/rhf.hpp"
 #include "vibeqc/vibeqc.h"
 
@@ -154,6 +155,99 @@ void verify_auto_with_legacy_override() {
   require(below.threshold.has_value() && std::abs(*below.threshold - 1.0e-6) <= 1.0e-12,
           "a sub-floor numeric override falls back to the budgeted cutoff");
   require(below.budget_certified, "the budgeted fallback is certified");
+  // A diagnostic cutoff is deliberately item agnostic: it is not a budget, so
+  // an item without a census and without a validated warm state still runs the
+  // same diagnostic route instead of silently dropping out of it.
+  const vibeqc::scf::cuda_policy::MixedPrecisionItemPolicy diagnostic_item =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_item(overridden, false, 0, screen);
+  require(diagnostic_item.admitted && diagnostic_item.census == 1U,
+          "a diagnostic cutoff stays item agnostic");
+}
+/**
+ * The accumulated-error budget is per item. A batch keeps each system's own
+ * mixed-capable census, and every item resolves its own cutoff from it, so a
+ * cold item or an item without mixed-capable tiles stays on the exact operator
+ * while a warm high-order item in the same batch runs the mixed route.
+ */
+void verify_per_item_budget() {
+  // System 0 owns two s shells only, so no mixed-capable order exists. System 1
+  // owns the same s shells plus a d shell, so high-order tiles do exist. Both
+  // systems share one batch.
+  const std::vector<std::int64_t> shell_ao_offsets{0, 1, 2, 3, 4, 9};
+  const std::vector<std::uint8_t> shell_angular{0, 0, 0, 0, 2};
+  const std::vector<std::int64_t> system_shell_pair_offsets{0, 3, 9};
+  const std::vector<std::int32_t> shell_pair_first{0, 0, 1, 2, 2, 2, 3, 3, 4};
+  const std::vector<std::int32_t> shell_pair_second{0, 1, 1, 2, 3, 4, 3, 4, 4};
+  vibeqc::scf::detail::DirectQuartetTaskLayout layout;
+  require(vibeqc::scf::detail::make_direct_quartet_task_layout(
+              shell_ao_offsets, shell_angular, system_shell_pair_offsets, shell_pair_first,
+              shell_pair_second, vibeqc::scf::detail::kDirectQuartetMixedFockMinimumAngularOrder,
+              layout),
+          "per-item census topology was rejected");
+  require(layout.system_mixed_capable_tile_counts.size() == 2,
+          "the layout must keep one mixed-capable census per system");
+  require(layout.system_mixed_capable_tile_counts[0] == 0,
+          "an s-only system must report no mixed-capable tile");
+  require(layout.system_mixed_capable_tile_counts[1] > 0,
+          "a d-shell system must report mixed-capable tiles");
+  const double screen = 1.0e-12;
+  const double energy = 1.0e-10;
+  const std::size_t ceiling = std::max(layout.system_mixed_capable_tile_counts[0],
+                                       layout.system_mixed_capable_tile_counts[1]);
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy policy =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen,
+          static_cast<double>(ceiling));
+  require(policy.threshold.has_value() && policy.budget_certified,
+          "the batch ceiling must certify the route");
+  // One batch, three legitimate resolutions: cold, census-free and warm.
+  require(!vibeqc::scf::cuda_policy::resolve_mixed_precision_item(
+               policy, false, layout.system_mixed_capable_tile_counts[1], screen)
+               .admitted,
+          "a cold item must keep the exact FP64 operator");
+  require(!vibeqc::scf::cuda_policy::resolve_mixed_precision_item(
+               policy, true, layout.system_mixed_capable_tile_counts[0], screen)
+               .admitted,
+          "an item without mixed-capable tiles must keep the exact operator");
+  const vibeqc::scf::cuda_policy::MixedPrecisionItemPolicy warm =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_item(
+          policy, true, layout.system_mixed_capable_tile_counts[1], screen);
+  require(warm.admitted, "a warm mixed-capable item must be admitted");
+  require(warm.census == layout.system_mixed_capable_tile_counts[1],
+          "the item must report its own census");
+  // The item cutoff is the per-item accumulated bound: an item whose census
+  // makes that bound the binding term resolves a tighter cutoff than the
+  // tolerance anchor, while a small census keeps the anchor.
+  const vibeqc::scf::cuda_policy::MixedPrecisionItemPolicy crowded =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_item(policy, true, 1000U, screen);
+  const vibeqc::scf::cuda_policy::MixedPrecisionItemPolicy tight =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_item(policy, true, 200U, screen);
+  const vibeqc::scf::cuda_policy::MixedPrecisionItemPolicy anchored =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_item(policy, true, 4U, screen);
+  require(crowded.admitted && tight.admitted && anchored.admitted,
+          "budget-certified items must be admitted");
+  require_close(anchored.threshold, *policy.threshold, 1.0e-18,
+                "a small census keeps the batch anchor");
+  require(tight.threshold < anchored.threshold,
+          "a budget-dominated census tightens the item cutoff");
+  require(crowded.threshold < tight.threshold, "a larger census resolves an even tighter cutoff");
+  const double expected_crowded = policy.item_budget_error / (kTestFloat32UnitRoundoff * 1000.0);
+  require_close(crowded.threshold, expected_crowded, std::abs(expected_crowded) * 1.0e-12,
+                "the item cutoff is the per-item accumulated bound");
+  // An item past the budget floor keeps the exact operator instead of
+  // accumulating rounding the requested accuracy cannot certify.
+  require(!vibeqc::scf::cuda_policy::resolve_mixed_precision_item(
+               policy, true, static_cast<std::size_t>(1.0e9), screen)
+               .admitted,
+          "an item past the budget floor must be refused");
+  // An uncertified batch policy admits no item at all.
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy refused =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen, 0.0);
+  require(!refused.threshold.has_value() &&
+              !vibeqc::scf::cuda_policy::resolve_mixed_precision_item(refused, true, 1000U, screen)
+                   .admitted,
+          "an uncertified batch policy must admit no item");
 }
 /** A nullopt mode preserves the legacy diagnostic switch verbatim. */
 void verify_nullopt_legacy_parity() {
@@ -280,6 +374,7 @@ void verify_cpu_provenance() {
 int main() {
   try {
     verify_auto_budget_admission();
+    verify_per_item_budget();
     verify_fp64_strict();
     verify_auto_with_legacy_override();
     verify_nullopt_legacy_parity();

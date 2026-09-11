@@ -251,6 +251,67 @@ void verify_public_auto_policy(bool unrestricted) {
           "public auto forces diverged from FP64");
   vibeqc::scf::destroy_rhf_cuda_bucket_plan(plan);
 }
+/**
+ * The public auto policy is per item: one batch keeps a cold item on the exact
+ * operator while a warm item uses the mixed route and refines it in FP64. This
+ * pins per-item admission, staging and provenance on a real device.
+ */
+void verify_per_item_auto_policy(bool unrestricted) {
+  const vibeqc::core::System system = mixed_precision_system(unrestricted);
+  vibeqc::scf::ScfOptions options;
+  options.max_iterations = 100;
+  options.energy_tolerance = 1.0e-10;
+  options.density_tolerance = 1.0e-8;
+  options.screening_tolerance = 1.0e-12;
+  setenv("VIBEQC_AOT_FOCK_SHELL_CLASSES", "dpps", 1);
+  unsetenv("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD");
+  vibeqc::scf::CudaRhfBucketPlan* plan = nullptr;
+  const std::vector<vibeqc::core::System> systems{system, system};
+  const std::vector<const std::vector<double>*> cold{nullptr, nullptr};
+  const auto run_cached = [&](const std::vector<const std::vector<double>*>& dm0) {
+    return unrestricted
+               ? vibeqc::scf::run_uhf_cuda_bucket_cached(&plan, systems, options, dm0, 0, false)
+               : vibeqc::scf::run_rhf_cuda_bucket_cached(&plan, systems, options, dm0, 0, false);
+  };
+  options.precision_mode = VIBEQC_PRECISION_FP64;
+  const std::vector<vibeqc::scf::RhfBucketItem> reference = run_cached(cold);
+  require(reference.size() == 2 && reference[0].status == VIBEQC_STATUS_SUCCESS &&
+              reference[1].status == VIBEQC_STATUS_SUCCESS && reference[0].scf.converged &&
+              reference[1].scf.converged,
+          "per-item FP64 reference did not converge");
+  // Item 0 stays cold; item 1 starts from its validated converged density.
+  const std::vector<const std::vector<double>*> ragged{nullptr, &reference[1].scf.density};
+  options.precision_mode = VIBEQC_PRECISION_AUTO;
+  const std::vector<vibeqc::scf::RhfBucketItem> per_item = run_cached(ragged);
+  require(per_item.size() == 2 && per_item[0].status == VIBEQC_STATUS_SUCCESS &&
+              per_item[1].status == VIBEQC_STATUS_SUCCESS && per_item[0].scf.converged &&
+              per_item[1].scf.converged,
+          "per-item auto policy did not converge");
+  require(!per_item[0].scf.initial_density_used && per_item[1].scf.initial_density_used,
+          "per-item starting states are not distinguishable");
+  const vibeqc::scf::PrecisionProvenance& cold_item = per_item[0].scf.precision;
+  const vibeqc::scf::PrecisionProvenance& warm_item = per_item[1].scf.precision;
+  require(cold_item.requested_mode == VIBEQC_PRECISION_AUTO &&
+              warm_item.requested_mode == VIBEQC_PRECISION_AUTO,
+          "per-item provenance lost the requested policy");
+  require(cold_item.effective_bits == 64U && !cold_item.strict_refinement_applied &&
+              cold_item.refinement_iterations == 0U &&
+              cold_item.mixed_precision_fock_threshold == 0.0 &&
+              cold_item.mixed_precision_reserved_error == 0.0,
+          "a cold item must keep the exact FP64 operator");
+  require(warm_item.effective_bits == 32U && warm_item.strict_refinement_applied &&
+              warm_item.refinement_iterations >= 1U &&
+              warm_item.mixed_precision_fock_threshold > 0.0 &&
+              warm_item.mixed_precision_reserved_error > 0.0,
+          "a warm item must use the mixed route and refine it in FP64");
+  for (std::size_t index = 0; index < 2; ++index) {
+    require(std::abs(per_item[index].scf.energy - reference[index].scf.energy) < 2.0e-8,
+            "per-item auto energy diverged from FP64");
+    require(maximum_difference(per_item[index].scf.forces, reference[index].scf.forces) < 2.0e-7,
+            "per-item auto forces diverged from FP64");
+  }
+  vibeqc::scf::destroy_rhf_cuda_bucket_plan(plan);
+}
 }  // namespace
 
 int main() {
@@ -264,7 +325,9 @@ int main() {
     verify_mode(true);
     verify_public_auto_policy(false);
     verify_public_auto_policy(true);
-    std::cout << "validated RHF/UHF mixed direct-Fock regression and public auto policy\n";
+    verify_per_item_auto_policy(false);
+    verify_per_item_auto_policy(true);
+    std::cout << "validated RHF/UHF mixed direct-Fock, public auto and per-item policies\n";
 #else
     std::cout << "mixed-precision checks skipped: CUDA disabled\n";
 #endif
