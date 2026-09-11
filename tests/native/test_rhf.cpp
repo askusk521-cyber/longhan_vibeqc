@@ -145,34 +145,44 @@ struct PreparedSingleAtom {
 };
 
 PreparedSingleAtom prepare_single_atom_rhf(int atomic_number, std::size_t primitive_count) {
-  vibeqc_context_descriptor context_descriptor{
-      sizeof(vibeqc_context_descriptor), VIBEQC_ABI_VERSION, 0, VIBEQC_BACKEND_CPU_REFERENCE};
+  vibeqc_context_descriptor context_descriptor{sizeof(vibeqc_context_descriptor),
+                                               VIBEQC_ABI_VERSION, 0, VIBEQC_BACKEND_CPU_REFERENCE};
   vibeqc_context* context = nullptr;
   require(vibeqc_context_create(&context_descriptor, &context) == VIBEQC_STATUS_SUCCESS,
           "single-atom context creation failed");
 
   const std::array<vibeqc_atom, 1> atoms{{{atomic_number, 0.0, 0.0, 0.0}}};
   const vibeqc_primitive primitives[4] = {{1.0, 1.0}, {1.0, 1.0}, {1.0, 1.0}, {1.0, 1.0}};
-  const std::array<vibeqc_shell, 1> shells{{
-      {0, 0, 0, static_cast<uint32_t>(primitive_count)}}};
-  vibeqc_system_descriptor system_descriptor{
-      sizeof(vibeqc_system_descriptor), VIBEQC_ABI_VERSION, atoms.data(),
-      static_cast<uint32_t>(atoms.size()), shells.data(), static_cast<uint32_t>(shells.size()),
-      primitives, static_cast<uint32_t>(primitive_count), 0, 1};
+  const std::array<vibeqc_shell, 1> shells{{{0, 0, 0, static_cast<uint32_t>(primitive_count)}}};
+  vibeqc_system_descriptor system_descriptor{sizeof(vibeqc_system_descriptor),
+                                             VIBEQC_ABI_VERSION,
+                                             atoms.data(),
+                                             static_cast<uint32_t>(atoms.size()),
+                                             shells.data(),
+                                             static_cast<uint32_t>(shells.size()),
+                                             primitives,
+                                             static_cast<uint32_t>(primitive_count),
+                                             0,
+                                             1};
   vibeqc_system* system = nullptr;
   require(vibeqc_system_create(context, &system_descriptor, &system) == VIBEQC_STATUS_SUCCESS,
           "single-atom system creation failed");
 
-  vibeqc_method_descriptor method{
-      sizeof(vibeqc_method_descriptor), VIBEQC_ABI_VERSION, VIBEQC_METHOD_RHF, 100, 8, 1.0e-12,
-      1.0e-10, 1.0e-14};
+  vibeqc_method_descriptor method{sizeof(vibeqc_method_descriptor),
+                                  VIBEQC_ABI_VERSION,
+                                  VIBEQC_METHOD_RHF,
+                                  100,
+                                  8,
+                                  1.0e-12,
+                                  1.0e-10,
+                                  1.0e-14};
   method.density_fitting_mode = VIBEQC_DENSITY_FITTING_NONE;
   method.density_fitting_memory_budget_bytes = 0;
   method.precision_mode = VIBEQC_PRECISION_FP64;
   vibeqc_calculation* calculation = nullptr;
-  require(vibeqc_calculation_prepare(context, system, &method, &calculation) ==
-              VIBEQC_STATUS_SUCCESS,
-          "single-atom calculation preparation failed");
+  require(
+      vibeqc_calculation_prepare(context, system, &method, &calculation) == VIBEQC_STATUS_SUCCESS,
+      "single-atom calculation preparation failed");
 
   return {context, system, calculation};
 }
@@ -203,9 +213,9 @@ void verify_precision_provenance_gate() {
     const vibeqc_status executed = vibeqc_calculation_execute(he.calculation, &result);
     require(executed == VIBEQC_STATUS_SUCCESS && result.converged == 1,
             "He RHF reference run did not converge");
-    require(vibeqc_calculation_get_precision_provenance(he.calculation, &prov) ==
-                VIBEQC_STATUS_SUCCESS,
-            "provenance must be available after a completed run");
+    require(
+        vibeqc_calculation_get_precision_provenance(he.calculation, &prov) == VIBEQC_STATUS_SUCCESS,
+        "provenance must be available after a completed run");
     require(prov.requested_mode == VIBEQC_PRECISION_FP64,
             "completed run reports the requested fp64 policy");
     require(vibeqc_calculation_get_precision_provenance(he.calculation, nullptr) ==

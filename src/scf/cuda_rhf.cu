@@ -67,7 +67,6 @@ namespace {
 //   kExpandedConvergedFockReuseDensityRms = 2.0e-9
 //   kAutoMixedPrecisionErrorBudgetFraction = 6.25e-02
 //   kFloat32UnitRoundoff = 5.9604644775390625e-08
-using cuda_policy::MixedPrecisionFockPolicy;
 using cuda_policy::bounded_direct_aot_only_diagnostic_requested;
 using cuda_policy::bounded_direct_count_diagnostic_requested;
 using cuda_policy::bounded_direct_fock_only_diagnostic_requested;
@@ -78,6 +77,7 @@ using cuda_policy::converged_fock_reuse_density_rms;
 using cuda_policy::direct_tile_validation_requested;
 using cuda_policy::force_density_product_screening_requested;
 using cuda_policy::graph_native_eigensolver_override_requested;
+using cuda_policy::MixedPrecisionFockPolicy;
 using cuda_policy::one_electron_force_scalar_requested;
 using cuda_policy::ppps_resident_block_threads_requested;
 using cuda_policy::ppps_signature_bucketing_requested;
