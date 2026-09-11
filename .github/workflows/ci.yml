@@ -118,7 +118,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ccache
-          key: ccache-cuda-12.9-sm120-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'include/**', 'src/**', 'tools/**') }}
+          key: ccache-cuda-12.9-sm120-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'include/**', 'src/**', 'tests/native/**', 'tools/**') }}
           restore-keys: |
             ccache-cuda-12.9-sm120-
       - name: Reset ccache statistics
@@ -130,8 +130,10 @@ jobs:
           -DVIBEQC_CUDA_FAST_COMPILE=ON
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
-      - name: Compile production CUDA build
-        run: cmake --build --preset cuda-release-sm120 --target vibeqc --parallel 2
+      - name: Compile production CUDA and runtime CTest
+        run: >-
+          cmake --build --preset cuda-release-sm120
+          --target vibeqc_cuda_runtime_tests --parallel 2
       - name: Check Fock and proposal preflight without a GPU
         env:
           CUDA_VISIBLE_DEVICES: ""

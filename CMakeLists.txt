@@ -647,6 +647,12 @@ if(VIBEQC_BUILD_TESTS)
   # This test requires a tuned registry and deliberately rejects the portable
   # stub used when AOT shells are disabled. Other CUDA tests use either build.
   if(VIBEQC_ENABLE_CUDA)
+    add_executable(vibeqc_cuda_runtime_tests tests/native/test_cuda_runtime.cu)
+    target_link_libraries(vibeqc_cuda_runtime_tests PRIVATE vibeqc CUDA::cudart CUDA::cublas)
+    target_include_directories(vibeqc_cuda_runtime_tests
+      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_cuda_runtime_tests COMMAND vibeqc_cuda_runtime_tests)
+
     add_executable(vibeqc_cuda_fock_provider_tests tests/native/test_cuda_fock_provider.cpp)
     target_link_libraries(vibeqc_cuda_fock_provider_tests PRIVATE vibeqc CUDA::cudart)
     target_include_directories(vibeqc_cuda_fock_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
