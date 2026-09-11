@@ -3717,22 +3717,36 @@ def test_cached_direct_plan_reuses_immutable_task_layout():
     assert "**plan, candidate, options" in source
 
 
-def test_bounded_streaming_fock_forwards_mixed_precision_policy():
-    """Keep bounded streaming eligible for mixed work and final FP64 rebuilds."""
+def test_direct_fock_gates_mixed_precision_on_the_budgeted_tile_census():
+    """Keep the mixed route budgeted on the prepared census and refined in FP64.
+
+    The public ``auto`` policy resolves the FP32 cutoff from the accumulated-error
+    budget and the mixed-capable tile census of this reference, so a route that
+    cannot supply a census (bounded streaming) keeps the FP64 operator instead of
+    accumulating an unbounded rounding error. The legacy diagnostic switch stays a
+    separate, deliberately unbudgeted override.
+    """
 
     source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
         encoding="utf-8"
     )
     threshold_begin = source.index(
-        "const std::optional<double> requested_mixed_precision_fock_threshold"
+        "const MixedPrecisionFockPolicy requested_precision_policy"
     )
     threshold_end = source.index(
         "const bool requested_mixed_precision_fock", threshold_begin
     )
+    resolution = source[threshold_begin:threshold_end]
     assert re.search(
-        r"requested_quartet_direct\s*\?\s*resolve_mixed_precision_fock_threshold",
-        source[threshold_begin:threshold_end],
+        r"requested_quartet_direct\s*\?\s*resolve_mixed_precision_fock_policy\(",
+        resolution,
     )
+    assert "mixed_precision_eligible_tile_count" in resolution
+    policy = (REPOSITORY_ROOT / "src" / "scf" / "cuda" / "rhf_policy.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "admit_auto_mixed_precision_fock" in policy
+    assert "kFloat32UnitRoundoff * eligible_tiles" in policy
     assert "allow_mixed_precision && mixed_precision_fock" in source
     # The finalization path must explicitly disable the iterative mixed route.
     assert "launch_fock_builder(density, false)" in source

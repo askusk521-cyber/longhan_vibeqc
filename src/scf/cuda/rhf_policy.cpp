@@ -9,11 +9,21 @@ namespace {
 
 constexpr double kDefaultMixedPrecisionFockThreshold = 1.0e-6;
 /**
- * Fraction of the requested energy tolerance reserved for the iterative mixed
- * Fock. The factor is anchored so the default 1.0e-10 target resolves to the
- * legacy measured-accurate 1.0e-6 threshold; tighter targets resolve smaller.
+ * Ceiling for the resolved tile cutoff, anchored so the default 1.0e-10 target
+ * can recover the legacy measured-accurate 1.0e-6 threshold. It is only an
+ * upper bound: the accumulated-error budget below resolves the value used.
  */
 constexpr double kAutoPrecisionFactor = 1.0e4;
+/** IEEE-754 binary32 unit roundoff (2^-24), the relative rounding of one tile. */
+constexpr double kFloat32UnitRoundoff = 5.9604644775390625e-08;
+/**
+ * Fraction of the requested energy tolerance reserved for the accumulated FP32
+ * rounding of the iterative mixed Fock. The target-precision refinement makes
+ * the operator that produces the reported energy, orbitals, and forces exact,
+ * so this bound covers only the perturbation the iterative density was converged
+ * against.
+ */
+constexpr double kAutoMixedPrecisionErrorBudgetFraction = 6.25e-02;
 constexpr double kTightConvergedFockReuseDensityRms = 1.0e-12;
 constexpr double kExpandedConvergedFockReuseDensityTolerance = 1.0e-9;
 constexpr double kExpandedConvergedFockReuseDensityRms = 2.0e-9;
@@ -76,40 +86,67 @@ std::optional<double> configured_mixed_precision_fock_threshold(
   return threshold;
 }
 
-std::optional<double> auto_mixed_precision_fock_threshold(double energy_tolerance,
-                                                          double screening_tolerance) noexcept {
-  if (!(energy_tolerance > 0.0) || !std::isfinite(energy_tolerance)) {
-    return std::nullopt;
+AutoMixedPrecisionAdmission admit_auto_mixed_precision_fock(double energy_tolerance,
+                                                            double screening_tolerance,
+                                                            double eligible_tiles) noexcept {
+  AutoMixedPrecisionAdmission admission;
+  if (!(energy_tolerance > 0.0) || !std::isfinite(energy_tolerance)) return admission;
+  // An unknown (or empty) census cannot be budgeted; refusing keeps the FP64
+  // operator rather than admitting work whose accumulated error is unbounded.
+  if (!(eligible_tiles >= 1.0) || !std::isfinite(eligible_tiles)) return admission;
+  // Worst case: every eligible tile is admitted at the cutoff and carries the
+  // full relative FP32 rounding, so the accumulated Fock error is bounded by
+  // eps32 * cutoff * eligible_tiles. Solve that bound for the largest cutoff the
+  // reserved budget certifies, and never exceed the legacy measured anchor.
+  const double reserved_error = kAutoMixedPrecisionErrorBudgetFraction * energy_tolerance;
+  const double budget_threshold = reserved_error / (kFloat32UnitRoundoff * eligible_tiles);
+  const double anchor_threshold = kAutoPrecisionFactor * energy_tolerance;
+  const double threshold = std::min(anchor_threshold, budget_threshold);
+  if (!(threshold > screening_tolerance)) {
+    // The budget certifies no useful tile at this requested accuracy, so the
+    // operator stays FP64 instead of accumulating rounding it cannot bound.
+    return admission;
   }
-  const double threshold = kAutoPrecisionFactor * energy_tolerance;
-  if (threshold <= screening_tolerance) {
-    // The requested accuracy is tight enough that per-tile FP32 rounding could
-    // reach the target; keep the operator in FP64 rather than rely on the
-    // final rebuild alone to absorb the rounding.
-    return std::nullopt;
-  }
-  return threshold;
+  admission.admitted = true;
+  admission.threshold = threshold;
+  admission.reserved_error = reserved_error;
+  admission.eligible_tiles = eligible_tiles;
+  return admission;
 }
-
-std::optional<double> resolve_mixed_precision_fock_threshold(
+MixedPrecisionFockPolicy resolve_mixed_precision_fock_policy(
     std::optional<vibeqc_precision_mode> precision_mode, double energy_tolerance,
-    double screening_tolerance) noexcept {
+    double screening_tolerance, double eligible_tiles) noexcept {
+  MixedPrecisionFockPolicy policy;
   if (!precision_mode.has_value()) {
     // No explicit public policy: preserve the legacy diagnostic switch exactly.
-    return configured_mixed_precision_fock_threshold(screening_tolerance);
+    policy.threshold = configured_mixed_precision_fock_threshold(screening_tolerance);
+    return policy;
   }
   switch (*precision_mode) {
     case VIBEQC_PRECISION_FP64:
-      return std::nullopt;
+      return policy;
     case VIBEQC_PRECISION_AUTO: {
       const std::optional<double> override_value =
           parsed_mixed_precision_override(screening_tolerance);
-      if (override_value.has_value()) return override_value;
-      return auto_mixed_precision_fock_threshold(energy_tolerance, screening_tolerance);
+      if (override_value.has_value()) {
+        // An explicit diagnostic cutoff is deliberately unbudgeted, so it is
+        // reported as uncertified rather than as budgeted evidence.
+        policy.threshold = override_value;
+        return policy;
+      }
+      const AutoMixedPrecisionAdmission admission =
+          admit_auto_mixed_precision_fock(energy_tolerance, screening_tolerance, eligible_tiles);
+      if (admission.admitted) {
+        policy.threshold = admission.threshold;
+        policy.budget_certified = true;
+        policy.reserved_error = admission.reserved_error;
+        policy.eligible_tiles = admission.eligible_tiles;
+      }
+      return policy;
     }
     default:
       // An unrecognized public policy must never relax the default.
-      return std::nullopt;
+      return policy;
   }
 }
 

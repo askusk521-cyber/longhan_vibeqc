@@ -43,92 +43,118 @@ class ScopedEnv {
 };
 
 using Threshold = std::optional<double>;
-
+using Admission = vibeqc::scf::cuda_policy::AutoMixedPrecisionAdmission;
+/** Binary32 unit roundoff, mirrored from the policy constant. */
+constexpr double kTestFloat32UnitRoundoff = 5.9604644775390625e-08;
 /**
- * Tolerance-derived \p auto threshold: 1e4 * energy_tolerance, floored by the
- * screening tolerance. The 1e-10 default resolves to the legacy measured-accurate
- * 1e-6 anchor; tighter targets resolve smaller and, below the floor, to no mixed
- * route at all (the operator stays FP64).
+ * The \p auto cutoff is an accumulated-error budget, not a per-tile constant:
+ * `eps32 * cutoff * census` must fit the error reserved for the iterative
+ * operator, so a census of individually small contributions tightens the cutoff
+ * and eventually refuses the mixed route entirely.
  */
-void verify_auto_threshold_derivation() {
+void verify_auto_budget_admission() {
   const double screen = 1.0e-12;
-  const Threshold default_target =
-      vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(1.0e-10, screen);
-  require(default_target.has_value(), "default 1e-10 target should derive a mixed route");
-  require_close(*default_target, 1.0e-6, 1.0e-12,
-                "default target anchors the 1e-6 legacy threshold");
-
-  const Threshold looser =
-      vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(1.0e-9, screen);
-  require(looser.has_value() && *looser > *default_target,
-          "looser target derives a larger threshold");
-  require_close(*looser, 1.0e-5, 1.0e-13, "1e-9 target derives 1e-5");
-
-  const Threshold tighter =
-      vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(1.0e-11, screen);
-  require(tighter.has_value() && *tighter < *default_target,
-          "tighter target derives a smaller threshold");
-  require_close(*tighter, 1.0e-7, 1.0e-14, "1e-11 target derives 1e-7");
-
-  // 1e4 * 1e-17 = 1e-13 <= screen (1e-12): the requested accuracy is tight enough
-  // that per-tile FP32 rounding could reach the target, so the operator stays FP64.
-  const Threshold too_tight =
-      vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(1.0e-17, screen);
-  require(!too_tight.has_value(), "sub-floor target collapses to the FP64 operator");
-
-  const Threshold non_positive =
-      vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(0.0, screen);
-  require(!non_positive.has_value(), "non-positive energy tolerance derives no mixed route");
-  const Threshold inf = vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(
-      std::numeric_limits<double>::infinity(), screen);
-  require(!inf.has_value(), "non-finite energy tolerance derives no mixed route");
+  const double energy = 1.0e-10;
+  const double reserved = energy / 16.0;
+  // Small census: the legacy measured anchor is tighter than the budget, so it
+  // still bounds the cutoff.
+  const Admission small =
+      vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(energy, screen, 100.0);
+  require(small.admitted, "a 100-tile mixed-capable census fits the budget");
+  require_close(small.threshold, 1.0e-6, 1.0e-18, "the anchor caps a small census");
+  require_close(small.reserved_error, reserved, 1.0e-24, "the admission reports its budget");
+  // Budget-dominated census: many individually eligible tiles collectively
+  // exceed the per-tile anchor, so the certified cutoff must shrink.
+  const Admission crowded =
+      vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(energy, screen, 1000.0);
+  require(crowded.admitted, "a budget-dominated census is still admissible");
+  require_close(crowded.threshold, reserved / (kTestFloat32UnitRoundoff * 1000.0), 1.0e-18,
+                "the budget resolves the cutoff for the actual census");
+  require(crowded.threshold < small.threshold,
+          "a larger census resolves a tighter cutoff than the per-tile anchor");
+  // The certified bound is what the cutoff promises: no census may let the
+  // accumulated FP32 rounding exceed the reserved error.
+  require(kTestFloat32UnitRoundoff * crowded.threshold * crowded.eligible_tiles <=
+              crowded.reserved_error * (1.0 + 1.0e-12),
+          "the resolved cutoff certifies the accumulated bound");
+  // Many individually small contributions, collectively over budget: the
+  // certified cutoff falls to the screening floor and the mixed route is
+  // refused, leaving the FP64 operator rather than an unbounded accumulation.
+  const double floor_census = reserved / (kTestFloat32UnitRoundoff * screen);
+  require(
+      !vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(energy, screen, floor_census * 2.0)
+           .admitted,
+      "a census past the budget floor refuses the mixed route");
+  require(!vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(energy, screen,
+                                                                     floor_census * 10.0)
+               .admitted,
+          "further past the budget floor the mixed route stays refused");
+  // An absent census cannot be bounded, so it is never admitted by default.
+  require(!vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(energy, screen, 0.0).admitted,
+          "an unknown census is refused");
+  require(!vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(0.0, screen, 100.0).admitted,
+          "a non-positive target is refused");
+  require(!vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(
+               std::numeric_limits<double>::infinity(), screen, 100.0)
+               .admitted,
+          "a non-finite target is refused");
+  // A looser target both raises the anchor and enlarges the reserved budget.
+  const Admission looser =
+      vibeqc::scf::cuda_policy::admit_auto_mixed_precision_fock(1.0e-6, screen, 100.0);
+  require(looser.admitted && looser.threshold > small.threshold,
+          "a looser target certifies a larger cutoff");
+  require_close(looser.threshold, 1.0e-2, 1.0e-14, "1e-6 target anchors a 1e-2 cutoff");
 }
-
 /** Explicit FP64 keeps the pure double path; even a numeric legacy env cannot relax it. */
 void verify_fp64_strict() {
   const double screen = 1.0e-12;
   const double energy = 1.0e-10;
-  const Threshold clean = vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(
-      std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_FP64), energy, screen);
-  require(!clean.has_value(), "explicit FP64 resolves to the pure double path");
-
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy clean =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_FP64), energy, screen, 100.0);
+  require(!clean.threshold.has_value(), "explicit FP64 resolves to the pure double path");
+  require(!clean.budget_certified, "explicit FP64 certifies no mixed budget");
   // A numeric diagnostic override is present but FP64 must ignore it.
   ScopedEnv override("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "5e-7");
-  const Threshold with_override = vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(
-      std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_FP64), energy, screen);
-  require(!with_override.has_value(), "FP64 is not relaxed by the legacy diagnostic override");
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy with_override =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_FP64), energy, screen, 100.0);
+  require(!with_override.threshold.has_value(),
+          "FP64 is not relaxed by the legacy diagnostic override");
 }
-
 /** AUTO derives from tolerances, but an explicit numeric env acts as a hard override. */
 void verify_auto_with_legacy_override() {
   const double screen = 1.0e-12;
   const double energy = 1.0e-10;
 
   ScopedEnv numeric("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "2e-7");
-  const Threshold overridden = vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(
-      std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen);
-  require(overridden.has_value(), "AUTO with a numeric override resolves a mixed route");
-  require_close(*overridden, 2.0e-7, 1.0e-14, "numeric override wins over the derived value");
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy overridden =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen, 100.0);
+  require(overridden.threshold.has_value(), "AUTO with a numeric override resolves a mixed route");
+  require_close(*overridden.threshold, 2.0e-7, 1.0e-14,
+                "numeric override wins over the derived value");
+  require(!overridden.budget_certified,
+          "a diagnostic override is reported as uncertified, not as budgeted evidence");
 
   // The 'auto' / '0' / 'none' spellings are not numeric overrides; they fall back
   // to the derived threshold.
   ScopedEnv auto_spelling("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "auto");
-  const Threshold derived = vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(
-      std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen);
-  require(derived.has_value() &&
-              std::abs(*derived -
-                       vibeqc::scf::cuda_policy::auto_mixed_precision_fock_threshold(energy, screen)
-                           .value()) <= 1.0e-16,
-          "AUTO with the 'auto' spelling derives from the tolerances");
-
-  // A numeric override at or below the screening floor is rejected.
+  // The 'auto' spelling is not a numeric override: the budget decides again.
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy derived =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen, 100.0);
+  require(derived.threshold.has_value() && std::abs(*derived.threshold - 1.0e-6) <= 1.0e-12,
+          "AUTO with the 'auto' spelling derives from the budget");
+  require(derived.budget_certified, "the derived cutoff is reported as budget-certified");
   ScopedEnv below_floor("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "5e-13");
-  const Threshold below = vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(
-      std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen);
-  require(below.has_value() && std::abs(*below - 1.0e-6) <= 1.0e-12,
-          "a sub-floor numeric override falls back to the derived threshold");
+  const vibeqc::scf::cuda_policy::MixedPrecisionFockPolicy below =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(
+          std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO), energy, screen, 100.0);
+  require(below.threshold.has_value() && std::abs(*below.threshold - 1.0e-6) <= 1.0e-12,
+          "a sub-floor numeric override falls back to the budgeted cutoff");
+  require(below.budget_certified, "the budgeted fallback is certified");
 }
-
 /** A nullopt mode preserves the legacy diagnostic switch verbatim. */
 void verify_nullopt_legacy_parity() {
   const double screen = 1.0e-12;
@@ -136,35 +162,44 @@ void verify_nullopt_legacy_parity() {
   std::optional<vibeqc_precision_mode> nullopt;
 
   ScopedEnv absent("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "0");
-  require(!vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(nullopt, energy, screen)
-               .has_value(),
-          "absent/0 legacy switch keeps the default FP64 path");
-
+  require(
+      !vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(nullopt, energy, screen, 100.0)
+           .threshold.has_value(),
+      "absent/0 legacy switch keeps the default FP64 path");
   ScopedEnv legacy_auto("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "auto");
   const Threshold legacy_auto_threshold =
-      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(nullopt, energy, screen);
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(nullopt, energy, screen, 100.0)
+          .threshold;
   require(legacy_auto_threshold.has_value(), "'auto' legacy switch enables the mixed route");
   require_close(*legacy_auto_threshold, 1.0e-6, 1.0e-12,
                 "'auto' legacy switch uses the default 1e-6");
-
   ScopedEnv legacy_numeric("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "3e-7");
   const Threshold legacy_numeric_threshold =
-      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(nullopt, energy, screen);
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(nullopt, energy, screen, 100.0)
+          .threshold;
   require(legacy_numeric_threshold.has_value() &&
               std::abs(*legacy_numeric_threshold - 3.0e-7) <= 1.0e-14,
           "numeric legacy switch passes through verbatim");
 
   ScopedEnv legacy_too_small("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "5e-13");
-  require(!vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(nullopt, energy, screen)
-               .has_value(),
-          "a numeric legacy switch at or below the floor keeps the FP64 path");
-
+  require(
+      !vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(nullopt, energy, screen, 100.0)
+           .threshold.has_value(),
+      "a numeric legacy switch at or below the floor keeps the FP64 path");
   ScopedEnv legacy_garbage("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "bogus");
-  require(!vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_threshold(nullopt, energy, screen)
-               .has_value(),
-          "an invalid legacy switch keeps the FP64 path rather than relaxing it");
+  require(
+      !vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(nullopt, energy, screen, 100.0)
+           .threshold.has_value(),
+      "an invalid legacy switch keeps the FP64 path rather than relaxing it");
+  // The legacy diagnostic switch is unchanged by the budget: it keeps resolving
+  // its own numeric cutoff even when the census would refuse an auto request.
+  ScopedEnv legacy_only("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD", "1e-7");
+  const Threshold legacy_only_threshold =
+      vibeqc::scf::cuda_policy::resolve_mixed_precision_fock_policy(nullopt, energy, screen, 0.0)
+          .threshold;
+  require(legacy_only_threshold.has_value() && std::abs(*legacy_only_threshold - 1.0e-7) <= 1.0e-19,
+          "the legacy diagnostic switch does not consult the budget census");
 }
-
 /** A converged-fock reuse RMS scales with the density tolerance. */
 void verify_converged_fock_reuse_rms() {
   require_close(vibeqc::scf::cuda_policy::converged_fock_reuse_density_rms(1.0e-12), 1.0e-12,
@@ -215,6 +250,9 @@ void verify_cpu_provenance() {
           "explicit FP64 reports FP64 as the requested mode");
   require(fp64.precision.effective_bits == 64, "CPU FP64 runs at 64 bits");
   require(!fp64.precision.strict_refinement_applied, "CPU FP64 applies no mixed refinement");
+  require(fp64.precision.refinement_iterations == 0 &&
+              fp64.precision.mixed_precision_reserved_error == 0.0,
+          "CPU FP64 reports no mixed budget and no refinement iterations");
 
   const vibeqc::scf::ScfResult auto_result =
       run_cpu_rhf(std::optional<vibeqc_precision_mode>(VIBEQC_PRECISION_AUTO));
@@ -241,7 +279,7 @@ void verify_cpu_provenance() {
 
 int main() {
   try {
-    verify_auto_threshold_derivation();
+    verify_auto_budget_admission();
     verify_fp64_strict();
     verify_auto_with_legacy_override();
     verify_nullopt_legacy_parity();

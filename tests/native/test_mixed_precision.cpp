@@ -184,6 +184,73 @@ void verify_mode(bool unrestricted) {
   vibeqc::scf::destroy_rhf_cuda_bucket_plan(plan);
 }
 
+/**
+ * The public \p auto policy must be budget-gated and must finish with an exact
+ * FP64 target refinement: the reported convergence, energy, and forces come from
+ * continued FP64 iterations after the mixed stage, and the provenance records
+ * the certified reserved budget and the refinement cost. A refusal must keep the
+ * pure FP64 operator and report it honestly.
+ */
+void verify_public_auto_policy(bool unrestricted) {
+  const vibeqc::core::System system = mixed_precision_system(unrestricted);
+  vibeqc::scf::ScfOptions options;
+  options.max_iterations = 100;
+  options.energy_tolerance = 1.0e-10;
+  options.density_tolerance = 1.0e-8;
+  options.screening_tolerance = 1.0e-12;
+  setenv("VIBEQC_AOT_FOCK_SHELL_CLASSES", "dpps", 1);
+  unsetenv("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD");
+  vibeqc::scf::CudaRhfBucketPlan* plan = nullptr;
+  const std::vector<vibeqc::core::System> systems{system};
+  const std::vector<const std::vector<double>*> cold_density{nullptr};
+  const auto run_cached = [&](const std::vector<const std::vector<double>*>& dm0) {
+    return unrestricted
+               ? vibeqc::scf::run_uhf_cuda_bucket_cached(&plan, systems, options, dm0, 0, false)
+               : vibeqc::scf::run_rhf_cuda_bucket_cached(&plan, systems, options, dm0, 0, false);
+  };
+  options.precision_mode = VIBEQC_PRECISION_FP64;
+  const std::vector<vibeqc::scf::RhfBucketItem> fp64 = run_cached(cold_density);
+  require(fp64.size() == 1 && fp64[0].status == VIBEQC_STATUS_SUCCESS && fp64[0].scf.converged,
+          "public FP64 policy did not converge");
+  require(fp64[0].scf.precision.requested_mode == VIBEQC_PRECISION_FP64 &&
+              fp64[0].scf.precision.effective_bits == 64U &&
+              !fp64[0].scf.precision.strict_refinement_applied &&
+              fp64[0].scf.precision.refinement_iterations == 0U &&
+              fp64[0].scf.precision.mixed_precision_reserved_error == 0.0,
+          "explicit FP64 provenance is not honest");
+  // Changing the policy on a live prepared bucket must rebuild instead of
+  // replaying the FP64 plan.
+  const std::vector<const std::vector<double>*> warm_density{&fp64[0].scf.density};
+  options.precision_mode = VIBEQC_PRECISION_AUTO;
+  const std::vector<vibeqc::scf::RhfBucketItem> automatic = run_cached(warm_density);
+  require(automatic.size() == 1 && automatic[0].status == VIBEQC_STATUS_SUCCESS &&
+              automatic[0].scf.converged,
+          "public auto policy did not converge");
+  const vibeqc::scf::PrecisionProvenance& provenance = automatic[0].scf.precision;
+  require(provenance.requested_mode == VIBEQC_PRECISION_AUTO,
+          "auto request is not reported as auto");
+  if (provenance.effective_bits == 32U) {
+    // The budget certified a mixed cutoff, so the exact FP64 refinement must
+    // have continued the run: convergence is a target-operator statement.
+    require(provenance.strict_refinement_applied, "mixed run skipped the FP64 refinement");
+    require(provenance.refinement_iterations >= 1U, "mixed run reported no refinement iterations");
+    require(provenance.mixed_precision_fock_threshold > 0.0, "mixed run resolved no cutoff");
+    require(provenance.mixed_precision_reserved_error > 0.0,
+            "mixed run reported no reserved error budget");
+  } else {
+    require(provenance.effective_bits == 64U && !provenance.strict_refinement_applied &&
+                provenance.refinement_iterations == 0U &&
+                provenance.mixed_precision_reserved_error == 0.0,
+            "FP64 fallback provenance is not honest");
+  }
+  // The refinement must not change the converged observable: the auto solve
+  // starts from the FP64 density, so the refined result must still agree.
+  require(std::abs(automatic[0].scf.energy - fp64[0].scf.energy) < 2.0e-8,
+          "public auto energy diverged from FP64");
+  require(maximum_difference(automatic[0].scf.forces, fp64[0].scf.forces) < 2.0e-7,
+          "public auto forces diverged from FP64");
+  vibeqc::scf::destroy_rhf_cuda_bucket_plan(plan);
+}
 }  // namespace
 
 int main() {
@@ -195,7 +262,9 @@ int main() {
     }
     verify_mode(false);
     verify_mode(true);
-    std::cout << "validated RHF/UHF mixed direct-Fock regression\n";
+    verify_public_auto_policy(false);
+    verify_public_auto_policy(true);
+    std::cout << "validated RHF/UHF mixed direct-Fock regression and public auto policy\n";
 #else
     std::cout << "mixed-precision checks skipped: CUDA disabled\n";
 #endif
