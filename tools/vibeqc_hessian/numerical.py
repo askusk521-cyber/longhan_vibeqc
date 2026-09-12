@@ -1,0 +1,161 @@
+"""Numerical Hessian oracle for the analytic HF Hessian work (issue #180).
+
+This is the step-2 oracle of slice A: a finite-difference-of-analytic-gradient
+Hessian. It is deliberately independent of the analytic assembly in step 4 in
+the useful direction -- it consumes only the analytic first derivatives, so a
+sign or factor error shared between the skeleton and the relaxation assembly
+cannot hide from it.
+
+The discipline mirrors
+:func:`vibeqc_compiler.common.evidence.finite_difference`:
+
+* at least three distinct positive step sizes, and every one is reported --
+  there is no best-step gate and no post-hoc selection;
+* the method policy is frozen through a JSON round-trip before each sample so an
+  evaluator cannot silently retune itself between steps;
+* the analytic input is the energy *gradient*, never the force.
+
+A Hessian produced here is a **numerical Hessian**. It is an oracle and an
+early utility; it does not constitute analytic Hessian support.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+
+import numpy as np
+from vibeqc.profiles import canonical_hash
+
+__all__ = [
+    "forces_to_gradient",
+    "hessian_difference",
+    "hessian_symmetry_error",
+    "hessian_translation_error",
+    "numerical_hessian",
+]
+
+DEFAULT_STEPS = (1e-2, 3e-3, 1e-3)
+
+
+def forces_to_gradient(forces):
+    """Convert native forces (``-dE/dR``) to the energy gradient (``dE/dR``).
+
+    Native VibeQC forces are the negative energy derivative. The numerical
+    oracle compares against gradients, so the sign conversion happens here, at
+    one named boundary, rather than being applied implicitly by callers.
+    """
+    return -np.asarray(forces, dtype=np.float64)
+
+
+def hessian_symmetry_error(hessian) -> float:
+    """Return the largest raw asymmetry, ``max |H - H^T|``.
+
+    This is evaluated on the raw assembled matrix. Any later presentation
+    symmetrization would hide exactly the errors this check exists to expose, so
+    callers must assert on the unsymmetrized array.
+    """
+    values = np.asarray(hessian, dtype=np.float64)
+    return float(np.max(np.abs(values - values.transpose(2, 3, 0, 1))))
+
+
+def hessian_translation_error(hessian) -> float:
+    """Return ``max |sum_a H[a, c, b, d]|``, the translation zero-mode residual.
+
+    Translational invariance of the energy gives ``sum_a dE/dR[a, c] = 0`` for
+    every Cartesian direction ``c``. Differentiating once more with respect to
+    ``R[b, d]`` gives the identity checked here. It holds for every geometry,
+    stationary or not, so it needs no stationarity condition.
+    """
+    values = np.asarray(hessian, dtype=np.float64)
+    return float(np.max(np.abs(values.sum(axis=0))))
+
+
+def hessian_difference(actual, reference) -> dict:
+    """Report elementwise statistics of ``actual - reference``.
+
+    Both arrays are ``(natom, 3, natom, 3)``. No tolerance is applied and no
+    element is filtered out: the full error distribution is returned so a
+    caller cannot promote on a favourable subset.
+    """
+    difference = np.asarray(actual, dtype=np.float64) - np.asarray(
+        reference, dtype=np.float64
+    )
+    error = np.abs(difference)
+    return {
+        "max_absolute_error": float(error.max()) if error.size else 0.0,
+        "rms_error": float(np.sqrt(np.mean(difference**2))) if difference.size else 0.0,
+        "shape": list(difference.shape),
+    }
+
+
+def _gradient_at(gradient, coordinates, policy: str):
+    """Evaluate the gradient under a freshly decoded copy of the frozen policy.
+
+    Decoding a new copy per evaluation is what prevents a stateful evaluator
+    from adapting its settings between the plus and minus displacements, or
+    between step sizes.
+    """
+    return np.asarray(gradient(coordinates, json.loads(policy)), dtype=np.float64)
+
+
+def numerical_hessian(
+    gradient, coordinates, *, settings: dict, steps=DEFAULT_STEPS
+) -> dict:
+    """Report the whole central-difference Hessian curve under one frozen policy.
+
+    ``gradient(coordinates, settings)`` must return the analytic energy gradient
+    ``dE/dR`` with shape ``(natom, 3)``. Use :func:`forces_to_gradient` if the
+    available endpoint reports forces.
+
+    The returned Hessian is indexed ``H[a, c, b, d] = d(grad[b, d]) / d(R[a, c])``
+    with shape ``(natom, 3, natom, 3)`` -- the same axis order the analytic
+    assembly reports, so the two can be compared without reshaping.
+
+    Every requested step size is evaluated and recorded. The result carries no
+    pass/fail verdict: choosing a step, or a tolerance, is the caller's
+    acceptance decision and stays visible at the call site.
+    """
+    step_sizes = tuple(float(step) for step in steps)
+    if len(set(step_sizes)) < 3 or any(
+        not math.isfinite(step) or step <= 0 for step in step_sizes
+    ):
+        raise ValueError("at least three distinct positive finite step sizes required")
+
+    xyz = np.asarray(coordinates, dtype=np.float64)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError(f"coordinates must have shape (natom, 3), got {xyz.shape}")
+    if not np.isfinite(xyz).all():
+        raise ValueError("coordinates must be finite")
+
+    policy = json.dumps(settings, allow_nan=False)
+    samples = []
+    for step in step_sizes:
+        hessian = np.empty(xyz.shape + xyz.shape, dtype=np.float64)
+        evaluations = 0
+        for index in np.ndindex(xyz.shape):
+            plus, minus = xyz.copy(), xyz.copy()
+            plus[index] += step
+            minus[index] -= step
+            hessian[index] = (
+                _gradient_at(gradient, plus, policy)
+                - _gradient_at(gradient, minus, policy)
+            ) / (2.0 * step)
+            evaluations += 2
+        samples.append(
+            {
+                "step_bohr": step,
+                "hessian": hessian.tolist(),
+                "gradient_evaluations": evaluations,
+                "symmetry_error": hessian_symmetry_error(hessian),
+                "translation_error": hessian_translation_error(hessian),
+                "max_absolute": float(np.max(np.abs(hessian))) if hessian.size else 0.0,
+            }
+        )
+
+    return {
+        "settings": settings,
+        "settings_hash": canonical_hash(settings),
+        "coordinates": xyz.tolist(),
+        "samples": samples,
+    }
