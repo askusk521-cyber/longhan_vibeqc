@@ -275,15 +275,9 @@
           "stop": "__device__ void boys_values("
         },
         {
-          "reason": "State, instrumentation, generic dense eigensolvers and matrix products.",
+          "reason": "Direct class timing instrumentation retained after common SCF kernel extraction.",
           "role": "runtime",
-          "start": "__global__ void initialize_state_kernel",
-          "stop": "__global__ void build_density_kernel"
-        },
-        {
-          "reason": "Validated warm-density copy/normalization and state handling.",
-          "role": "runtime",
-          "start": "__device__ double warm_density_block_sum",
+          "start": "__global__ void start_bounded_fock_class_timer_kernel",
           "stop": "__global__ void build_fock_kernel"
         },
         {
@@ -305,12 +299,6 @@
           "stop": "__device__ __forceinline__ void accumulate_direct_fock_integral"
         },
         {
-          "reason": "Matrix initialization and public/direct basis transforms.",
-          "role": "runtime",
-          "start": "__global__ void initialize_direct_fock_kernel",
-          "stop": "__device__ __forceinline__ void contract_fock_direct_quartet_subtile"
-        },
-        {
           "reason": "Component-index mapping.",
           "role": "runtime",
           "start": "__device__ __forceinline__ unsigned order2_component_index",
@@ -320,24 +308,6 @@
           "reason": "Queue/launch wrappers around separately owned scientific contractions.",
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
-          "stop": "__global__ void subtract_matrix_batches_kernel"
-        },
-        {
-          "reason": "Generic matrix residual and DIIS operations.",
-          "role": "runtime",
-          "start": "__global__ void subtract_matrix_batches_kernel",
-          "stop": "__global__ void compute_energy_kernel"
-        },
-        {
-          "reason": "Convergence controls and iteration-state routing.",
-          "role": "runtime",
-          "start": "__device__ __forceinline__ double direct_fock_energy_roundoff_guard",
-          "stop": "__global__ void build_weighted_density_kernel"
-        },
-        {
-          "reason": "Generic spin-matrix addition.",
-          "role": "runtime",
-          "start": "__global__ void sum_uhf_spin_matrices_kernel",
           "stop": "__global__ void nuclear_force_kernel"
         },
         {
@@ -527,6 +497,110 @@
       "role": "runtime",
       "subsystem": "scf_tensor",
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/basis_transform_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/basis_transform_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_convergence_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": [
+        {
+          "start": "__global__ void compute_energy_kernel",
+          "stop": "__device__ __forceinline__ double direct_fock_energy_roundoff_guard",
+          "role": "scientific",
+          "reason": "Existing RHF/UHF electronic energy contractions; convergence routing remains generic runtime."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/scf_convergence_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_density_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": [
+        {
+          "start": "__global__ void build_density_kernel",
+          "stop": "__device__ double warm_density_block_sum",
+          "role": "scientific",
+          "reason": "Existing occupied-orbital density and symmetry-breaking frontier guess equations."
+        },
+        {
+          "start": "__global__ void build_weighted_density_kernel",
+          "stop": "__global__ void sum_uhf_spin_matrices_kernel",
+          "role": "scientific",
+          "reason": "Existing energy-weighted density used by stationary Pulay forces."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/scf_density_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_diis_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_diis_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_matrix_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_matrix_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_state_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scf_state_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
       "regions": []
     }
   ],

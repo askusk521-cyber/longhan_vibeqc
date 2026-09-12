@@ -64,6 +64,7 @@ CUDA_ALLOWED = {
         "scf/cuda/arena.",
         "scf/cuda/checked_layout.",
         "scf/cuda/direct_constants.",
+        "scf/cuda/scf_constants.",
         "scf/cuda/direct_metadata.",
         "scf/cuda/packed_basis.",
         "scf/cuda/topology.",
@@ -146,6 +147,18 @@ CUDA_MODULES["cuda_df_kernels"] = (
 CUDA_ALLOWED["cuda_df_kernels"] = tuple(
     "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_df_kernels"]
 )
+CUDA_MODULES["cuda_scf_kernels"] = (
+    "scf_constants",
+    "scf_state_kernels",
+    "scf_matrix_kernels",
+    "scf_density_kernels",
+    "scf_diis_kernels",
+    "scf_convergence_kernels",
+    "basis_transform_kernels",
+)
+CUDA_ALLOWED["cuda_scf_kernels"] = tuple(
+    "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_scf_kernels"]
+) + ("scf/cuda/matrix_index.",)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 

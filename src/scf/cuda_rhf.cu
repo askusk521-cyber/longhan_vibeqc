@@ -26,6 +26,7 @@
 #include "runtime/resource_usage.hpp"
 #include "scf/aot_shell_registry.hpp"
 #include "scf/cuda/arena.hpp"
+#include "scf/cuda/basis_transform_kernels.hpp"
 #include "scf/cuda/checked_layout.hpp"
 #include "scf/cuda/device_timer.cuh"
 #include "scf/cuda/direct_constants.hpp"
@@ -38,6 +39,11 @@
 #include "scf/cuda/packed_basis.hpp"
 #include "scf/cuda/queue_plan.hpp"
 #include "scf/cuda/rhf_policy.hpp"
+#include "scf/cuda/scf_convergence_kernels.hpp"
+#include "scf/cuda/scf_density_kernels.hpp"
+#include "scf/cuda/scf_diis_kernels.hpp"
+#include "scf/cuda/scf_matrix_kernels.hpp"
+#include "scf/cuda/scf_state_kernels.hpp"
 #include "scf/cuda/topology.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
@@ -5678,46 +5684,6 @@ __global__ void build_nuclear_repulsion_kernel(DeviceBatch batch, double* nuclea
   nuclear_repulsion[system] = result;
 }
 
-__global__ void initialize_state_kernel(std::int32_t batch_size, bool reuse_previous_energy,
-                                        const double* energy, std::uint8_t* active,
-                                        std::uint8_t* converged, std::uint8_t* failed,
-                                        std::uint32_t* iterations, double* previous_energy,
-                                        double* energy_change, double* density_rms,
-                                        std::uint32_t* diis_count, std::uint32_t* diis_head) {
-  const std::int32_t system =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  if (system >= batch_size) return;
-  active[system] = 1;
-  converged[system] = 0;
-  failed[system] = 0;
-  iterations[system] = 0;
-  previous_energy[system] = reuse_previous_energy ? energy[system] : CUDART_INF;
-  energy_change[system] = CUDART_INF;
-  density_rms[system] = CUDART_INF;
-  diis_count[system] = 0;
-  diis_head[system] = 0;
-}
-
-__global__ void copy_matrix_kernel(std::size_t elements, const double* source,
-                                   double* destination) {
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element < elements) destination[element] = source[element];
-}
-
-/** Copy complete per-system matrices selected by a device-resident mask. */
-__global__ void copy_selected_matrices_kernel(std::int32_t batch_size,
-                                              std::int32_t matrices_per_system, std::int32_t nbf,
-                                              const std::uint8_t* selected, const double* source,
-                                              double* destination) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t matrix_count = static_cast<std::size_t>(batch_size) * matrices_per_system;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= matrix_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(matrices_per_system);
-  if (selected[system] != 0) destination[element] = source[element];
-}
-
 /** Record a stream-ordered timestamp immediately before one Fock class. */
 __global__ void start_bounded_fock_class_timer_kernel(unsigned shell_class, std::uint64_t* starts) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
@@ -5733,324 +5699,6 @@ __global__ void finish_bounded_fock_class_timer_kernel(unsigned shell_class,
   const std::uint64_t stop = globaltimer_nanoseconds();
   elapsed[shell_class] += stop - starts[shell_class];
   ++launches[shell_class];
-}
-
-__global__ void inspect_solver_kernel(std::int32_t batch_size, const int* info,
-                                      std::uint8_t* active, std::uint8_t* failed,
-                                      std::uint8_t* converged) {
-  const std::int32_t system =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  // An inactive state has already converged or failed. Provider writes to its
-  // fixed-batch info slot must never overwrite that terminal status.
-  if (system >= batch_size || active[system] == 0 || info[system] == 0) return;
-  active[system] = 0;
-  failed[system] = 1;
-  converged[system] = 0;
-}
-
-__global__ void expand_spin_active_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                          const std::uint8_t* active, std::uint8_t* spin_active) {
-  const std::int32_t state =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  const std::int32_t state_count = batch_size * spin_count;
-  if (state < state_count) spin_active[state] = active[state / spin_count];
-}
-
-__global__ void inspect_spin_solver_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                           const int* info, std::uint8_t* active,
-                                           std::uint8_t* failed, std::uint8_t* converged) {
-  const std::int32_t system =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  if (system >= batch_size || active[system] == 0) return;
-  for (std::int32_t spin = 0; spin < spin_count; ++spin) {
-    if (info[system * spin_count + spin] != 0) {
-      active[system] = 0;
-      failed[system] = 1;
-      converged[system] = 0;
-      return;
-    }
-  }
-}
-
-__global__ void build_orthogonalizer_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                            const double* eigenvectors, const double* eigenvalues,
-                                            const std::uint8_t* active, double* orthogonalizer,
-                                            std::uint8_t* failed) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch_size) * matrix_size) return;
-  const std::int32_t system = static_cast<std::int32_t>(element / matrix_size);
-  if (active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const double* vectors = eigenvectors + static_cast<std::size_t>(system) * matrix_size;
-  const double* values = eigenvalues + static_cast<std::size_t>(system) * n;
-  double result = 0.0;
-  for (std::size_t orbital = 0; orbital < n; ++orbital) {
-    if (!(values[orbital] > 1.0e-10)) {
-      failed[system] = 1;
-      return;
-    }
-    result += vectors[matrix_index(row, orbital, n)] * vectors[matrix_index(column, orbital, n)] /
-              sqrt(values[orbital]);
-  }
-  orthogonalizer[element] = result;
-}
-
-__global__ void matrix_product_kernel(std::int32_t batch_size, std::int32_t nbf, const double* left,
-                                      bool transpose_left, const double* right,
-                                      const std::uint8_t* active, double* output) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch_size) * matrix_size) return;
-  const std::int32_t system = static_cast<std::int32_t>(element / matrix_size);
-  if (active != nullptr && active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix_size;
-  double value = 0.0;
-  for (std::size_t k = 0; k < n; ++k) {
-    const std::size_t left_index =
-        transpose_left ? matrix_index(k, row, n) : matrix_index(row, k, n);
-    value += left[offset + left_index] * right[offset + matrix_index(k, column, n)];
-  }
-  output[element] = value;
-}
-
-__global__ void broadcast_spin_matrix_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                             std::int32_t nbf, const double* physical_matrices,
-                                             const std::uint8_t* active, double* spin_matrices) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t spin_elements = static_cast<std::size_t>(batch_size) * spin_count * matrix_size;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= spin_elements) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active != nullptr && active[system] == 0) return;
-  spin_matrices[element] = physical_matrices[system * matrix_size + element % matrix_size];
-}
-
-__global__ void spin_matrix_product_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                           std::int32_t nbf, const double* left, bool left_is_spin,
-                                           bool transpose_left, const double* right,
-                                           bool right_is_spin, const std::uint8_t* active,
-                                           double* output) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * spin_count;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active != nullptr && active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const std::size_t left_offset = (left_is_spin ? state : system) * matrix_size;
-  const std::size_t right_offset = (right_is_spin ? state : system) * matrix_size;
-  double value = 0.0;
-  for (std::size_t k = 0; k < n; ++k) {
-    const std::size_t left_index =
-        transpose_left ? matrix_index(k, row, n) : matrix_index(row, k, n);
-    value += left[left_offset + left_index] * right[right_offset + matrix_index(k, column, n)];
-  }
-  output[element] = value;
-}
-
-__global__ void build_density_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                     const std::int32_t* occupied, const double* coefficients,
-                                     const std::uint8_t* active, double* density) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch_size) * matrix_size) return;
-  const std::int32_t system = static_cast<std::int32_t>(element / matrix_size);
-  if (active != nullptr && active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix_size;
-  double value = 0.0;
-  for (std::int32_t orbital = 0; orbital < occupied[system]; ++orbital) {
-    value += 2.0 * coefficients[offset + matrix_index(row, orbital, n)] *
-             coefficients[offset + matrix_index(column, orbital, n)];
-  }
-  density[element] = value;
-}
-
-__global__ void build_spin_density_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                          std::int32_t nbf, const std::int32_t* occupied,
-                                          const double* coefficients, const std::uint8_t* active,
-                                          double* density) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * spin_count;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active != nullptr && active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const std::size_t offset = state * matrix_size;
-  double value = 0.0;
-  for (std::int32_t orbital = 0; orbital < occupied[state]; ++orbital) {
-    value += coefficients[offset + matrix_index(row, orbital, n)] *
-             coefficients[offset + matrix_index(column, orbital, n)];
-  }
-  density[element] = value;
-}
-
-__global__ void mix_open_shell_guess_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                            const std::int32_t* occupied,
-                                            const std::uint8_t* active, double* coefficients) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch_size) * n) return;
-  const std::size_t system = element / n;
-  if (active != nullptr && active[system] == 0) return;
-  const std::size_t row = element % n;
-  const std::int32_t alpha_occupied = occupied[system * 2];
-  const std::int32_t beta_occupied = occupied[system * 2 + 1];
-  if (alpha_occupied == beta_occupied || beta_occupied <= 0 || beta_occupied >= nbf) {
-    return;
-  }
-
-  // Match the CPU open-shell cold guess: preserve the beta orbital metric
-  // while breaking exact spatial symmetry between its frontier orbitals.
-  constexpr double cosine = 0.7071067811865476;
-  constexpr double sine = 0.7071067811865476;
-  const std::size_t matrix_size = n * n;
-  const std::size_t offset = (system * 2 + 1) * matrix_size;
-  const std::size_t occupied_orbital = static_cast<std::size_t>(beta_occupied - 1);
-  const std::size_t virtual_orbital = static_cast<std::size_t>(beta_occupied);
-  const double occupied_value = coefficients[offset + matrix_index(row, occupied_orbital, n)];
-  const double virtual_value = coefficients[offset + matrix_index(row, virtual_orbital, n)];
-  coefficients[offset + matrix_index(row, occupied_orbital, n)] =
-      cosine * occupied_value + sine * virtual_value;
-  coefficients[offset + matrix_index(row, virtual_orbital, n)] =
-      -sine * occupied_value + cosine * virtual_value;
-}
-
-template <unsigned BlockThreads>
-__device__ double warm_density_block_sum(double value, double* warp_sums) {
-  static_assert(BlockThreads % 32 == 0);
-  constexpr unsigned kWarpWidth = 32;
-  const unsigned lane = threadIdx.x % kWarpWidth;
-  const unsigned warp = threadIdx.x / kWarpWidth;
-  for (unsigned delta = kWarpWidth / 2; delta != 0; delta >>= 1) {
-    value += __shfl_down_sync(0xffffffffU, value, delta);
-  }
-  if (lane == 0) warp_sums[warp] = value;
-  __syncthreads();
-
-  // The first warp reduces the block's partial sums. All lanes participate in
-  // the shuffle so the full mask remains valid; unused lanes contribute 0.
-  value = warp == 0 && lane < BlockThreads / kWarpWidth ? warp_sums[lane] : 0.0;
-  if (warp == 0) {
-    for (unsigned delta = kWarpWidth / 2; delta != 0; delta >>= 1) {
-      value += __shfl_down_sync(0xffffffffU, value, delta);
-    }
-  }
-  if (threadIdx.x == 0) warp_sums[0] = value;
-  __syncthreads();
-  return warp_sums[0];
-}
-
-__global__ void apply_warm_density_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                          const std::int32_t* occupied,
-                                          const std::uint8_t* warm_mask, const double* warm_density,
-                                          const double* overlap, double* density,
-                                          std::uint8_t* warm_invalid) {
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || warm_mask[system] == 0) return;
-  __shared__ double warp_sums[kWarmDensityThreads / 32];
-  __shared__ double scale;
-  __shared__ int valid_trace;
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix_size;
-  double trace = 0.0;
-  for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-    const std::size_t row = element % n;
-    const std::size_t column = element / n;
-    const std::size_t transpose = matrix_index(column, row, n);
-    const double symmetric =
-        0.5 * (warm_density[offset + element] + warm_density[offset + transpose]);
-    density[offset + element] = symmetric;
-    trace += symmetric * overlap[offset + transpose];
-  }
-  trace = warm_density_block_sum<kWarmDensityThreads>(trace, warp_sums);
-  if (threadIdx.x == 0) {
-    valid_trace = isfinite(trace) && trace > 0.0;
-    warm_invalid[system] = valid_trace ? 0 : 1;
-    scale = valid_trace ? 2.0 * occupied[system] / trace : 0.0;
-  }
-  __syncthreads();
-  if (valid_trace != 0) {
-    for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-      density[offset + element] *= scale;
-    }
-  }
-}
-
-__global__ void apply_uhf_warm_density_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                              const std::int32_t* occupied,
-                                              const std::uint8_t* warm_mask,
-                                              const double* warm_density, const double* overlap,
-                                              double* density, std::uint8_t* warm_invalid) {
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || warm_mask[system] == 0) return;
-  __shared__ double warp_sums[kWarmDensityThreads / 32];
-  __shared__ double scale;
-  __shared__ int valid_trace;
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t overlap_offset = static_cast<std::size_t>(system) * matrix_size;
-  if (threadIdx.x == 0) warm_invalid[system] = 0;
-  __syncthreads();
-  for (std::int32_t spin = 0; spin < 2; ++spin) {
-    const std::size_t state = static_cast<std::size_t>(system) * 2 + spin;
-    const std::size_t offset = state * matrix_size;
-    const double target = static_cast<double>(occupied[state]);
-    if (target == 0.0) {
-      for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-        density[offset + element] = 0.0;
-      }
-      __syncthreads();
-      continue;
-    }
-    double trace = 0.0;
-    for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-      const std::size_t row = element % n;
-      const std::size_t column = element / n;
-      const std::size_t transpose = matrix_index(column, row, n);
-      const double symmetric =
-          0.5 * (warm_density[offset + element] + warm_density[offset + transpose]);
-      density[offset + element] = symmetric;
-      trace += symmetric * overlap[overlap_offset + transpose];
-    }
-    trace = warm_density_block_sum<kWarmDensityThreads>(trace, warp_sums);
-    if (threadIdx.x == 0) {
-      valid_trace = isfinite(trace) && trace > 0.0;
-      scale = valid_trace ? target / trace : 0.0;
-      if (valid_trace == 0) warm_invalid[system] = 1;
-    }
-    __syncthreads();
-    if (valid_trace != 0) {
-      for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-        density[offset + element] *= scale;
-      }
-    }
-    // Both spin passes reuse the same reduction and scalar slots.
-    __syncthreads();
-  }
 }
 
 __global__ void build_fock_kernel(std::int32_t batch_size, std::int32_t nbf, const double* hcore,
@@ -7412,144 +7060,6 @@ __device__ __forceinline__ void accumulate_direct_fock_integral(
   }
 }
 
-__global__ void initialize_direct_fock_kernel(std::int32_t batch_size,
-                                              std::int32_t matrices_per_system, std::int32_t nbf,
-                                              const double* hcore, const std::uint8_t* active,
-                                              double* fock) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t matrix_count = static_cast<std::size_t>(batch_size) * matrices_per_system;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= matrix_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(matrices_per_system);
-  if (active != nullptr && active[system] == 0) return;
-  fock[element] = hcore[system * matrix_size + element % matrix_size];
-}
-
-__global__ void clear_active_matrices_kernel(std::int32_t batch_size,
-                                             std::int32_t matrices_per_system, std::int32_t nbf,
-                                             const std::uint8_t* active, double* matrices) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t matrix_count = static_cast<std::size_t>(batch_size) * matrices_per_system;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= matrix_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(matrices_per_system);
-  if (active[system] != 0) matrices[element] = 0.0;
-}
-
-/** First stage of D_cart = C^T D_public C. */
-__global__ void transform_density_to_direct_right_kernel(
-    std::int32_t batch_size, std::int32_t spin_count, std::int32_t nbf, std::int32_t direct_nbf,
-    const double* transform, const double* density, const std::uint8_t* active, double* temporary) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t direct_n = static_cast<std::size_t>(direct_nbf);
-  const std::size_t rectangular_size = n * direct_n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * spin_count;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * rectangular_size) return;
-  const std::size_t state = element / rectangular_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active[system] == 0) return;
-  const std::size_t local = element % rectangular_size;
-  const std::size_t row = local % n;
-  const std::size_t direct_column = local / n;
-  const std::size_t density_offset = state * n * n;
-  const std::size_t transform_offset = system * rectangular_size;
-  double value = 0.0;
-  for (std::size_t column = 0; column < n; ++column) {
-    value += density[density_offset + matrix_index(row, column, n)] *
-             transform[transform_offset + column + direct_column * n];
-  }
-  temporary[element] = value;
-}
-
-/** Second stage of D_cart = C^T (D_public C). */
-__global__ void transform_density_to_direct_left_kernel(
-    std::int32_t batch_size, std::int32_t spin_count, std::int32_t nbf, std::int32_t direct_nbf,
-    const double* transform, const double* temporary, const std::uint8_t* active,
-    double* direct_density) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t direct_n = static_cast<std::size_t>(direct_nbf);
-  const std::size_t matrix_size = direct_n * direct_n;
-  const std::size_t rectangular_size = n * direct_n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * spin_count;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t direct_row = local % direct_n;
-  const std::size_t direct_column = local / direct_n;
-  const std::size_t transform_offset = system * rectangular_size;
-  const std::size_t temporary_offset = state * rectangular_size;
-  double value = 0.0;
-  for (std::size_t row = 0; row < n; ++row) {
-    value += transform[transform_offset + row + direct_row * n] *
-             temporary[temporary_offset + row + direct_column * n];
-  }
-  direct_density[element] = value;
-}
-
-/** First stage of F_public = C F_cart C^T. */
-__global__ void transform_direct_fock_left_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                                  std::int32_t nbf, std::int32_t direct_nbf,
-                                                  const double* transform,
-                                                  const double* direct_fock,
-                                                  const std::uint8_t* active, double* temporary) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t direct_n = static_cast<std::size_t>(direct_nbf);
-  const std::size_t direct_matrix_size = direct_n * direct_n;
-  const std::size_t rectangular_size = n * direct_n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * spin_count;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * rectangular_size) return;
-  const std::size_t state = element / rectangular_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active[system] == 0) return;
-  const std::size_t local = element % rectangular_size;
-  const std::size_t public_row = local % n;
-  const std::size_t direct_column = local / n;
-  const std::size_t transform_offset = system * rectangular_size;
-  const std::size_t direct_offset = state * direct_matrix_size;
-  double value = 0.0;
-  for (std::size_t direct_row = 0; direct_row < direct_n; ++direct_row) {
-    value += transform[transform_offset + public_row + direct_row * n] *
-             direct_fock[direct_offset + matrix_index(direct_row, direct_column, direct_n)];
-  }
-  temporary[element] = value;
-}
-
-/** Finish F_public = (C F_cart) C^T and restore the one-electron matrix. */
-__global__ void transform_direct_fock_right_kernel(std::int32_t batch_size, std::int32_t spin_count,
-                                                   std::int32_t nbf, std::int32_t direct_nbf,
-                                                   const double* transform, const double* temporary,
-                                                   const double* hcore, const std::uint8_t* active,
-                                                   double* fock) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t direct_n = static_cast<std::size_t>(direct_nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t rectangular_size = n * direct_n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * spin_count;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(spin_count);
-  if (active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t public_row = local % n;
-  const std::size_t public_column = local / n;
-  const std::size_t transform_offset = system * rectangular_size;
-  const std::size_t temporary_offset = state * rectangular_size;
-  double value = hcore[system * matrix_size + local];
-  for (std::size_t direct_column = 0; direct_column < direct_n; ++direct_column) {
-    value += temporary[temporary_offset + public_row + direct_column * n] *
-             transform[transform_offset + public_column + direct_column * n];
-  }
-  fock[element] = value;
-}
-
 template <bool Unrestricted, unsigned AngularOrder, typename EvalScalar = double>
 __device__ __forceinline__ void contract_fock_direct_quartet_subtile(
     DeviceBatch batch, const std::uint32_t* active_shell_quartet_tile_count,
@@ -7996,493 +7506,6 @@ __global__ void build_fock_direct_quartet_persistent_kernel(
         schwarz_bounds, density, active, fock, generated_fock_shell_class_mask, active_subtile,
         threadIdx.x);
   }
-}
-
-/** Subtract the second GEMM product from the first in a batched matrix set. */
-__global__ void subtract_matrix_batches_kernel(std::int32_t batch_size,
-                                               std::int32_t matrices_per_system, std::int32_t nbf,
-                                               const double* subtract, const std::uint8_t* active,
-                                               double* minuend) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const std::size_t total = static_cast<std::size_t>(batch_size) *
-                            static_cast<std::size_t>(matrices_per_system) * matrix_size;
-  if (element >= total) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / static_cast<std::size_t>(matrices_per_system);
-  if (active != nullptr && active[system] == 0) return;
-  minuend[element] -= subtract[element];
-}
-
-__global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                   std::int32_t matrices_per_system, std::uint32_t history_capacity,
-                                   const double* fock, const double* residual,
-                                   const std::uint8_t* active, double* fock_history,
-                                   double* residual_history, double* linear_system,
-                                   double* coefficients, std::uint32_t* history_count,
-                                   std::uint32_t* history_head, double* effective_fock) {
-  // One warp owns one system.  History vectors and the O(N^2) residual-dot
-  // products are distributed across lanes, while the small dense DIIS solve
-  // remains in lane zero.  This preserves the original dot-product order for
-  // each B-matrix entry and avoids the old single-thread N^2 bottleneck.
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || active[system] == 0) return;
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t vector_size = matrix_size * static_cast<std::size_t>(matrices_per_system);
-  const std::size_t matrix_offset = static_cast<std::size_t>(system) * vector_size;
-  if (history_capacity < 2) {
-    for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
-      effective_fock[matrix_offset + element] = fock[matrix_offset + element];
-    }
-    return;
-  }
-
-  const std::size_t history_stride = static_cast<std::size_t>(history_capacity) * vector_size;
-  std::uint32_t slot = 0;
-  if (threadIdx.x == 0) slot = history_head[system];
-  slot = __shfl_sync(0xffffffffU, slot, 0);
-  const std::size_t slot_offset = static_cast<std::size_t>(system) * history_stride +
-                                  static_cast<std::size_t>(slot) * vector_size;
-  for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
-    fock_history[slot_offset + element] = fock[matrix_offset + element];
-    residual_history[slot_offset + element] = residual[matrix_offset + element];
-  }
-  __syncwarp();
-  std::uint32_t count = 0;
-  if (threadIdx.x == 0) {
-    count = history_count[system] < history_capacity ? history_count[system] + 1 : history_capacity;
-    history_count[system] = count;
-    history_head[system] = (slot + 1) % history_capacity;
-  }
-  count = __shfl_sync(0xffffffffU, count, 0);
-  if (count < 2) {
-    for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
-      effective_fock[matrix_offset + element] = fock[matrix_offset + element];
-    }
-    return;
-  }
-
-  const std::uint32_t dimension = count + 1;
-  const std::size_t system_stride =
-      static_cast<std::size_t>(history_capacity + 1) * (history_capacity + 1);
-  double* matrix = linear_system + static_cast<std::size_t>(system) * system_stride;
-  double* rhs = coefficients + static_cast<std::size_t>(system) * (history_capacity + 1);
-  const std::size_t linear_elements = static_cast<std::size_t>(dimension) * dimension;
-  for (std::size_t element = threadIdx.x; element < linear_elements; element += blockDim.x) {
-    matrix[element] = 0.0;
-  }
-  for (std::uint32_t row = threadIdx.x; row < dimension; row += blockDim.x) {
-    rhs[row] = row == count ? -1.0 : 0.0;
-  }
-  __syncwarp();
-  const std::size_t dot_count = static_cast<std::size_t>(count) * count;
-  for (std::size_t pair = threadIdx.x; pair < dot_count; pair += blockDim.x) {
-    const std::uint32_t row = static_cast<std::uint32_t>(pair / count);
-    const std::uint32_t column = static_cast<std::uint32_t>(pair % count);
-    const std::size_t row_offset = static_cast<std::size_t>(system) * history_stride +
-                                   static_cast<std::size_t>(row) * vector_size;
-    const std::size_t column_offset = static_cast<std::size_t>(system) * history_stride +
-                                      static_cast<std::size_t>(column) * vector_size;
-    double dot = 0.0;
-    for (std::size_t element = 0; element < vector_size; ++element) {
-      dot += residual_history[row_offset + element] * residual_history[column_offset + element];
-    }
-    matrix[static_cast<std::size_t>(row) * dimension + column] = dot;
-  }
-  __syncwarp();
-  if (threadIdx.x == 0) {
-    for (std::uint32_t row = 0; row < count; ++row) {
-      matrix[static_cast<std::size_t>(row) * dimension + count] = -1.0;
-      matrix[static_cast<std::size_t>(count) * dimension + row] = -1.0;
-    }
-  }
-  __syncwarp();
-
-  int nonsingular = 1;
-  if (threadIdx.x == 0) {
-    for (std::uint32_t column = 0; column < dimension; ++column) {
-      std::uint32_t pivot = column;
-      for (std::uint32_t row = column + 1; row < dimension; ++row) {
-        if (fabs(matrix[static_cast<std::size_t>(row) * dimension + column]) >
-            fabs(matrix[static_cast<std::size_t>(pivot) * dimension + column])) {
-          pivot = row;
-        }
-      }
-      const double diagonal = matrix[static_cast<std::size_t>(pivot) * dimension + column];
-      if (fabs(diagonal) < 1.0e-14) {
-        nonsingular = 0;
-        break;
-      }
-      if (pivot != column) {
-        for (std::uint32_t item = 0; item < dimension; ++item) {
-          const std::size_t first = static_cast<std::size_t>(column) * dimension + item;
-          const std::size_t second = static_cast<std::size_t>(pivot) * dimension + item;
-          const double swap = matrix[first];
-          matrix[first] = matrix[second];
-          matrix[second] = swap;
-        }
-        const double swap = rhs[column];
-        rhs[column] = rhs[pivot];
-        rhs[pivot] = swap;
-      }
-      const double scale = matrix[static_cast<std::size_t>(column) * dimension + column];
-      for (std::uint32_t item = column; item < dimension; ++item) {
-        matrix[static_cast<std::size_t>(column) * dimension + item] /= scale;
-      }
-      rhs[column] /= scale;
-      for (std::uint32_t row = 0; row < dimension; ++row) {
-        if (row == column) continue;
-        const double factor = matrix[static_cast<std::size_t>(row) * dimension + column];
-        for (std::uint32_t item = column; item < dimension; ++item) {
-          matrix[static_cast<std::size_t>(row) * dimension + item] -=
-              factor * matrix[static_cast<std::size_t>(column) * dimension + item];
-        }
-        rhs[row] -= factor * rhs[column];
-      }
-    }
-  }
-  __syncwarp();
-  // The solve is lane-zero-only; broadcast its success flag before any lane
-  // decides whether it should form the extrapolated Fock matrix.
-  nonsingular = __shfl_sync(0xffffffffU, nonsingular, 0);
-
-  for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
-    double value = fock[matrix_offset + element];
-    if (nonsingular) {
-      value = 0.0;
-      for (std::uint32_t item = 0; item < count; ++item) {
-        const std::size_t item_offset = static_cast<std::size_t>(system) * history_stride +
-                                        static_cast<std::size_t>(item) * vector_size;
-        value += rhs[item] * fock_history[item_offset + element];
-      }
-    }
-    effective_fock[matrix_offset + element] = value;
-  }
-}
-
-__global__ void compute_energy_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                      const double* density, const double* hcore,
-                                      const double* fock, const double* nuclear_repulsion,
-                                      const std::uint8_t* active, double* energy) {
-  // One warp owns one system.  The previous one-thread-per-system mapping
-  // made the N^2 contraction and its global-memory latency completely serial
-  // at large AO counts; all callers launch exactly one 32-thread block per
-  // system, which also keeps this graph-capture-safe.
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || (active != nullptr && active[system] == 0)) return;
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix_size;
-  double value = 0.0;
-  for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-    value += 0.5 * density[offset + element] * (hcore[offset + element] + fock[offset + element]);
-  }
-  for (unsigned delta = warpSize / 2; delta != 0; delta >>= 1) {
-    value += __shfl_down_sync(0xffffffffU, value, delta);
-  }
-  if (threadIdx.x == 0) energy[system] = nuclear_repulsion[system] + value;
-}
-
-__global__ void compute_uhf_energy_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                          const double* density, const double* hcore,
-                                          const double* fock, const double* nuclear_repulsion,
-                                          const std::uint8_t* active, double* energy) {
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || (active != nullptr && active[system] == 0)) return;
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t physical_offset = static_cast<std::size_t>(system) * matrix_size;
-  const std::size_t alpha_offset = static_cast<std::size_t>(system) * 2 * matrix_size;
-  const std::size_t beta_offset = alpha_offset + matrix_size;
-  double value = 0.0;
-  for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-    value += 0.5 * density[alpha_offset + element] *
-             (hcore[physical_offset + element] + fock[alpha_offset + element]);
-    value += 0.5 * density[beta_offset + element] *
-             (hcore[physical_offset + element] + fock[beta_offset + element]);
-  }
-  for (unsigned delta = warpSize / 2; delta != 0; delta >>= 1) {
-    value += __shfl_down_sync(0xffffffffU, value, delta);
-  }
-  if (threadIdx.x == 0) energy[system] = nuclear_repulsion[system] + value;
-}
-
-/** Comparison guard for the nondeterministic FP64 direct-Fock reduction. */
-__device__ __forceinline__ double direct_fock_energy_roundoff_guard(bool enabled, double energy,
-                                                                    double previous_energy) {
-  if (!enabled || !isfinite(previous_energy)) return 0.0;
-  const double energy_scale = fmax(1.0, fmax(fabs(energy), fabs(previous_energy)));
-  return kDirectFockEnergyRoundoffFactor * kDoubleMachineEpsilon * energy_scale;
-}
-
-template <bool RetainConvergedDensity>
-__global__ void update_convergence_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                          double energy_tolerance, double density_tolerance,
-                                          bool guard_direct_fock_roundoff, const double* energy,
-                                          double* previous_energy, const double* next_density,
-                                          double* density, std::uint8_t* active,
-                                          std::uint8_t* converged, std::uint32_t* iterations,
-                                          double* energy_change, double* density_rms) {
-  // A warp owns one system.  This is intentionally a one-warp block because
-  // all scalar state transitions are performed by lane zero after the warp
-  // reduction; the matrix walk itself is spread over the 32 lanes.
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || active[system] == 0) return;
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix_size;
-  double square = 0.0;
-  for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-    const double delta = next_density[offset + element] - density[offset + element];
-    square += delta * delta;
-    if constexpr (!RetainConvergedDensity) {
-      density[offset + element] = next_density[offset + element];
-    }
-  }
-  for (unsigned delta = warpSize / 2; delta != 0; delta >>= 1) {
-    square += __shfl_down_sync(0xffffffffU, square, delta);
-  }
-  int copy_next_density = 0;
-  if (threadIdx.x == 0) {
-    const std::uint32_t iteration = iterations[system] + 1;
-    const bool has_energy_baseline = isfinite(previous_energy[system]);
-    const double change =
-        has_energy_baseline ? fabs(energy[system] - previous_energy[system]) : CUDART_INF;
-    const double roundoff_guard = direct_fock_energy_roundoff_guard(
-        guard_direct_fock_roundoff, energy[system], previous_energy[system]);
-    const double rms = sqrt(square / static_cast<double>(matrix_size));
-    iterations[system] = iteration;
-    energy_change[system] = change;
-    density_rms[system] = rms;
-    const bool did_converge = (iteration > 1 || has_energy_baseline) &&
-                              change < energy_tolerance + roundoff_guard && rms < density_tolerance;
-    if (did_converge) {
-      converged[system] = 1;
-      active[system] = 0;
-    } else {
-      previous_energy[system] = energy[system];
-      copy_next_density = 1;
-    }
-  }
-  copy_next_density = __shfl_sync(0xffffffffU, copy_next_density, 0);
-  if constexpr (RetainConvergedDensity) {
-    // The raw Fock matrix still corresponds to P_n. Advance to P_{n+1} only
-    // when another SCF iteration is required, so finalization can reuse the
-    // already computed F(P_n) after convergence instead of rebuilding it.
-    if (copy_next_density != 0) {
-      for (std::size_t element = threadIdx.x; element < matrix_size; element += blockDim.x) {
-        density[offset + element] = next_density[offset + element];
-      }
-    }
-  }
-}
-
-template <bool RetainConvergedDensity>
-__global__ void update_uhf_convergence_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                              double energy_tolerance, double density_tolerance,
-                                              bool guard_direct_fock_roundoff, const double* energy,
-                                              double* previous_energy, const double* next_density,
-                                              double* density, std::uint8_t* active,
-                                              std::uint8_t* converged, std::uint32_t* iterations,
-                                              double* energy_change, double* density_rms) {
-  // Keep UHF's two spin matrices under one warp so the convergence reduction
-  // and scalar state transition have the same ordering as RHF.
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch_size || active[system] == 0) return;
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t vector_size = 2 * matrix_size;
-  const std::size_t offset = static_cast<std::size_t>(system) * vector_size;
-  double square = 0.0;
-  for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
-    const double delta = next_density[offset + element] - density[offset + element];
-    square += delta * delta;
-    if constexpr (!RetainConvergedDensity) {
-      density[offset + element] = next_density[offset + element];
-    }
-  }
-  for (unsigned delta = warpSize / 2; delta != 0; delta >>= 1) {
-    square += __shfl_down_sync(0xffffffffU, square, delta);
-  }
-  int copy_next_density = 0;
-  if (threadIdx.x == 0) {
-    const bool has_energy_baseline = isfinite(previous_energy[system]);
-    const double change =
-        has_energy_baseline ? fabs(energy[system] - previous_energy[system]) : CUDART_INF;
-    const double roundoff_guard = direct_fock_energy_roundoff_guard(
-        guard_direct_fock_roundoff, energy[system], previous_energy[system]);
-    const double rms = sqrt(square / static_cast<double>(vector_size));
-    // Preserve the existing UHF baseline update semantics, including the
-    // converged iteration, because it is observable by the next warm replay.
-    previous_energy[system] = energy[system];
-    energy_change[system] = change;
-    density_rms[system] = rms;
-    const std::uint32_t iteration = ++iterations[system];
-    const bool did_converge = (iteration > 1 || has_energy_baseline) &&
-                              change < energy_tolerance + roundoff_guard && rms < density_tolerance;
-    if (did_converge) {
-      converged[system] = 1;
-      active[system] = 0;
-    } else {
-      copy_next_density = 1;
-    }
-  }
-  copy_next_density = __shfl_sync(0xffffffffU, copy_next_density, 0);
-  if constexpr (RetainConvergedDensity) {
-    // Preserve each system's spin densities paired with its raw alpha/beta
-    // Fock matrices until per-system finalization selects reuse or rebuild.
-    if (copy_next_density != 0) {
-      for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
-        density[offset + element] = next_density[offset + element];
-      }
-    }
-  }
-}
-
-__global__ void tail_rhf_loop_kernel(std::int32_t batch_size, std::uint32_t maximum_iterations,
-                                     const std::uint8_t* active, const std::uint32_t* iterations) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
-  bool continue_loop = false;
-  for (std::int32_t system = 0; system < batch_size; ++system) {
-    continue_loop =
-        continue_loop || (active[system] == 1 && iterations[system] < maximum_iterations);
-  }
-  if (!continue_loop) return;
-
-  // Re-launch the currently executing one-iteration Graph on its tail stream.
-  // This is the same device-resident early-stop pattern used by xTBloom: the
-  // host submits one Graph and never polls convergence between iterations.
-  const cudaGraphExec_t current = cudaGetCurrentGraphExec();
-  if (current != nullptr) {
-    (void)cudaGraphLaunch(current, cudaStreamGraphTailLaunch);
-  }
-}
-
-__global__ void select_converged_kernel(std::int32_t batch_size, const std::uint8_t* converged,
-                                        const std::uint8_t* failed, std::uint8_t* active) {
-  const std::int32_t system =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  if (system < batch_size) {
-    active[system] = converged[system] == 1 && failed[system] == 0 ? 1 : 0;
-  }
-}
-
-/**
- * Enter the exact target-precision refinement for the items that used the mixed
- * iterative operator: their energy baseline and DIIS history were built from a
- * different operator, so both are cleared and the item continues from the mixed
- * density in exact FP64. Items that never used mixed precision keep their own
- * verdict, and a failed item is never revived.
- */
-__global__ void enter_target_refinement_kernel(
-    std::int32_t batch_size, const std::uint32_t* item_census, std::uint8_t* active,
-    std::uint8_t* converged, const std::uint8_t* failed, std::uint32_t* iterations,
-    double* previous_energy, double* energy_change, double* density_rms, std::uint32_t* diis_count,
-    std::uint32_t* diis_head) {
-  const std::int32_t system =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  if (system >= batch_size) return;
-  if (failed[system] != 0) return;
-  if (item_census == nullptr || item_census[system] == 0U) {
-    active[system] = 0;
-    return;
-  }
-  active[system] = 1;
-  converged[system] = 0;
-  iterations[system] = 0;
-  previous_energy[system] = CUDART_INF;
-  energy_change[system] = CUDART_INF;
-  density_rms[system] = CUDART_INF;
-  diis_count[system] = 0;
-  diis_head[system] = 0;
-}
-/**
- * Partition converged systems between retained-Fock reuse and exact rebuild.
- *
- * A converged system still owns P_n/F(P_n) because the templated convergence
- * kernel did not advance its density. Only a looser final step restores
- * P_{n+1} and becomes active for the legacy Fock builder. The reuse mask is
- * retained until forces finish so the accepted P_{n+1} warm state can then be
- * restored independently for every system in the bucket.
- */
-__global__ void select_final_fock_rebuild_kernel(std::int32_t batch_size, double reuse_density_rms,
-                                                 const double* density_rms,
-                                                 const std::uint8_t* converged,
-                                                 const std::uint8_t* failed,
-                                                 std::uint8_t* reuse_mask, std::uint8_t* active,
-                                                 std::uint32_t* rebuild_count) {
-  const std::int32_t system =
-      static_cast<std::int32_t>(static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x);
-  if (system >= batch_size) return;
-  const bool valid = converged[system] == 1 && failed[system] == 0;
-  const bool reuse = valid && density_rms[system] <= reuse_density_rms;
-  reuse_mask[system] = reuse ? 1 : 0;
-  active[system] = valid && !reuse ? 1 : 0;
-  if (active[system] != 0) atomicAdd(rebuild_count, 1U);
-}
-
-__global__ void build_weighted_density_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                              const std::int32_t* occupied,
-                                              const double* coefficients,
-                                              const double* orbital_energies,
-                                              const std::uint8_t* active,
-                                              double* weighted_density) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch_size) * matrix_size) return;
-  const std::int32_t system = static_cast<std::int32_t>(element / matrix_size);
-  if (active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix_size;
-  const std::size_t eigen_offset = static_cast<std::size_t>(system) * n;
-  double value = 0.0;
-  for (std::int32_t orbital = 0; orbital < occupied[system]; ++orbital) {
-    value += 2.0 * orbital_energies[eigen_offset + orbital] *
-             coefficients[offset + matrix_index(row, orbital, n)] *
-             coefficients[offset + matrix_index(column, orbital, n)];
-  }
-  weighted_density[element] = value;
-}
-
-__global__ void build_spin_weighted_density_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                                   const std::int32_t* occupied,
-                                                   const double* coefficients,
-                                                   const double* orbital_energies,
-                                                   const std::uint8_t* active,
-                                                   double* weighted_density) {
-  const std::size_t n = static_cast<std::size_t>(nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t state_count = static_cast<std::size_t>(batch_size) * 2;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= state_count * matrix_size) return;
-  const std::size_t state = element / matrix_size;
-  const std::size_t system = state / 2;
-  if (active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t row = local % n;
-  const std::size_t column = local / n;
-  const std::size_t offset = state * matrix_size;
-  const std::size_t eigen_offset = state * n;
-  double value = 0.0;
-  for (std::int32_t orbital = 0; orbital < occupied[state]; ++orbital) {
-    value += orbital_energies[eigen_offset + orbital] *
-             coefficients[offset + matrix_index(row, orbital, n)] *
-             coefficients[offset + matrix_index(column, orbital, n)];
-  }
-  weighted_density[element] = value;
-}
-
-__global__ void sum_uhf_spin_matrices_kernel(std::int32_t batch_size, std::int32_t nbf,
-                                             const double* spin_matrices,
-                                             const std::uint8_t* active, double* total_matrices) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
-  const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (element >= static_cast<std::size_t>(batch_size) * matrix_size) return;
-  const std::size_t system = element / matrix_size;
-  if (active[system] == 0) return;
-  const std::size_t local = element % matrix_size;
-  const std::size_t alpha_offset = system * 2 * matrix_size;
-  total_matrices[element] =
-      spin_matrices[alpha_offset + local] + spin_matrices[alpha_offset + matrix_size + local];
 }
 
 __global__ void nuclear_force_kernel(DeviceBatch batch, const std::uint8_t* active,
@@ -11262,8 +10285,8 @@ vibeqc_status launch_matrix_product(CudaResources& resources, int batch_size, in
     const std::size_t elements = static_cast<std::size_t>(batch_size) * matrix_size;
     const unsigned blocks = static_cast<unsigned>((elements + kCaptureSafeKernelThreads - 1) /
                                                   kCaptureSafeKernelThreads);
-    matrix_product_kernel<<<blocks, kCaptureSafeKernelThreads, 0, resources.stream_>>>(
-        batch_size, nbf, left, transpose_left, right, active, output);
+    launch_matrix_product_kernel(blocks, kCaptureSafeKernelThreads, 0, resources.stream_,
+                                 batch_size, nbf, left, transpose_left, right, active, output);
     return cuda_status(cudaPeekAtLastError());
   }
 
@@ -11294,9 +10317,9 @@ vibeqc_status launch_spin_matrix_product(CudaResources& resources, int batch_siz
         static_cast<std::size_t>(batch_size) * static_cast<std::size_t>(spin_count) * matrix_size;
     const unsigned blocks = static_cast<unsigned>((elements + kCaptureSafeKernelThreads - 1) /
                                                   kCaptureSafeKernelThreads);
-    spin_matrix_product_kernel<<<blocks, kCaptureSafeKernelThreads, 0, resources.stream_>>>(
-        batch_size, spin_count, nbf, left, left_is_spin, transpose_left, right, right_is_spin,
-        active, output);
+    launch_spin_matrix_product_kernel(blocks, kCaptureSafeKernelThreads, 0, resources.stream_,
+                                      batch_size, spin_count, nbf, left, left_is_spin,
+                                      transpose_left, right, right_is_spin, active, output);
     return cuda_status(cudaPeekAtLastError());
   }
 
@@ -12744,8 +11767,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       }
     }
     if (product_status != VIBEQC_STATUS_SUCCESS) return product_status;
-    subtract_matrix_batches_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                     resources.stream_>>>(
+    launch_subtract_matrix_batches_kernel(
+        blocks_for(spin_matrix_elements), threads, 0, resources.stream_,
         static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
         static_cast<std::int32_t>(nbf), temporary, active, residual);
     return cuda_status(cudaPeekAtLastError());
@@ -12761,13 +11784,13 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     }
     const double* quartet_density = density_input;
     if (transformed_direct) {
-      transform_density_to_direct_right_kernel<<<blocks_for(spin_rectangular_matrix_elements),
-                                                 threads, 0, resources.stream_>>>(
+      launch_transform_density_to_direct_right_kernel(
+          blocks_for(spin_rectangular_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
           static_cast<std::int32_t>(nbf), static_cast<std::int32_t>(direct_nbf),
           ao_to_direct_transform, density_input, active, direct_transform_temporary);
-      transform_density_to_direct_left_kernel<<<blocks_for(direct_spin_matrix_elements), threads, 0,
-                                                resources.stream_>>>(
+      launch_transform_density_to_direct_left_kernel(
+          blocks_for(direct_spin_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
           static_cast<std::int32_t>(nbf), static_cast<std::int32_t>(direct_nbf),
           ao_to_direct_transform, direct_transform_temporary, active, direct_density);
@@ -13209,8 +12232,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       }
     }
     if (quartet_direct && transformed_direct) {
-      clear_active_matrices_kernel<<<blocks_for(direct_spin_matrix_elements), threads, 0,
-                                     resources.stream_>>>(
+      launch_clear_active_matrices_kernel(
+          blocks_for(direct_spin_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
           static_cast<std::int32_t>(direct_nbf), active, direct_fock);
     }
@@ -13236,10 +12259,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           density_input, active, fock);
     } else if (unrestricted && quartet_direct) {
       if (!transformed_direct) {
-        initialize_direct_fock_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                        resources.stream_>>>(static_cast<std::int32_t>(batch_size),
-                                                             2, static_cast<std::int32_t>(nbf),
-                                                             hcore, active, fock);
+        launch_initialize_direct_fock_kernel(blocks_for(spin_matrix_elements), threads, 0,
+                                             resources.stream_,
+                                             static_cast<std::int32_t>(batch_size), 2,
+                                             static_cast<std::int32_t>(nbf), hcore, active, fock);
       }
       if (bounded_direct_streaming) {
         cudaError_t streaming_error = launch_bounded_generated_fock(
@@ -13294,10 +12317,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           density_input, active, fock);
     } else if (quartet_direct) {
       if (!transformed_direct) {
-        initialize_direct_fock_kernel<<<blocks_for(matrix_elements), threads, 0,
-                                        resources.stream_>>>(static_cast<std::int32_t>(batch_size),
-                                                             1, static_cast<std::int32_t>(nbf),
-                                                             hcore, active, fock);
+        launch_initialize_direct_fock_kernel(blocks_for(matrix_elements), threads, 0,
+                                             resources.stream_,
+                                             static_cast<std::int32_t>(batch_size), 1,
+                                             static_cast<std::int32_t>(nbf), hcore, active, fock);
       }
       if (bounded_direct_streaming) {
         cudaError_t streaming_error = launch_bounded_generated_fock(
@@ -13348,22 +12371,23 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           pair_count, schwarz_bounds, density_input, active, fock);
     }
     if (quartet_direct && transformed_direct) {
-      transform_direct_fock_left_kernel<<<blocks_for(spin_rectangular_matrix_elements), threads, 0,
-                                          resources.stream_>>>(
+      launch_transform_direct_fock_left_kernel(
+          blocks_for(spin_rectangular_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
           static_cast<std::int32_t>(nbf), static_cast<std::int32_t>(direct_nbf),
           ao_to_direct_transform, direct_fock, active, direct_transform_temporary);
-      transform_direct_fock_right_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                           resources.stream_>>>(
+      launch_transform_direct_fock_right_kernel(
+          blocks_for(spin_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
           static_cast<std::int32_t>(nbf), static_cast<std::int32_t>(direct_nbf),
           ao_to_direct_transform, direct_transform_temporary, hcore, active, fock);
     }
     return cudaPeekAtLastError();
   };
-  initialize_state_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-      static_cast<std::int32_t>(batch_size), cached_energy_baseline_hit, energy, active, converged,
-      failed, iterations, previous_energy, energy_change, density_rms, diis_count, diis_head);
+  launch_initialize_state_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                 static_cast<std::int32_t>(batch_size), cached_energy_baseline_hit,
+                                 energy, active, converged, failed, iterations, previous_energy,
+                                 energy_change, density_rms, diis_count, diis_head);
   vibeqc_status status = VIBEQC_STATUS_SUCCESS;
   if (geometry_changed) {
     cuda_error = launch_generated_one_electron_values(
@@ -13467,8 +12491,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     build_nuclear_repulsion_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
         device_batch, nuclear_repulsion);
 
-    copy_matrix_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-        matrix_elements, overlap, eigensystem);
+    launch_copy_matrix_kernel(blocks_for(matrix_elements), threads, 0, resources.stream_,
+                              matrix_elements, overlap, eigensystem);
     status = launch_solver(resources.eigensolver_view(), ordinary_eigensolver_family,
                            static_cast<int>(nbf), static_cast<int>(batch_size), eigensystem,
                            temporary, eigenvalues, lwork, solver_info, active);
@@ -13476,11 +12500,13 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       fill_global_failure(outputs, status);
       return outputs;
     }
-    inspect_solver_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), solver_info, active, failed, converged);
-    build_orthogonalizer_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), eigensystem,
-        eigenvalues, active, orthogonalizer, failed);
+    launch_inspect_solver_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                 static_cast<std::int32_t>(batch_size), solver_info, active, failed,
+                                 converged);
+    launch_build_orthogonalizer_kernel(blocks_for(matrix_elements), threads, 0, resources.stream_,
+                                       static_cast<std::int32_t>(batch_size),
+                                       static_cast<std::int32_t>(nbf), eigensystem, eigenvalues,
+                                       active, orthogonalizer, failed);
   }
 
   // A valid warm density supersedes the core-Hamiltonian guess. Homogeneous
@@ -13502,34 +12528,37 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       fill_global_failure(outputs, status);
       return outputs;
     }
-    inspect_solver_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), solver_info, active, failed, converged);
+    launch_inspect_solver_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                 static_cast<std::int32_t>(batch_size), solver_info, active, failed,
+                                 converged);
     if (unrestricted) {
       status = multiply_matrices(orthogonalizer, false, eigensystem, temporary);
       if (status != VIBEQC_STATUS_SUCCESS) {
         fill_global_failure(outputs, status);
         return outputs;
       }
-      broadcast_spin_matrix_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                     resources.stream_>>>(static_cast<std::int32_t>(batch_size), 2,
-                                                          static_cast<std::int32_t>(nbf), temporary,
-                                                          active, coefficients);
-      mix_open_shell_guess_kernel<<<blocks_for(batch_size * nbf), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied, active,
-          coefficients);
-      build_spin_density_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                  resources.stream_>>>(static_cast<std::int32_t>(batch_size), 2,
-                                                       static_cast<std::int32_t>(nbf), occupied,
-                                                       coefficients, active, density);
+      launch_broadcast_spin_matrix_kernel(blocks_for(spin_matrix_elements), threads, 0,
+                                          resources.stream_, static_cast<std::int32_t>(batch_size),
+                                          2, static_cast<std::int32_t>(nbf), temporary, active,
+                                          coefficients);
+      launch_mix_open_shell_guess_kernel(blocks_for(batch_size * nbf), threads, 0,
+                                         resources.stream_, static_cast<std::int32_t>(batch_size),
+                                         static_cast<std::int32_t>(nbf), occupied, active,
+                                         coefficients);
+      launch_build_spin_density_kernel(blocks_for(spin_matrix_elements), threads, 0,
+                                       resources.stream_, static_cast<std::int32_t>(batch_size), 2,
+                                       static_cast<std::int32_t>(nbf), occupied, coefficients,
+                                       active, density);
     } else {
       status = multiply_matrices(orthogonalizer, false, eigensystem, coefficients);
       if (status != VIBEQC_STATUS_SUCCESS) {
         fill_global_failure(outputs, status);
         return outputs;
       }
-      build_density_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
-          coefficients, active, density);
+      launch_build_density_kernel(blocks_for(matrix_elements), threads, 0, resources.stream_,
+                                  static_cast<std::int32_t>(batch_size),
+                                  static_cast<std::int32_t>(nbf), occupied, coefficients, active,
+                                  density);
     }
   }
   std::vector<std::uint8_t> host_warm_invalid;
@@ -13544,15 +12573,15 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       return outputs;
     }
     if (unrestricted) {
-      apply_uhf_warm_density_kernel<<<static_cast<unsigned>(batch_size), kWarmDensityThreads, 0,
-                                      resources.stream_>>>(
+      launch_apply_uhf_warm_density_kernel(
+          static_cast<unsigned>(batch_size), kWarmDensityThreads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
           warm_mask, warm_density, overlap, density, warm_invalid);
     } else {
-      apply_warm_density_kernel<<<static_cast<unsigned>(batch_size), kWarmDensityThreads, 0,
-                                  resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
-          warm_mask, warm_density, overlap, density, warm_invalid);
+      launch_apply_warm_density_kernel(static_cast<unsigned>(batch_size), kWarmDensityThreads, 0,
+                                       resources.stream_, static_cast<std::int32_t>(batch_size),
+                                       static_cast<std::int32_t>(nbf), occupied, warm_mask,
+                                       warm_density, overlap, density, warm_invalid);
     }
     host_warm_invalid.resize(batch_size, 0);
     cuda_error =
@@ -13605,26 +12634,26 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
 
     vibeqc_status iteration_status = VIBEQC_STATUS_SUCCESS;
     if (unrestricted) {
-      compute_uhf_energy_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
-                                  resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), density, hcore,
-          fock, nuclear_repulsion, active, energy);
+      launch_compute_uhf_energy_kernel(static_cast<unsigned>(batch_size), matrix_reduction_threads,
+                                       0, resources.stream_, static_cast<std::int32_t>(batch_size),
+                                       static_cast<std::int32_t>(nbf), density, hcore, fock,
+                                       nuclear_repulsion, active, energy);
       iteration_status = build_commutator_residual();
     } else {
-      compute_energy_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
-                              resources.stream_>>>(static_cast<std::int32_t>(batch_size),
-                                                   static_cast<std::int32_t>(nbf), density, hcore,
-                                                   fock, nuclear_repulsion, active, energy);
+      launch_compute_energy_kernel(static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+                                   resources.stream_, static_cast<std::int32_t>(batch_size),
+                                   static_cast<std::int32_t>(nbf), density, hcore, fock,
+                                   nuclear_repulsion, active, energy);
       iteration_status = build_commutator_residual();
     }
     if (iteration_status != VIBEQC_STATUS_SUCCESS) return iteration_status;
 
-    update_diis_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
-                         resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), unrestricted ? 2 : 1,
-        static_cast<std::uint32_t>(diis_history), fock, residual, active, fock_history,
-        residual_history, diis_linear_system, diis_coefficients, diis_count, diis_head,
-        eigensystem);
+    launch_update_diis_kernel(static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+                              resources.stream_, static_cast<std::int32_t>(batch_size),
+                              static_cast<std::int32_t>(nbf), unrestricted ? 2 : 1,
+                              static_cast<std::uint32_t>(diis_history), fock, residual, active,
+                              fock_history, residual_history, diis_linear_system, diis_coefficients,
+                              diis_count, diis_head, eigensystem);
     if (unrestricted) {
       iteration_status =
           multiply_spin_matrices(eigensystem, true, false, orthogonalizer, false, temporary);
@@ -13633,8 +12662,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
             multiply_spin_matrices(orthogonalizer, false, true, temporary, true, eigensystem);
       }
       if (iteration_status == VIBEQC_STATUS_SUCCESS) {
-        expand_spin_active_kernel<<<blocks_for(spin_batch_size), threads, 0, resources.stream_>>>(
-            static_cast<std::int32_t>(batch_size), 2, active, spin_active);
+        launch_expand_spin_active_kernel(blocks_for(spin_batch_size), threads, 0, resources.stream_,
+                                         static_cast<std::int32_t>(batch_size), 2, active,
+                                         spin_active);
       }
     } else {
       iteration_status = multiply_matrices(eigensystem, false, orthogonalizer, temporary);
@@ -13656,60 +12686,63 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   const auto launch_iteration_post_eigensolver = [&](bool append_device_tail) -> vibeqc_status {
     vibeqc_status iteration_status = VIBEQC_STATUS_SUCCESS;
     if (unrestricted) {
-      inspect_spin_solver_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), 2, solver_info, active, failed, converged);
+      launch_inspect_spin_solver_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                        static_cast<std::int32_t>(batch_size), 2, solver_info,
+                                        active, failed, converged);
       iteration_status =
           multiply_spin_matrices(orthogonalizer, false, false, eigensystem, true, coefficients);
       if (iteration_status == VIBEQC_STATUS_SUCCESS) {
-        build_spin_density_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                    resources.stream_>>>(static_cast<std::int32_t>(batch_size), 2,
-                                                         static_cast<std::int32_t>(nbf), occupied,
-                                                         coefficients, active, next_density);
+        launch_build_spin_density_kernel(blocks_for(spin_matrix_elements), threads, 0,
+                                         resources.stream_, static_cast<std::int32_t>(batch_size),
+                                         2, static_cast<std::int32_t>(nbf), occupied, coefficients,
+                                         active, next_density);
         if (reuse_converged_fock) {
-          update_uhf_convergence_kernel<true><<<static_cast<unsigned>(batch_size),
-                                                matrix_reduction_threads, 0, resources.stream_>>>(
-              static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf),
-              options.energy_tolerance, options.density_tolerance, quartet_direct, energy,
-              previous_energy, next_density, density, active, converged, iterations, energy_change,
-              density_rms);
+          launch_update_uhf_convergence_kernel(
+              true, static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+              resources.stream_, static_cast<std::int32_t>(batch_size),
+              static_cast<std::int32_t>(nbf), options.energy_tolerance, options.density_tolerance,
+              quartet_direct, energy, previous_energy, next_density, density, active, converged,
+              iterations, energy_change, density_rms);
         } else {
-          update_uhf_convergence_kernel<false><<<static_cast<unsigned>(batch_size),
-                                                 matrix_reduction_threads, 0, resources.stream_>>>(
-              static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf),
-              options.energy_tolerance, options.density_tolerance, quartet_direct, energy,
-              previous_energy, next_density, density, active, converged, iterations, energy_change,
-              density_rms);
+          launch_update_uhf_convergence_kernel(
+              false, static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+              resources.stream_, static_cast<std::int32_t>(batch_size),
+              static_cast<std::int32_t>(nbf), options.energy_tolerance, options.density_tolerance,
+              quartet_direct, energy, previous_energy, next_density, density, active, converged,
+              iterations, energy_change, density_rms);
         }
       }
     } else {
-      inspect_solver_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), solver_info, active, failed, converged);
+      launch_inspect_solver_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                   static_cast<std::int32_t>(batch_size), solver_info, active,
+                                   failed, converged);
       iteration_status = multiply_matrices(orthogonalizer, false, eigensystem, coefficients);
       if (iteration_status == VIBEQC_STATUS_SUCCESS) {
-        build_density_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-            static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
-            coefficients, active, next_density);
+        launch_build_density_kernel(blocks_for(matrix_elements), threads, 0, resources.stream_,
+                                    static_cast<std::int32_t>(batch_size),
+                                    static_cast<std::int32_t>(nbf), occupied, coefficients, active,
+                                    next_density);
         if (reuse_converged_fock) {
-          update_convergence_kernel<true><<<static_cast<unsigned>(batch_size),
-                                            matrix_reduction_threads, 0, resources.stream_>>>(
-              static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf),
-              options.energy_tolerance, options.density_tolerance, quartet_direct, energy,
-              previous_energy, next_density, density, active, converged, iterations, energy_change,
-              density_rms);
+          launch_update_convergence_kernel(
+              true, static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+              resources.stream_, static_cast<std::int32_t>(batch_size),
+              static_cast<std::int32_t>(nbf), options.energy_tolerance, options.density_tolerance,
+              quartet_direct, energy, previous_energy, next_density, density, active, converged,
+              iterations, energy_change, density_rms);
         } else {
-          update_convergence_kernel<false><<<static_cast<unsigned>(batch_size),
-                                             matrix_reduction_threads, 0, resources.stream_>>>(
-              static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf),
-              options.energy_tolerance, options.density_tolerance, quartet_direct, energy,
-              previous_energy, next_density, density, active, converged, iterations, energy_change,
-              density_rms);
+          launch_update_convergence_kernel(
+              false, static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+              resources.stream_, static_cast<std::int32_t>(batch_size),
+              static_cast<std::int32_t>(nbf), options.energy_tolerance, options.density_tolerance,
+              quartet_direct, energy, previous_energy, next_density, density, active, converged,
+              iterations, energy_change, density_rms);
         }
       }
     }
     if (iteration_status != VIBEQC_STATUS_SUCCESS) return iteration_status;
     if (append_device_tail) {
-      tail_rhf_loop_kernel<<<1, 1, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), options.max_iterations, active, iterations);
+      launch_tail_rhf_loop_kernel(1, 1, 0, resources.stream_, static_cast<std::int32_t>(batch_size),
+                                  options.max_iterations, active, iterations);
     }
     return cuda_status(cudaPeekAtLastError());
   };
@@ -14039,7 +13072,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       return outputs;
     }
     // Only the items that actually ran the mixed operator re-enter the loop.
-    enter_target_refinement_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
+    launch_enter_target_refinement_kernel(
+        blocks_for(batch_size), threads, 0, resources.stream_,
         static_cast<std::int32_t>(batch_size), mixed_precision_item_census, active, converged,
         failed, iterations, previous_energy, energy_change, density_rms, diis_count, diis_head);
     std::vector<std::uint8_t> host_refinement_active(batch_size, 0U);
@@ -14093,12 +13127,13 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     cuda_error =
         cudaMemsetAsync(final_fock_rebuild_count, 0, sizeof(std::uint32_t), resources.stream_);
     if (cuda_error == cudaSuccess) {
-      select_final_fock_rebuild_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
+      launch_select_final_fock_rebuild_kernel(
+          blocks_for(batch_size), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size),
           converged_fock_reuse_density_rms(options.density_tolerance), density_rms, converged,
           failed, final_fock_reuse_mask, active, final_fock_rebuild_count);
-      copy_selected_matrices_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                      resources.stream_>>>(
+      launch_copy_selected_matrices_kernel(
+          blocks_for(spin_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
           static_cast<std::int32_t>(nbf), active, next_density, density);
       cuda_error =
@@ -14121,8 +13156,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         return outputs;
       }
     }
-    select_converged_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), converged, failed, active);
+    launch_select_converged_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                   static_cast<std::int32_t>(batch_size), converged, failed,
+                                   active);
     if (quartet_direct && batch_size > 1 && host_final_fock_rebuild_count != batch_size) {
       // Later device-tail launches overwrite the shared compact quartet list
       // after an early peer converges. Recreate only density transforms,
@@ -14135,8 +13171,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       }
     }
   } else {
-    select_converged_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), converged, failed, active);
+    launch_select_converged_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                   static_cast<std::int32_t>(batch_size), converged, failed,
+                                   active);
     cuda_error = launch_fock_builder(density, false);
     if (cuda_error != cudaSuccess) {
       fill_global_failure(outputs, cuda_status(cuda_error));
@@ -14153,8 +13190,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       status = multiply_spin_matrices(orthogonalizer, false, true, temporary, true, eigensystem);
     }
     if (status == VIBEQC_STATUS_SUCCESS) {
-      expand_spin_active_kernel<<<blocks_for(spin_batch_size), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), 2, active, spin_active);
+      launch_expand_spin_active_kernel(blocks_for(spin_batch_size), threads, 0, resources.stream_,
+                                       static_cast<std::int32_t>(batch_size), 2, active,
+                                       spin_active);
       status = launch_solver(resources.eigensolver_view(), ordinary_eigensolver_family,
                              static_cast<int>(nbf), static_cast<int>(spin_batch_size), eigensystem,
                              temporary, eigenvalues, lwork, solver_info, spin_active);
@@ -14175,16 +13213,18 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     return outputs;
   }
   if (unrestricted) {
-    inspect_spin_solver_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), 2, solver_info, active, failed, converged);
+    launch_inspect_spin_solver_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                      static_cast<std::int32_t>(batch_size), 2, solver_info, active,
+                                      failed, converged);
     status = multiply_spin_matrices(orthogonalizer, false, false, eigensystem, true, coefficients);
     if (status != VIBEQC_STATUS_SUCCESS) {
       fill_global_failure(outputs, status);
       return outputs;
     }
   } else {
-    inspect_solver_kernel<<<blocks_for(batch_size), threads, 0, resources.stream_>>>(
-        static_cast<std::int32_t>(batch_size), solver_info, active, failed, converged);
+    launch_inspect_solver_kernel(blocks_for(batch_size), threads, 0, resources.stream_,
+                                 static_cast<std::int32_t>(batch_size), solver_info, active, failed,
+                                 converged);
     status = multiply_matrices(orthogonalizer, false, eigensystem, coefficients);
     if (status != VIBEQC_STATUS_SUCCESS) {
       fill_global_failure(outputs, status);
@@ -14222,31 +13262,34 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     }
   }
   if (unrestricted) {
-    compute_uhf_energy_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
-                                resources.stream_>>>(static_cast<std::int32_t>(batch_size),
-                                                     static_cast<std::int32_t>(nbf), density, hcore,
-                                                     fock, nuclear_repulsion, active, energy);
+    launch_compute_uhf_energy_kernel(static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+                                     resources.stream_, static_cast<std::int32_t>(batch_size),
+                                     static_cast<std::int32_t>(nbf), density, hcore, fock,
+                                     nuclear_repulsion, active, energy);
     if (options.compute_forces) {
-      build_spin_weighted_density_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                           resources.stream_>>>(
+      launch_build_spin_weighted_density_kernel(
+          blocks_for(spin_matrix_elements), threads, 0, resources.stream_,
           static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
           coefficients, eigenvalues, active, weighted_density);
-      sum_uhf_spin_matrices_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), density, active,
-          total_density);
-      sum_uhf_spin_matrices_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), weighted_density,
-          active, total_weighted_density);
+      launch_sum_uhf_spin_matrices_kernel(blocks_for(matrix_elements), threads, 0,
+                                          resources.stream_, static_cast<std::int32_t>(batch_size),
+                                          static_cast<std::int32_t>(nbf), density, active,
+                                          total_density);
+      launch_sum_uhf_spin_matrices_kernel(blocks_for(matrix_elements), threads, 0,
+                                          resources.stream_, static_cast<std::int32_t>(batch_size),
+                                          static_cast<std::int32_t>(nbf), weighted_density, active,
+                                          total_weighted_density);
     }
   } else {
-    compute_energy_kernel<<<static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
-                            resources.stream_>>>(static_cast<std::int32_t>(batch_size),
-                                                 static_cast<std::int32_t>(nbf), density, hcore,
-                                                 fock, nuclear_repulsion, active, energy);
+    launch_compute_energy_kernel(static_cast<unsigned>(batch_size), matrix_reduction_threads, 0,
+                                 resources.stream_, static_cast<std::int32_t>(batch_size),
+                                 static_cast<std::int32_t>(nbf), density, hcore, fock,
+                                 nuclear_repulsion, active, energy);
     if (options.compute_forces) {
-      build_weighted_density_kernel<<<blocks_for(matrix_elements), threads, 0, resources.stream_>>>(
-          static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(nbf), occupied,
-          coefficients, eigenvalues, active, weighted_density);
+      launch_build_weighted_density_kernel(blocks_for(matrix_elements), threads, 0,
+                                           resources.stream_, static_cast<std::int32_t>(batch_size),
+                                           static_cast<std::int32_t>(nbf), occupied, coefficients,
+                                           eigenvalues, active, weighted_density);
     }
   }
   if (options.compute_forces) {
@@ -14992,8 +14035,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // The requested outputs above consumed each system's selected consistent
     // snapshot. Advance only reused systems to the already accepted P_{n+1}
     // for their returned warm state; rebuilt systems already contain it.
-    copy_selected_matrices_kernel<<<blocks_for(spin_matrix_elements), threads, 0,
-                                    resources.stream_>>>(
+    launch_copy_selected_matrices_kernel(
+        blocks_for(spin_matrix_elements), threads, 0, resources.stream_,
         static_cast<std::int32_t>(batch_size), static_cast<std::int32_t>(spin_count),
         static_cast<std::int32_t>(nbf), final_fock_reuse_mask, next_density, density);
   }
