@@ -7,7 +7,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from vibeqc import Calculator, _native, method_capabilities
+from vibeqc import (
+    Calculator,
+    ObservableTarget,
+    ResourceBudget,
+    TargetAccuracy,
+    _native,
+    method_capabilities,
+)
 
 from tools.vibeqc_posthf.fixtures import load_fixture, source_arguments
 
@@ -65,6 +72,21 @@ def test_public_native_hf_to_mp2_components(name, device):
             time.perf_counter() - started,
             Path(directory) / f"{name}-{device}.json",
         )
+
+
+def test_public_mp2_rejects_unimplemented_controls():
+    target = TargetAccuracy(
+        (ObservableTarget("energy", "absolute", "Eh", absolute=1e-6),)
+    )
+    with pytest.raises(NotImplementedError, match="target_accuracy"):
+        Calculator(method="mp2", target_accuracy=target)
+    with pytest.raises(NotImplementedError, match="resource_budget"):
+        Calculator(method="mp2", resource_budget=ResourceBudget())
+    with pytest.raises(ValueError, match="precision=.*fp64"):
+        Calculator(method="mp2", precision="auto")
+    calculator = Calculator(method="mp2")
+    with pytest.raises(NotImplementedError, match="resource planning"):
+        calculator.estimate_resources([[("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]])
 
 
 def test_public_unsupported_budget_scf_and_neighbors(device):

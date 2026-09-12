@@ -380,6 +380,15 @@ class Calculator:
             raise ValueError("density_fitting_memory_budget_bytes must be non-negative")
         self._method = _METHODS[method.lower()]
         if self._method == _native.METHOD_MP2:
+            if target_accuracy is not None:
+                raise NotImplementedError(
+                    "target_accuracy is not implemented for canonical MP2"
+                )
+            if resource_budget is not None:
+                raise NotImplementedError(
+                    "resource_budget planning is not implemented for canonical MP2"
+                )
+        if self._method == _native.METHOD_MP2:
             for name, value in (
                 ("max_iterations", max_iterations),
                 ("diis_history", diis_history),
@@ -433,6 +442,11 @@ class Calculator:
             self._precision_mode = precision_modes[str(precision).lower()]
         except KeyError as error:
             raise ValueError("precision must be 'fp64' or 'auto'") from error
+        if (
+            self._method == _native.METHOD_MP2
+            and self._precision_mode != _native.PRECISION_FP64
+        ):
+            raise ValueError("canonical MP2 requires precision='fp64'")
         self._library = _native.load_library(device=device, device_id=self._device_id)
 
         available = ctypes.c_int32()
@@ -820,6 +834,10 @@ class Calculator:
 
     def _resource_request(self, systems, *, charges=None, multiplicities=None):
         """Resolve this calculator's exact active HF controls without executing."""
+        if self._method == _native.METHOD_MP2:
+            raise NotImplementedError(
+                "resource planning is not implemented for canonical MP2"
+            )
         from .resources_hf import hf_resource_request
 
         request = hf_resource_request(

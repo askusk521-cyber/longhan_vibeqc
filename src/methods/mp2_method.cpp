@@ -141,6 +141,12 @@ std::unique_ptr<PreparedCalculation> prepare_mp2_calculation(const Capabilities&
   if (d.screening_tolerance != 0)
     throw std::invalid_argument(
         "canonical MP2 requires unscreened integrals (screening_tolerance=0)");
+  if (present(offsetof(vibeqc_method_descriptor, precision_mode) + sizeof(d.precision_mode))) {
+    if (d.precision_mode != VIBEQC_PRECISION_FP64 && d.precision_mode != VIBEQC_PRECISION_AUTO)
+      throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown floating-point precision mode");
+    if (d.precision_mode != VIBEQC_PRECISION_FP64)
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "canonical MP2 requires FP64 precision");
+  }
   if (present(offsetof(vibeqc_method_descriptor, density_fitting_auxiliary_basis) +
               sizeof(d.density_fitting_auxiliary_basis)) &&
       d.density_fitting_auxiliary_basis)
