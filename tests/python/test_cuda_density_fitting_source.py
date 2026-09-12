@@ -5,12 +5,16 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _df_source(*owners):
+    """Read the precise DF owners covered by each architecture contract."""
+    directory = REPOSITORY_ROOT / "src/scf/cuda"
+    return "\n".join((directory / owner).read_text() for owner in owners)
+
+
 def test_cuda_df_metric_uses_generic_cusolver_api():
     """Prevent the deprecated typed eigensolver from returning unnoticed."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_density_fitting.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _df_source("df_plan_setup.cpp", "df_setup_internal.hpp")
     assert "cusolverDnCreateParams" in source
     assert "cusolverDnXsyevd_bufferSize" in source
     assert "cusolverDnXsyevd(" in source
@@ -21,8 +25,12 @@ def test_cuda_df_metric_uses_generic_cusolver_api():
 def test_cuda_df_scf_has_device_resident_iteration_boundary():
     """Keep the DF SCF bridge from regressing to host J/K staging."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_density_fitting.cu").read_text(
-        encoding="utf-8"
+    source = _df_source(
+        "df_jk.cpp",
+        "df_force_response.cpp",
+        "df_rhf_scf.cpp",
+        "df_uhf_scf.cpp",
+        "df_scf_kernels.cu",
     )
     assert "execute_cuda_density_fitting_rhf_jk_device" in source
     assert "execute_cuda_density_fitting_uhf_jk_device" in source
