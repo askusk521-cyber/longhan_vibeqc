@@ -5,6 +5,22 @@ endpoints for the exact parent and extracted source identities. It retains each
 numerical comparison, geometry, timing repeat, iteration count and library hash.
 The original endpoint worker is `tools/validate_weighted_eri_endpoints.py`.
 
+These build timings, binary sizes and parent/candidate endpoint samples predate
+the upstream MP2 integration at `b69ec53`. They describe the recorded source
+identities; integration validation is recorded separately and does not change
+the scope of these historical measurements.
+
+`integration.json` records the merge with `b69ec53` at source `c5301f3`. Both
+the development and optimized Release libraries pass 22 native suites, 214
+Python cases without skips, and four weighted-integral runs (3,349 records /
+141 tiles per library), under Slurm allocations 9302 and 9303. It includes
+physical HF reference export, public CPU/CUDA MP2, identical-orbital component
+and permutation checks, typed allocation failures, bounded replay, and the
+independent 14-AO reference with a partial final virtual block. The record
+retains library hashes, explicit opt-ins, test commands and weighted results.
+Five current CMake graph checks cover real-only, virtual-only, combined,
+standalone and global-RDC configurations.
+
 Reproduce a fixed RHF endpoint for each library with:
 
 ```bash

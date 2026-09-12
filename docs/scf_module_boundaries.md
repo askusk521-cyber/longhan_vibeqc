@@ -53,9 +53,37 @@ structural-size gate. At the baseline, `rhf.cpp` contains 3,413 lines / 165,000
 bytes, `cuda_rhf.cu` 19,754 lines / 1,048,372 bytes, and
 `cuda_density_fitting.cu` 3,098 lines / 160,928 bytes. The original DF unit is now
 removed; its largest replacement is the 549-line setup transaction. The large
-direct host unit (`cuda_rhf.cpp`, 4,791 lines) still exceeds the target and
+direct host unit (`cuda_rhf.cpp`, 4,865 lines after MP2 integration) still exceeds the target and
 remains unfinished work under #240. Its graph/bucket coupling explains the staged extraction,
 not an exemption from the issue's final acceptance criteria.
+
+## Direct-native integration with MP2
+
+The merge with upstream `b69ec53` preserves every physical-reference export,
+capacity, provider-accounting and cleanup change from the original CUDA driver.
+Its added and deleted host tokens match the upstream patch, and the layered
+audit still verifies the preceding numerical and consumer extractions. The
+shared `tensor/cuda_error.hpp` keeps `DeviceAllocationError` and `cuda_check`
+unchanged while allowing the reference-export bridge to compile as ordinary
+C++ without importing device kernels from `tensor/cuda_runtime.cuh`.
+
+At integration source `c5301f3`, development and optimized Release builds each
+pass 22 native suites and 214 Python cases without skips. These cover HF/DF
+energies and forces, warm/failure semantics, mixed precision, final-Fock reuse,
+physical-reference export, public CPU/CUDA MP2, identical-orbital components and
+permutations, allocation status/rollback, CUDA tile replay, and an independent
+14-AO reference with a partial final virtual block. Each library also passes
+weighted-integral validation with 3,349 records, 141 tiles and four runs.
+Slurm allocations 9302 and 9303 preserve scheduler-assigned device visibility.
+
+The current source selection passes 545 checks with 50 optional skips; its six
+deselected fixed-native fixtures pass against both rebuilt libraries. Five
+actual CMake graph checks verify architecture intent and the ten-owner device
+link with standalone angular force, including global RDC mode. All hooks pass.
+`benchmarks/results/scf-direct-native-rtx5090/integration.json` retains this
+integration evidence separately from the historical pre-MP2 cold-build,
+incremental-build, binary-size and matched-runtime measurements below. The
+integration reused existing build trees and supplies no new cold-build claim.
 
 ## Validation and remaining acceptance
 
