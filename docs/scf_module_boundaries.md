@@ -640,3 +640,22 @@ not full cold-build, production resource, device-link or runtime acceptance.
 
 The full issue still requires direct scientific/force ownership, host bucket and
 graph decomposition, and production build/device-link/runtime acceptance.
+
+
+Actual implementation-only comment edits to `one_electron_force_reference.cu`
+and `direct_pair_cache.cu` each rebuild exactly their CUDA object and the source
+identity C++ object, followed by relinks. The large direct CUDA owner and other
+kernel objects stay unchanged. These ordinary cache-enabled Ninja probes take
+1.618, 1.610 seconds, respectively; exact source bytes are restored and rebuilt
+after each probe. They are separate from the uncached compiler samples above.
+
+Validation uses the RTX 5090 through Slurm. Four native GPU suites pass. The
+initial Python allocation reaches its finite 20-minute limit after reporting
+177 passing cases. Its collected order confirms the complete 167-case prefix
+(provider/resource/replay/runtime and derivative modules); the entire final
+21-case value-schedule module then passes in a fresh allocation. This covers all
+188 distinct cases, with ten value cases repeated during recovery and no skips.
+Twelve exact-parent scalar/cooperative, fixed/resident/paged RHF/UHF scenarios
+pass 192 energy/force comparisons, with maximum absolute difference
+`2.9976021664879227e-14`. The formatted build, hooks and 420 source/structure/
+ownership/publication checks pass; 48 optional compiler probes are skipped.
