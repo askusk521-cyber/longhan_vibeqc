@@ -179,7 +179,8 @@ std::unique_ptr<PreparedCalculation> prepare_mp2_calculation(const Capabilities&
   options.compute_forces = false;
   options.export_physical_reference = true;
   options.reference_memory_budget_bytes = budget;
-  if (posthf::rhf_reference_capacity(system, options.diis_history) > budget)
+  const bool cpu_reference = context.requested_backend == VIBEQC_BACKEND_CPU_REFERENCE;
+  if (posthf::rhf_reference_capacity(system, options.diis_history, cpu_reference) > budget)
     throw MethodError(VIBEQC_STATUS_OUT_OF_MEMORY,
                       "MP2 bounded reference exceeds numeric memory budget");
   return std::make_unique<Mp2Prepared>(caps, context, system, options, budget, threshold);

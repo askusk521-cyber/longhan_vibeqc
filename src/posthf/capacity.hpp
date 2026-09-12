@@ -38,13 +38,21 @@ inline std::size_t source_capacity(const core::System& system) {
 }
 inline constexpr std::size_t source_scratch_bytes = 8U << 20;
 
-inline std::size_t rhf_reference_capacity(const core::System& system, unsigned diis_history) {
+inline std::size_t rhf_reference_capacity(const core::System& system, unsigned diis_history,
+                                          bool include_dense_eri = false) {
   const auto n = molecule::ao_count(system);
+  const auto matrix_elements = checked_mul(n, n);
   // Original and canonical states, eigensolver/matrix temporaries, all DIIS
   // history, exported snapshot, residual validation and raw tile capacity.
   const auto matrices = checked_add(64, checked_mul(2, diis_history));
-  return checked_add(checked_add(source_capacity(system), source_scratch_bytes + 4096),
-                     checked_mul(8, checked_mul(checked_mul(n, n), matrices)));
+  auto bytes = checked_add(checked_add(source_capacity(system), source_scratch_bytes + 4096),
+                           checked_mul(8, checked_mul(matrix_elements, matrices)));
+  // The CPU exact Fock plan materializes the full AO ERI before the reference
+  // export path can release it. CUDA and streamed consumers do not need this
+  // host tensor, so callers include it only for the CPU preparation path.
+  if (include_dense_eri)
+    bytes = checked_add(bytes, checked_mul(8, checked_mul(matrix_elements, matrix_elements)));
+  return bytes;
 }
 }  // namespace vibeqc::posthf
 #endif
