@@ -94,7 +94,6 @@ Jet sqrt(const Jet& x) {
   return out;
 }
 
-
 using Vec3 = std::array<Jet, 3>;
 
 Jet distance_squared(const Vec3& a, const Vec3& b) {
