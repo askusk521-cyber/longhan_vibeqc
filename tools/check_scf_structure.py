@@ -166,6 +166,7 @@ CUDA_ALLOWED["cuda_resources"] = (
     "scf/cuda/eigensolver.",
     "scf/cuda/matrix_library.",
     "runtime/resource_cuda.cuh",
+    "runtime/allocation_measurement.hpp",
 )
 CUDA_MODULES["cuda_matrix_library"] = ("matrix_library", "runtime_support")
 CUDA_ALLOWED["cuda_matrix_library"] = (
@@ -450,6 +451,20 @@ CUDA_ALLOWED["cuda_hf_driver"] = (
     "scf/direct_task_layout.hpp",
     "scf/generated_shell_task.hpp",
     "scf/rhf.hpp",
+)
+# Upstream physical-reference export is a host bridge for post-HF clients.
+CUDA_ALLOWED["cuda_hf_driver"] += (
+    "posthf/capacity.hpp",
+    "runtime/allocation_measurement.hpp",
+    "scf/cuda/reference_export.cuh",
+    "scf/mean_field.hpp",
+    "tensor/metrics.hpp",
+)
+CUDA_MODULES["cuda_reference_export"] = ("reference_export",)
+CUDA_ALLOWED["cuda_reference_export"] = (
+    "posthf/capacity.hpp",
+    "scf/mean_field.hpp",
+    "tensor/cuda_error.hpp",
 )
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]

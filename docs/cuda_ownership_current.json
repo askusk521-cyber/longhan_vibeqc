@@ -151,20 +151,20 @@
       "subsystem": "low_rank"
     },
     {
-      "bytes": 7792,
+      "bytes": 8075,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 172,
+        "runtime": 181,
         "scientific": 0
       },
       "path": "src/posthf/cuda_transform.cu",
-      "physical_lines": 180,
+      "physical_lines": 189,
       "reason": "Generic bounded multi-index basis transforms and library/arena ownership.",
       "regions": [],
       "role": "runtime",
-      "sha256": "8def0987cd6ce786a46d03424b189561c2e592a95cd0b6a4286208c0f5302049",
+      "sha256": "c5b20281ef510bd0ff5a7ca5107696c3c9a7e199d46d5661c84a2e956f8e7111",
       "subsystem": "runtime"
     },
     {
@@ -2599,20 +2599,37 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 1763,
+      "bytes": 6007,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 32,
+        "runtime": 139,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/reference_export.cuh",
+      "physical_lines": 150,
+      "reason": "Bounded CUDA-to-host physical-reference staging and numeric-capacity accounting; no integral or method equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "97ef2d2415c0b3c0bd0c90ba668242346ce11ba356344b11ec5b97ec2775f7cb",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 1920,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 34,
         "scientific": 0
       },
       "path": "src/scf/cuda/resources.hpp",
-      "physical_lines": 52,
+      "physical_lines": 55,
       "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
       "regions": [],
       "role": "runtime",
-      "sha256": "1d7a4b74cc410afe7b99cf9090c2a13386010646215383a3e19e953458487de8",
+      "sha256": "9968a5815e0a86083e64fc224aa701f060d4ebea8c39d672ed1ac93a672e05e7",
       "subsystem": "runtime"
     },
     {
@@ -2961,20 +2978,37 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 8378,
+      "bytes": 753,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 173,
+        "runtime": 12,
+        "scientific": 0
+      },
+      "path": "src/tensor/cuda_error.hpp",
+      "physical_lines": 21,
+      "reason": "Shared host CUDA error and typed allocation-failure boundary, extracted unchanged so ordinary C++ reference export does not import device kernels.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "f0f4d6ee90c4eb5ef7258547c578bffc540553c7d937d88be6efc05ca3f44795",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 7980,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 160,
         "scientific": 0
       },
       "path": "src/tensor/cuda_runtime.cuh",
-      "physical_lines": 206,
+      "physical_lines": 190,
       "reason": "Shared arena, streams/events, cuBLAS workspace and error/metrics handling.",
       "regions": [],
       "role": "runtime",
-      "sha256": "c51d195f9046ef306dc25e8820b0a4a741ffcc2047846c2e2fd8147d0b16be2f",
+      "sha256": "ed9bf66b47522441777f910f774d8f2718a74e086aea1e9215c7d5e5bf1dfbbe",
       "subsystem": "runtime"
     }
   ],
@@ -3103,7 +3137,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8466,
+    "runtime": 8615,
     "scientific": 9656
   },
   "migration_ledger": {
@@ -3292,7 +3326,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4001,
+      "runtime": 4150,
       "scientific": 5
     },
     "scf_tensor": {

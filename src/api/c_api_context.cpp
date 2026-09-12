@@ -36,7 +36,13 @@ vibeqc_status vibeqc_context_create(const vibeqc_context_descriptor* descriptor,
 void vibeqc_context_destroy(vibeqc_context* context) { delete context; }
 
 const char* vibeqc_context_get_last_detail(const vibeqc_context* context) {
-  return context ? context->last_detail.c_str() : "invalid context";
+  if (context == nullptr) return "invalid context";
+  std::lock_guard<std::recursive_mutex> lock(context->mutex);
+  return context->last_detail.c_str();
+}
+
+const char* vibeqc_context_last_error(const vibeqc_context* context) {
+  return vibeqc_context_get_last_detail(context);
 }
 
 vibeqc_status vibeqc_system_create(vibeqc_context* context,
@@ -56,6 +62,7 @@ vibeqc_status vibeqc_system_create(vibeqc_context* context,
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
 
+  std::lock_guard<std::recursive_mutex> context_lock(context->mutex);
   try {
     auto candidate = std::make_unique<vibeqc_system>();
     candidate->data.charge = descriptor->charge;
@@ -72,6 +79,10 @@ vibeqc_status vibeqc_system_create(vibeqc_context* context,
     candidate->data.shells.reserve(descriptor->shell_count);
     for (std::uint32_t i = 0; i < descriptor->shell_count; ++i) {
       const vibeqc_shell& shell = descriptor->shells[i];
+      if (context->state.executed_backend == VIBEQC_BACKEND_CUDA && shell.angular_momentum > 3) {
+        context->last_detail = "CUDA basis execution supports l<=3; g shells require CPU reference";
+        return VIBEQC_STATUS_NOT_IMPLEMENTED;
+      }
       if (shell.primitive_count == 0 || shell.primitive_offset > descriptor->primitive_count ||
           shell.primitive_count > descriptor->primitive_count - shell.primitive_offset) {
         return VIBEQC_STATUS_INVALID_ARGUMENT;

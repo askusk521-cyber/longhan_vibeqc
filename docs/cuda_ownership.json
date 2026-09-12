@@ -537,6 +537,13 @@
       "regions": []
     },
     {
+      "path": "src/scf/cuda/reference_export.cuh",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Bounded CUDA-to-host physical-reference staging and numeric-capacity accounting; no integral or method equations.",
+      "regions": []
+    },
+    {
       "path": "src/scf/cuda/direct_bounded_pages.cu",
       "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
       "regions": [
@@ -1276,6 +1283,13 @@
       "role": "runtime",
       "subsystem": "runtime",
       "reason": "Borrowed weighted-primitive launch ABI; public weight semantics and output layout are unchanged.",
+      "regions": []
+    },
+    {
+      "path": "src/tensor/cuda_error.hpp",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Shared host CUDA error and typed allocation-failure boundary, extracted unchanged so ordinary C++ reference export does not import device kernels.",
       "regions": []
     }
   ],

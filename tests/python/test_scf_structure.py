@@ -257,3 +257,18 @@ def test_cpp_hf_driver_cannot_import_device_implementations(tmp_path, dependency
     (source / "cuda" / dependency).write_text("// Separately compiled arithmetic\n")
     (source / "cuda_rhf.cpp").write_text(f'#include "cuda/{dependency}"\n')
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "dependency", ["tensor/cuda_runtime.cuh", "scf/cuda/direct_native_cartesian.cuh"]
+)
+def test_reference_export_uses_only_host_cuda_interfaces(tmp_path, dependency):
+    """Exporting a physical reference must not pull device syntax into C++."""
+    source = tmp_path / "src"
+    target = source / dependency
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("// Contains device kernels\n")
+    bridge = source / "scf/cuda/reference_export.cuh"
+    bridge.parent.mkdir(parents=True, exist_ok=True)
+    bridge.write_text(f'#include "{dependency}"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
