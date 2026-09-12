@@ -53,8 +53,8 @@ class _EnergyFunction(torch.autograd.Function):
         ]
         result = calculator.singlepoint(
             atoms,
-            charge=int(charge),
-            multiplicity=int(multiplicity),
+            charge=charge,
+            multiplicity=multiplicity,
             properties=("energy", "forces"),
         )
         force_tensor = torch.as_tensor(

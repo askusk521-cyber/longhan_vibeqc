@@ -72,6 +72,13 @@ class Shell:
 
 @dataclass(frozen=True)
 class CorrelationResult:
+    """Canonical MP2 components and the completed native phase diagnostics.
+
+    Energies and denominator magnitudes are Hartree; timings are milliseconds.
+    Numeric capacity counts the largest phase, excluding allocator/object
+    overhead. Transfer fields describe the disclosed CUDA staging path.
+    """
+
     reference_energy: float
     opposite_spin_energy: float
     same_spin_energy: float
@@ -955,9 +962,14 @@ class Calculator:
         *,
         charge: int = 0,
         multiplicity: int = 1,
-        properties: Sequence[str] | None = None,
+        properties: Iterable[str] | None = None,
     ) -> Result:
-        """Run one calculation for explicitly selected observables."""
+        """Compute energy and optional analytic forces for one system.
+
+        HF defaults to energy and forces; energy-only MP2 defaults to energy.
+        Explicit ``properties=("energy",)`` omits force evaluation and returns
+        ``Result.forces=None``. MP2 rejects any force request before execution.
+        """
         if properties is None:
             properties = (
                 ("energy",)

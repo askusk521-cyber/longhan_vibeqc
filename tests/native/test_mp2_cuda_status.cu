@@ -13,12 +13,12 @@ int main() {
     bool cuda_oom = false, blas_oom = false;
     try {
       vibeqc_tensor::cuda_check(cudaErrorMemoryAllocation);
-    } catch (const std::bad_alloc&) {
+    } catch (const vibeqc_tensor::DeviceAllocationError&) {
       cuda_oom = true;
     }
     try {
       vibeqc_tensor::blas_check(CUBLAS_STATUS_ALLOC_FAILED);
-    } catch (const std::bad_alloc&) {
+    } catch (const vibeqc_tensor::DeviceAllocationError&) {
       blas_oom = true;
     }
     if (!cuda_oom || !blas_oom) throw std::runtime_error("allocation status type lost");

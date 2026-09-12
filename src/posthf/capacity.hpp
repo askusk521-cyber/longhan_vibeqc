@@ -47,11 +47,18 @@ inline std::size_t rhf_reference_capacity(const core::System& system, unsigned d
   const auto matrices = checked_add(64, checked_mul(2, diis_history));
   auto bytes = checked_add(checked_add(source_capacity(system), source_scratch_bytes + 4096),
                            checked_mul(8, checked_mul(matrix_elements, matrices)));
-  // The CPU exact Fock plan materializes the full AO ERI before the reference
-  // export path can release it. CUDA and streamed consumers do not need this
-  // host tensor, so callers include it only for the CPU preparation path.
-  if (include_dense_eri)
-    bytes = checked_add(bytes, checked_mul(8, checked_mul(matrix_elements, matrix_elements)));
+  // CPU preparation holds both Cartesian Jet values and the unpacked FP64
+  // tensor. A spherical conversion adds the public tensor while both Cartesian
+  // copies are still live. Count scalar payloads here; Jet vector headers and
+  // allocator rounding remain outside the documented numeric-buffer budget.
+  if (include_dense_eri) {
+    const auto cart = molecule::cartesian_ao_count(system);
+    const auto cart2 = checked_mul(cart, cart);
+    auto eri_elements = checked_mul(2, checked_mul(cart2, cart2));
+    if (system.basis_representation == VIBEQC_BASIS_SPHERICAL)
+      eri_elements = checked_add(eri_elements, checked_mul(matrix_elements, matrix_elements));
+    bytes = checked_add(bytes, checked_mul(8, eri_elements));
+  }
   return bytes;
 }
 }  // namespace vibeqc::posthf

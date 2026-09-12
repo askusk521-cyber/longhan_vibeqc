@@ -57,8 +57,9 @@ Direct MO slots `(i,a,j,b)` and exchange slots `(i,b,j,a)` are separate provider
 requests. Exchange is reordered into the same local ijab coordinates. Each
 occupied axis has extent one; virtual extents use 1/2/4/8. Final virtual tiles
 use zero coefficient columns and a valid virtual energy, so padding contributes
-zero without introducing a zero denominator. No complete molecular T2 or AO
-ERI is allocated by the energy/reference-only route.
+zero without introducing a zero denominator. The correlation consumer never
+allocates complete molecular T2 or AO ERIs. CPU RHF preparation uses dense AO
+ERIs with a checked capacity; CUDA RHF uses the bounded matrix-direct route.
 
 ## Native path and placement
 
@@ -71,8 +72,10 @@ C / C++ / Python public prepare
   -> native compensated scalar fold -> energy + correlation diagnostics
 ```
 
-CPU RHF uses the original iteration/DIIS/eigensolver with a values-only streamed
-Fock callback from the existing `RawSource`. It does not use the old 12-AO
+CPU RHF uses the shared prepared Fock plan and iteration/DIIS/eigensolver. Its
+values-only dense integral preparation counts both Cartesian representations
+and the additional public tensor for spherical bases before allocation. This
+limits the CPU reference size under the requested budget. It does not use the old 12-AO
 Python exporter, reconstruct a second HF calculation or calculate HF forces.
 GPU RHF explicitly uses the existing matrix-direct packed device evaluator,
 never its small-system persistent-ERI mode. This generic exact device path is

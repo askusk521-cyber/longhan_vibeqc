@@ -666,6 +666,12 @@ void validate_physical_reference(PhysicalReference& ref) {
   const auto ct = transpose(ref.coefficients, n);
   const auto csc = multiply(ct, sc, n);
   const auto cfc = multiply(ct, fc, n);
+  // Finite inputs can still overflow during validation. NaN comparisons below
+  // must never allow an invalid reference to reach the correlation consumer.
+  for (const auto* a : {&canonical_density, &residual, &fc, &sc, &csc, &cfc})
+    if (!std::all_of(a->begin(), a->end(), [](double x) { return std::isfinite(x); }))
+      throw std::runtime_error("nonfinite physical reference validation");
+  if (!std::isfinite(ref.energy)) throw std::runtime_error("nonfinite physical reference energy");
   ref.commutator_residual = ref.canonical_density_drift = ref.eigen_residual = 0.0;
   double orthogonality = 0.0;
   double canonical = 0.0;
@@ -785,6 +791,9 @@ ScfResult run_cpu_fock_strategy(const core::System& system, const core::System* 
 ScfResult run_rhf(const core::System& system, const ScfOptions& options,
                   const std::vector<double>* initial_density) {
   ScfOptions execution = options;
+  // Export is an internal energy-only consumer; suppress derivative preparation
+  // as well as the final force calculation even with default ScfOptions.
+  if (execution.export_physical_reference) execution.compute_forces = false;
   if (!execution.resolved_fock_build)
     execution.resolved_fock_build = resolve_fock_build(
         make_hf_fock_spec(FockSpin::Restricted), FockBackend::Cpu, options.screening_tolerance);

@@ -117,6 +117,11 @@ class Mp2Prepared final : public PreparedCalculation {
 }  // namespace
 
 vibeqc_status validate_mp2_system(vibeqc_method, const core::System& system, std::string& detail) {
+  if (std::any_of(system.shells.begin(), system.shells.end(),
+                  [](const auto& shell) { return shell.angular_momentum > 3; })) {
+    detail = "canonical MP2 reference/provider validation supports shells through f";
+    return VIBEQC_STATUS_NOT_IMPLEMENTED;
+  }
   if (system.multiplicity != 1 || system.electron_count <= 0 || system.electron_count % 2) {
     detail = "MP2 supports real closed-shell all-electron RHF only";
     return VIBEQC_STATUS_NOT_IMPLEMENTED;

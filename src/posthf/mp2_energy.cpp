@@ -19,7 +19,11 @@ Energy conventional_energy(const scf::PhysicalReference& ref, const posthf::RawS
   const double hi = *std::max_element(eps.begin(), eps.begin() + ref.nocc);
   const double lo = *std::min_element(eps.begin() + ref.nocc, eps.end());
   const double largest = hi + hi - lo - lo;
-  if (!std::isfinite(largest)) throw std::invalid_argument("nonfinite MP2 denominator extrema");
+  const double lowest_occupied = *std::min_element(eps.begin(), eps.begin() + ref.nocc);
+  const double highest_virtual = *std::max_element(eps.begin() + ref.nocc, eps.end());
+  const double smallest = lowest_occupied + lowest_occupied - highest_virtual - highest_virtual;
+  if (!std::isfinite(largest) || !std::isfinite(smallest))
+    throw std::invalid_argument("nonfinite MP2 denominator extrema");
   if (largest >= 0)
     throw std::invalid_argument("occupied MP2 energies must be below virtual energies");
   if (-largest <= threshold)
@@ -59,7 +63,7 @@ Energy conventional_energy(const scf::PhysicalReference& ref, const posthf::RawS
     char error[2048]{};
     kernel.destroy = gpu.destroy;
     const auto status = gpu.create(device, &kernel.pointer, error, sizeof(error));
-    if (status == 2) throw std::bad_alloc();
+    if (status == 2 || status == 3) throw std::bad_alloc();
     if (status) throw std::runtime_error(error);
   }
   double sum[2]{}, correction[2]{};
@@ -94,7 +98,7 @@ Energy conventional_energy(const scf::PhysicalReference& ref, const posthf::RawS
             vibeqc_tensor::Metrics measured;
             const auto status = gpu.run(kernel.pointer, g.data(), x.data(), eps[i], eps[j],
                                         ea.data(), eb.data(), out, &measured, error, sizeof(error));
-            if (status == 2) throw std::bad_alloc();
+            if (status == 2 || status == 3) throw std::bad_alloc();
             if (status) throw std::runtime_error(error);
             if (measured.owned_device_bytes != gpu.device_bytes)
               throw std::runtime_error("MP2 tensor allocation disagrees with plan");

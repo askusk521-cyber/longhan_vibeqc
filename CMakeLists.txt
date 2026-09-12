@@ -330,6 +330,7 @@ if(VIBEQC_ENABLE_CUDA)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_mp2_native.py"
             --cuda-dir "${_mp2_generated_dir}" --architectures "${_mp2_archs}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_mp2_native.py" ${_mp2_generator_inputs}
+            ${VIBEQC_SCIENTIFIC_COMPILER_INPUTS}
     VERBATIM)
   target_sources(vibeqc PRIVATE ${_mp2_generated_sources} src/posthf/cuda_transform.cu)
   target_include_directories(vibeqc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tensor")
@@ -669,6 +670,14 @@ if(VIBEQC_BUILD_TESTS)
   target_link_libraries(vibeqc_mp2_contract_tests PRIVATE vibeqc)
   target_include_directories(vibeqc_mp2_contract_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   add_test(NAME vibeqc_mp2_contract_tests COMMAND vibeqc_mp2_contract_tests)
+
+  if(VIBEQC_ENABLE_CUDA)
+    add_executable(vibeqc_mp2_cuda_status_tests tests/native/test_mp2_cuda_status.cu)
+    target_link_libraries(vibeqc_mp2_cuda_status_tests PRIVATE vibeqc CUDA::cudart CUDA::cublas)
+    target_include_directories(vibeqc_mp2_cuda_status_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_mp2_cuda_status_tests COMMAND vibeqc_mp2_cuda_status_tests)
+    set_tests_properties(vibeqc_mp2_cuda_status_tests PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
 
   add_executable(vibeqc_scf_proposal_tests tests/native/test_scf_proposals.cpp)
   target_link_libraries(vibeqc_scf_proposal_tests PRIVATE vibeqc)

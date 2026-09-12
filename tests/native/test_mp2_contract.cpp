@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -109,6 +110,17 @@ void provider_and_reference() {
     rejected = true;
   }
   require(rejected, "inconsistent physical density was accepted");
+  bad = ref;
+  // Finite entries can produce inf/NaN products. Comparison-only validators
+  // otherwise accept NaN residuals because each greater-than test is false.
+  bad.coefficients.assign(4, std::numeric_limits<double>::max());
+  rejected = false;
+  try {
+    vibeqc::scf::validate_physical_reference(bad);
+  } catch (const std::exception&) {
+    rejected = true;
+  }
+  require(rejected, "overflowing reference validation was accepted");
   const auto plan = provider.plan({2, 2, 2, 2});
   require(plan.allocation_bytes == 0 && plan.device_bytes == 0,
           "CPU provider must not claim GPU allocations");
@@ -119,6 +131,16 @@ void provider_and_reference() {
     overflow = true;
   }
   require(overflow, "native capacity overflow was not rejected");
+
+  auto spherical = system;
+  spherical.basis_representation = VIBEQC_BASIS_SPHERICAL;
+  spherical.shells[0].angular_momentum = 3;
+  const auto cart = vibeqc::molecule::cartesian_ao_count(spherical);
+  const auto n = vibeqc::molecule::ao_count(spherical);
+  const auto without_eri = vibeqc::posthf::rhf_reference_capacity(spherical, 8, false);
+  const auto with_eri = vibeqc::posthf::rhf_reference_capacity(spherical, 8, true);
+  require(with_eri - without_eri >= 8 * (2 * cart * cart * cart * cart + n * n * n * n),
+          "CPU reference budget omitted simultaneous Cartesian/spherical tensors");
 }
 }  // namespace
 int main() {

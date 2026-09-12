@@ -227,8 +227,12 @@ for (I n0 = 0; n0 < {g.n}LL; n0 += {nt}LL) {{
 }}"""
 
 
-def emit_cuda(plan: TensorPlan) -> str:
-    """Return standalone C++17 CUDA source with a versioned, exception-safe ABI."""
+def emit_cuda(plan: TensorPlan, *, symbol_prefix: str = "") -> str:
+    """Emit a CUDA plan, optionally isolating symbols for a shared library.
+
+    The default ABI remains suitable for one dynamically loaded plan. Native
+    consumers linking multiple plans need distinct C exports and C++ helpers.
+    """
     parts = ['#include "cuda_runtime.cuh"', "using namespace vibeqc_tensor;"]
     initialize = []
     tables = dict(plan.index_tables)
@@ -370,4 +374,22 @@ extern "C" int tensor_probe(int device, char* result, size_t size) {{
     }} catch (const std::exception& e) {{ error_text(result, size, e.what()); return 1; }}
 }}
 """)
-    return "\n\n".join(parts) + "\n"
+    result = "\n\n".join(parts) + "\n"
+    if symbol_prefix:
+        import re
+
+        if not re.fullmatch(r"[A-Za-z_]\w*", symbol_prefix, flags=re.ASCII):
+            raise ValueError("invalid native CUDA symbol prefix")
+        for name in (
+            "tensor_plan_identity",
+            "tensor_create",
+            "tensor_destroy",
+            "tensor_run",
+            "tensor_probe",
+        ):
+            result = re.sub(r"\b" + name + r"\b", symbol_prefix + name, result)
+        # Keep runtime includes outside the namespace; only plan-local helpers
+        # and the renamed ABI belong inside it.
+        first, body = result.split("\n", 1)
+        result = first + f"\nnamespace {symbol_prefix}generated {{\n" + body + "\n}\n"
+    return result

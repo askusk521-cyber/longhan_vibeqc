@@ -553,6 +553,15 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
     library.vibeqc_batch_get_last_inactive_eigensolver_profile.restype = ctypes.c_int
     library.vibeqc_context_get_last_detail.argtypes = [ctypes.c_void_p]
     library.vibeqc_context_get_last_detail.restype = ctypes.c_char_p
+    correlation_diagnostic = getattr(
+        library, "vibeqc_calculation_get_correlation_diagnostic", None
+    )
+    if correlation_diagnostic is not None:
+        correlation_diagnostic.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(CorrelationDiagnostic),
+        ]
+        correlation_diagnostic.restype = ctypes.c_int
     # Keep the pre-#193 name available when an older native library exports it.
     legacy_last_error = getattr(library, "vibeqc_context_last_error", None)
     if legacy_last_error is not None:

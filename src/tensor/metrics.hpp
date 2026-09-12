@@ -1,8 +1,7 @@
 #pragma once
 #include <cstdint>
-#include <mutex>
 namespace vibeqc_tensor {
-inline std::mutex allocation_measurement_mutex;
+/** Shared plain-data diagnostics used by the native and generated tensor ABIs. */
 struct Metrics {
   uint64_t owned_device_bytes = 0;
   uint64_t provider_retained_bytes = 0;
