@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 9509,
+  "all_handwritten_scientific_lines": 9759,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -355,20 +355,54 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 18272,
+      "bytes": 21259,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 350
+        "scientific": 391
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 361,
+      "physical_lines": 407,
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned.",
       "regions": [],
       "role": "scientific",
-      "sha256": "f6afe1943b87642f1c479ac6d57b48e9f96f7d9fe79233badfcbece85ff805cf",
+      "sha256": "4e1bd2bd139d717dd6fb0b0894bef1c3edd76640bbd8676bf5db0d65378e3cd2",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "bytes": 10810,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 0,
+        "scientific": 189
+      },
+      "path": "src/scf/cuda/df_response_weights.cu",
+      "physical_lines": 214,
+      "reason": "Native HF density response contractions and spectral Frechet map, moved to bounded device execution for #205. Conservatively scientific method arithmetic; primitive values and derivatives still use the #142/#143 generated interfaces.",
+      "regions": [],
+      "role": "scientific",
+      "sha256": "a913e5be73636d9a4249729658e6eba19d82361ff0b539f4845ef3a634bb72af",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "bytes": 1918,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 0,
+        "scientific": 18
+      },
+      "path": "src/scf/cuda/df_response_weights.cuh",
+      "physical_lines": 41,
+      "reason": "Native HF density response contractions and spectral Frechet map, moved to bounded device execution for #205. Conservatively scientific method arithmetic; primitive values and derivatives still use the #142/#143 generated interfaces.",
+      "regions": [],
+      "role": "scientific",
+      "sha256": "868361eba5eccaf19db1aa6c4e6d4c3d01b57bdbea3871fdd23f4b85ebba536c",
       "subsystem": "df_derivatives"
     },
     {
@@ -610,22 +644,22 @@
       "subsystem": "direct_integrals"
     },
     {
-      "bytes": 160928,
+      "bytes": 159870,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 2227,
-        "scientific": 630
+        "runtime": 2208,
+        "scientific": 632
       },
       "path": "src/scf/cuda_density_fitting.cu",
-      "physical_lines": 3098,
+      "physical_lines": 3076,
       "reason": "RI planning, ownership, generic eigensolver/DIIS and library runtime.",
       "regions": [
         {
           "code_lines": 126,
-          "first_line": 151,
-          "last_line": 298,
+          "first_line": 153,
+          "last_line": 300,
           "reason": "Streamed RI J/K, density and energy equations.",
           "role": "scientific",
           "start": "__global__ void accumulate_streamed_auxiliary_density_kernel",
@@ -633,17 +667,17 @@
         },
         {
           "code_lines": 441,
-          "first_line": 521,
-          "last_line": 1017,
+          "first_line": 526,
+          "last_line": 1022,
           "reason": "Explicit RI J/K equation composition using cuBLAS; conservative region includes staging.",
           "role": "scientific",
           "start": "vibeqc_status build_coulomb(",
           "stop": "vibeqc_status prepare_outputs("
         },
         {
-          "code_lines": 63,
-          "first_line": 1047,
-          "last_line": 1115,
+          "code_lines": 65,
+          "first_line": 1052,
+          "last_line": 1122,
           "reason": "Generated response bridge and shared spectral-factor composition; counted conservatively with its native adapter.",
           "role": "scientific",
           "start": "vibeqc_status execute_cuda_density_fitting_generated_force_response(",
@@ -651,7 +685,7 @@
         }
       ],
       "role": "runtime",
-      "sha256": "38cdd8c034c82464c42951d93bc191aa92fae7bdeb5fa385d6a5712a656bab5d",
+      "sha256": "72b6bde952c9bfbc775f1756c8f3b9d4e3c9e74bd4c9d0adf0da7c102845f1d7",
       "subsystem": "scf_tensor"
     },
     {
@@ -1046,8 +1080,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 122,
-    "runtime": 14528,
-    "scientific": 9387
+    "runtime": 14509,
+    "scientific": 9637
   },
   "migration_ledger": {
     "ao_grid": {
@@ -1193,7 +1227,7 @@
       "oracle": 0,
       "performance_exception": 0,
       "runtime": 87,
-      "scientific": 350
+      "scientific": 598
     },
     "direct_integrals": {
       "fallback": 0,
@@ -1234,8 +1268,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 2344,
-      "scientific": 1124
+      "runtime": 2325,
+      "scientific": 1126
     },
     "xc": {
       "fallback": 0,

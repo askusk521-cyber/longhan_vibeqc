@@ -10,8 +10,10 @@
 #include <limits>
 #include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "molecule/basis.hpp"
 #include "runtime/resource_cuda.cuh"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_df_gradient.hpp"
@@ -454,14 +456,15 @@ struct CudaDensityFittingJkPlan {
   double* exchange_contributions{};
   double* exchange_tile_output{};
   double* exchange_density_column_major{};
-  // Bounded response weights borrow compact metric factors on the host.
-  // Generated center derivatives contract on device; no complete derivative
-  // tensor is retained between force calls.
-  std::vector<double> host_metrics;
-  std::vector<double> host_metric_inverse;
+  // The source plan keeps its forward eigensystem for the spectral force
+  // reverse map. Ownership moves out of setup; no extra setup allocation or
+  // host copy of M/M+ is needed, including for rank-deficient metrics.
+  double* metric_eigenvectors{};
+  double* metric_eigenvalues{};
+  std::vector<std::uint8_t> metric_response_valid;
   // Partial auxiliary tiles normally use host-backed raw values.  A source-
   // backed plan instead regenerates the requested transformed tile directly
-  // on the device and retains only this inverse metric factor.
+  // on the device; X is shared by J/K and the spectral force response.
   bool streamed{};
   CudaDensityFittingIntegralSource* integral_source{};
   double* inverse_square_roots{};
@@ -482,6 +485,8 @@ void release(CudaDensityFittingJkPlan& plan) noexcept {
   destroy_persistent_scf_state(plan.persistent_scf_state);
   destroy_cuda_density_fitting_integral_source(plan.integral_source);
   (void)runtime::resource_cuda_free(plan.inverse_square_roots);
+  (void)runtime::resource_cuda_free(plan.metric_eigenvectors);
+  (void)runtime::resource_cuda_free(plan.metric_eigenvalues);
   (void)runtime::resource_cuda_free(plan.three_center);
   (void)runtime::resource_cuda_free(plan.primary_density);
   (void)runtime::resource_cuda_free(plan.secondary_density);
@@ -1051,11 +1056,25 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
     unsigned schedule, std::size_t maximum_bytes, std::size_t maximum_auxiliary_tile,
     std::vector<double>& derivative, std::string& detail, DfGradientResources* resources) {
   if (resources) *resources = {};
-  if (!plan || system >= plan->batch_size) {
+  if (!plan || system >= plan->batch_size || molecule::ao_count(orbital) != plan->nbf ||
+      molecule::ao_count(auxiliary) != plan->naux) {
     detail = "invalid generated DF force plan or batch index";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
   const auto elements = plan->naux * plan->naux, offset = system * elements;
+  if (plan->integral_source) {
+    if (!plan->metric_response_valid[system]) {
+      detail = "DF metric rank crossing: retained/discarded subspaces are unresolved";
+      return VIBEQC_STATUS_NUMERICAL_FAILURE;
+    }
+    const CudaDfMetricView metric{
+        plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
+        plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold};
+    return execute_cuda_df_hf_gradient(
+        plan->device_id, reinterpret_cast<void*>(plan->stream), plan->integral_source, system,
+        orbital, auxiliary, {}, {}, {}, terms, plan->metric_relative_threshold, schedule,
+        maximum_bytes, maximum_auxiliary_tile, derivative, detail, resources, &metric);
+  }
   // Copies isolate one system's spectral reverse map from the packed batch.
   // Charge them while the bounded HF/derivative bridge is also alive.
   const auto copies_bytes = 2 * elements * sizeof(double);
@@ -1065,34 +1084,22 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
   }
   try {
     std::vector<double> metric, inverse;
-    if (plan->integral_source) {
-      if (plan->host_metrics.size() != plan->batch_size * elements ||
-          plan->host_metric_inverse.size() != plan->batch_size * elements) {
-        detail = "generated DF source has no retained metric factors";
-        return VIBEQC_STATUS_INVALID_ARGUMENT;
-      }
-      metric.assign(plan->host_metrics.begin() + offset,
-                    plan->host_metrics.begin() + offset + elements);
-      inverse.assign(plan->host_metric_inverse.begin() + offset,
-                     plan->host_metric_inverse.begin() + offset + elements);
-    } else {
-      if (raw_metric.size() != elements) {
-        detail = "generated resident DF response needs its original metric";
-        return VIBEQC_STATUS_INVALID_ARGUMENT;
-      }
-      metric = raw_metric;
-      // The resident value path already stages raw A/M on the host. Reuse
-      // that same Hamiltonian and cutoff, without inventing derivative arrays
-      // to satisfy the legacy complete-tensor oracle interface.
-      const auto factor =
-          factor_density_fitting_metric(metric, plan->naux, plan->metric_relative_threshold);
-      inverse.assign(elements, 0.0);
-      for (std::size_t i = 0; i < plan->naux; ++i)
-        for (std::size_t j = 0; j < plan->naux; ++j)
-          for (std::size_t k = 0; k < plan->naux; ++k)
-            inverse[i * plan->naux + j] += factor.inverse_square_root[i * plan->naux + k] *
-                                           factor.inverse_square_root[j * plan->naux + k];
+    if (raw_metric.size() != elements) {
+      detail = "generated resident DF response needs its original metric";
+      return VIBEQC_STATUS_INVALID_ARGUMENT;
     }
+    metric = raw_metric;
+    // The resident value path already stages raw A/M on the host. Reuse
+    // that same Hamiltonian and cutoff, without inventing derivative arrays
+    // to satisfy the legacy complete-tensor oracle interface.
+    const auto factor =
+        factor_density_fitting_metric(metric, plan->naux, plan->metric_relative_threshold);
+    inverse.assign(elements, 0.0);
+    for (std::size_t i = 0; i < plan->naux; ++i)
+      for (std::size_t j = 0; j < plan->naux; ++j)
+        for (std::size_t k = 0; k < plan->naux; ++k)
+          inverse[i * plan->naux + j] += factor.inverse_square_root[i * plan->naux + k] *
+                                         factor.inverse_square_root[j * plan->naux + k];
     DfGradientResources measured;
     const auto status = execute_cuda_df_hf_gradient(
         plan->device_id, reinterpret_cast<void*>(plan->stream), plan->integral_source, system,
@@ -1421,6 +1428,7 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
     scales.assign(batch_size * naux, 0.0);
     solver_info.resize(batch_size);
     diagnostics.resize(batch_size);
+    if (candidate->integral_source) candidate->metric_response_valid.assign(batch_size, 1);
   } catch (const std::bad_alloc&) {
     detail = "host allocation for CUDA DF metric diagnostics failed";
     return fail_plan(candidate, VIBEQC_STATUS_OUT_OF_MEMORY);
@@ -1464,6 +1472,9 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
         detail = "CUDA DF metric eigensolver returned a non-finite eigenvalue";
         return fail_plan(candidate, VIBEQC_STATUS_CUDA_ERROR);
       }
+      if (candidate->integral_source && std::abs(value - diagnostic.absolute_threshold) <=
+                                            128 * std::numeric_limits<double>::epsilon() * largest)
+        candidate->metric_response_valid[system] = 0;
       if (value <= diagnostic.absolute_threshold) continue;
       scales[offset + item] = 1.0 / std::sqrt(value);
       ++diagnostic.effective_rank;
@@ -1541,45 +1552,8 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
                        blas_failure(blas_status, "transform CUDA DF three-center tensor", detail));
     }
   }
-  if (candidate->integral_source != nullptr) {
-    // Generated force weights reuse the compact host metric and pseudoinverse.
-    // Apply the spectral reverse map once to the accumulated metric weight,
-    // without coordinate-wise derivatives or reconstructing the full DF tensor.
-    try {
-      candidate->host_metrics = metrics;
-      candidate->host_metric_inverse.assign(all_metric_elements, 0.0);
-      // The inverse square root already resides on the device.  Form the
-      // pseudoinverse there and copy it directly to its retained host buffer;
-      // this avoids a full batch-sized host inverse-square-root temporary
-      // during positive-budget source-plan setup.
-      blas_status = cublasDgemmStridedBatched(
-          candidate->blas, CUBLAS_OP_N, CUBLAS_OP_T, static_cast<int>(naux), static_cast<int>(naux),
-          static_cast<int>(naux), &one, setup.inverse_square_roots, static_cast<int>(naux),
-          static_cast<long long>(metric_elements), setup.inverse_square_roots,
-          static_cast<int>(naux), static_cast<long long>(metric_elements), &zero,
-          setup.scaled_eigenvectors, static_cast<int>(naux),
-          static_cast<long long>(metric_elements), static_cast<int>(batch_size));
-      if (blas_status != CUBLAS_STATUS_SUCCESS) {
-        return fail_plan(
-            candidate,
-            blas_failure(blas_status, "construct source-backed CUDA DF metric inverse", detail));
-      }
-      cuda_error = cudaMemcpyAsync(candidate->host_metric_inverse.data(), setup.scaled_eigenvectors,
-                                   candidate->host_metric_inverse.size() * sizeof(double),
-                                   cudaMemcpyDeviceToHost, candidate->stream);
-      if (cuda_error == cudaSuccess) {
-        cuda_error = cudaStreamSynchronize(candidate->stream);
-      }
-      if (cuda_error != cudaSuccess) {
-        return fail_plan(
-            candidate,
-            cuda_failure(cuda_error, "read source-backed CUDA DF metric inverse", detail));
-      }
-    } catch (const std::bad_alloc&) {
-      detail = "host allocation for source-backed CUDA DF metric factors failed";
-      return fail_plan(candidate, VIBEQC_STATUS_OUT_OF_MEMORY);
-    }
-  }
+  // Source force replay borrows these original device factors. Transfer them
+  // only after the final stream drain below, so setup still owns error cleanup.
   // Publish a conservative allocation accounting record.  Setup buffers are
   // still live at this point, so the peak includes both permanent contraction
   // storage and metric-factorization workspace; host-side solver workspace is
@@ -1601,12 +1575,13 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
       3 * tile_bytes + matrix_bytes + (candidate->streamed ? tile_bytes : 0) +
       persistent_scf_bytes +
       (candidate->integral_source != nullptr
-           ? metric_bytes +
+           ? 2 * metric_bytes + auxiliary_vector_bytes +
                  cuda_density_fitting_integral_source_device_bytes(candidate->integral_source)
            : 0);
-  const std::size_t setup_device_bytes = 3 * metric_bytes + 2 * auxiliary_vector_bytes +
-                                         (candidate->streamed ? 0 : tensor_bytes) +
-                                         solver_device_workspace_bytes + solver_info_bytes;
+  const std::size_t setup_device_bytes =
+      (candidate->integral_source ? 2 * metric_bytes + auxiliary_vector_bytes
+                                  : 3 * metric_bytes + 2 * auxiliary_vector_bytes) +
+      (candidate->streamed ? 0 : tensor_bytes) + solver_device_workspace_bytes + solver_info_bytes;
   // This record covers the value/SCF plan and its setup. Generated force
   // staging is owned by the separately budgeted bridge and reported through
   // DfGradientResources and the whole-HF allocation ledger.
@@ -1622,15 +1597,14 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
            ? (candidate->integral_source != nullptr
                   ? static_cast<long double>(cuda_density_fitting_integral_source_host_bytes(
                         candidate->integral_source)) +
-                        vector_capacity_bytes(candidate->host_metrics) +
-                        vector_capacity_bytes(candidate->host_metric_inverse)
+                        vector_capacity_bytes(candidate->metric_response_valid)
                   : static_cast<long double>(
                         vector_capacity_bytes(candidate->streamed_raw_three_center)) +
                         vector_capacity_bytes(candidate->streamed_inverse_square_roots))
            : 0.0L);
   const std::size_t host_resident_bytes = saturating_bytes(host_resident_estimate);
 
-  // Setup vectors coexist with retained source metrics. Force staging is
+  // Setup vectors coexist with source metadata. Force staging is
   // accounted by the owning bridge, independently of this value-plan record.
   const long double setup_host_estimate =
       static_cast<long double>(vector_capacity_bytes(metrics)) +
@@ -1663,6 +1637,10 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
   candidate->solver_parameters = nullptr;
   (void)cusolverDnDestroy(candidate->solver);
   candidate->solver = nullptr;
+  if (candidate->integral_source) {
+    candidate->metric_eigenvectors = std::exchange(setup.metrics, nullptr);
+    candidate->metric_eigenvalues = std::exchange(setup.eigenvalues, nullptr);
+  }
   *plan = candidate;
   return VIBEQC_STATUS_SUCCESS;
 }

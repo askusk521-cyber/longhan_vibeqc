@@ -5,6 +5,10 @@
  */
 #include <sys/resource.h>
 
+#ifdef VIBEQC_DF_PROBE_PROFILE
+#include <cuda_profiler_api.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -100,6 +104,9 @@ int main(int argc, char** argv) {
           actual, detail, &resources));
     };
     execute();
+#ifdef VIBEQC_DF_PROBE_PROFILE
+    if (cudaProfilerStart() != cudaSuccess) throw std::runtime_error("start CUDA profile failed");
+#endif
     std::vector<double> timings;
     double maximum_error = 0;
     for (int repeat = 0; repeat < repeats; ++repeat) {
@@ -112,6 +119,14 @@ int main(int argc, char** argv) {
       for (std::size_t i = 0; i < actual.size(); ++i)
         maximum_error = std::max(maximum_error, std::abs(actual[i] - expected[i]));
     }
+#ifdef VIBEQC_DF_PROBE_PROFILE
+    if (cudaProfilerStop() != cudaSuccess) throw std::runtime_error("stop CUDA profile failed");
+#endif
+    if (source &&
+        (!resources.device_response || resources.tensor_host_to_device_bytes ||
+         resources.tensor_device_to_host_bytes || resources.response_host_to_device_bytes ||
+         resources.device_to_host_bytes != 3 * orbital.atoms.size() * sizeof(double)))
+      throw std::runtime_error("source force replay staged bulk tensors or response weights");
     if (maximum_error > 2e-9 || (resources.host_bytes > budget || resources.device_bytes > budget))
       throw std::runtime_error("response error or staging budget gate failed");
     rusage usage{};
@@ -134,7 +149,14 @@ int main(int argc, char** argv) {
               << ",\"uploads\":" << resources.uploads << ",\"derivative_tiles\":" << resources.tiles
               << ",\"weight_tile_elements\":" << resources.weight_tile_elements
               << ",\"auxiliary_weight_tile\":" << resources.auxiliary_weight_tile
-              << ",\"value_slices\":" << resources.value_slices << "}";
+              << ",\"value_slices\":" << resources.value_slices
+              << ",\"device_response\":" << (resources.device_response ? "true" : "false")
+              << ",\"tensor_h2d_bytes\":" << resources.tensor_host_to_device_bytes
+              << ",\"tensor_d2h_bytes\":" << resources.tensor_device_to_host_bytes
+              << ",\"response_h2d_bytes\":" << resources.response_host_to_device_bytes
+              << ",\"density_h2d_bytes\":" << resources.density_host_to_device_bytes
+              << ",\"recomputed_value_bytes\":" << resources.recomputed_value_bytes
+              << ",\"device_response_bytes\":" << resources.device_response_bytes << "}";
     std::cout << ",\"milliseconds\":[";
     for (std::size_t i = 0; i < timings.size(); ++i) std::cout << (i ? "," : "") << timings[i];
     std::cout << "]}\n";
