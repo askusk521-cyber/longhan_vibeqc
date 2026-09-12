@@ -52,12 +52,12 @@ void verify_context_detail_storage() {
           "first context detail was not recorded");
 
   primitive.exponent = 1.0;
-  shell.angular_momentum = 4;
+  shell.angular_momentum = 5;
   require(vibeqc_system_create(second, &descriptor, &system) == VIBEQC_STATUS_NOT_IMPLEMENTED,
           "unsupported angular momentum did not fail");
   const char* second_detail = vibeqc_context_get_last_detail(second);
   require(second_detail != nullptr &&
-              std::string(second_detail).find("supports s through f") != std::string::npos,
+              std::string(second_detail).find("supports s through g") != std::string::npos,
           "second context detail was not recorded");
   require(std::string(first_detail).find("positive finite") != std::string::npos,
           "first context detail was overwritten by another context query");

@@ -60,6 +60,7 @@ void provider_and_reference() {
   const auto system = h2();
   vibeqc::scf::ScfOptions options;
   options.export_physical_reference = true;
+  options.compute_forces = false;
   options.screening_tolerance = 0;
   options.energy_tolerance = options.density_tolerance = 1e-11;
   options.reference_memory_budget_bytes = 256ULL << 20;
