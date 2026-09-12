@@ -53,6 +53,11 @@ class PreparedFockPlan {
   const integrals::IntegralData& one_electron() const noexcept;
   /** CPU accounting borrows the actual DF owner, including its AO data. */
   const DensityFittingScfData* cpu_fitted_data() const noexcept;
+  /** Host numerical bytes counted by the CPU SCF observer. Shared AO data is
+   * charged once; metadata, CUDA buffers and opaque libraries have other owners.
+   * This preserves the reference observer's capacity (not logical-size) contract.
+   */
+  std::size_t cpu_observation_capacity() const noexcept;
   const FockPreparationDiagnostic& diagnostic() const noexcept;
   DirectJkMatrices build(const std::vector<double>& density,
                          const std::vector<double>& beta = {}) const;

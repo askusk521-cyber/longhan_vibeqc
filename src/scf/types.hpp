@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "scf/fock_build.hpp"
+#include "vibeqc/vibeqc.h"
 
 namespace vibeqc::scf {
 
