@@ -48,6 +48,25 @@ def forces_to_gradient(forces):
     return -np.asarray(forces, dtype=np.float64)
 
 
+def _as_hessian(values, *, name: str):
+    """Return ``values`` as a ``(natom, 3, natom, 3)`` array, or raise.
+
+    The axis order is part of the contract every consumer relies on: a matrix
+    stored as ``(3N, 3N)`` or as ``(natom, natom, 3, 3)`` would be reduced
+    against the wrong elements by the checks below rather than rejected.
+    """
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 4 or array.shape[1] != 3 or array.shape[3] != 3:
+        raise ValueError(
+            f"{name} must have shape (natom, 3, natom, 3), got {array.shape}"
+        )
+    if array.shape[0] != array.shape[2]:
+        raise ValueError(
+            f"{name} must be square in its atom indices, got {array.shape}"
+        )
+    return array
+
+
 def hessian_symmetry_error(hessian) -> float:
     """Return the largest raw asymmetry, ``max |H - H^T|``.
 
@@ -55,7 +74,7 @@ def hessian_symmetry_error(hessian) -> float:
     symmetrization would hide exactly the errors this check exists to expose, so
     callers must assert on the unsymmetrized array.
     """
-    values = np.asarray(hessian, dtype=np.float64)
+    values = _as_hessian(hessian, name="hessian")
     return float(np.max(np.abs(values - values.transpose(2, 3, 0, 1))))
 
 
@@ -67,7 +86,7 @@ def hessian_translation_error(hessian) -> float:
     ``R[b, d]`` gives the identity checked here. It holds for every geometry,
     stationary or not, so it needs no stationarity condition.
     """
-    values = np.asarray(hessian, dtype=np.float64)
+    values = _as_hessian(hessian, name="hessian")
     return float(np.max(np.abs(values.sum(axis=0))))
 
 
@@ -77,10 +96,19 @@ def hessian_difference(actual, reference) -> dict:
     Both arrays are ``(natom, 3, natom, 3)``. No tolerance is applied and no
     element is filtered out: the full error distribution is returned so a
     caller cannot promote on a favourable subset.
+
+    The shapes must match exactly. Subtracting a broadcastable but different
+    shape would silently reduce against the wrong elements and report an error
+    statistic that describes nothing -- the same defect the evaluation path
+    guards against, so it is guarded here too.
     """
-    difference = np.asarray(actual, dtype=np.float64) - np.asarray(
-        reference, dtype=np.float64
-    )
+    left = np.asarray(actual, dtype=np.float64)
+    right = np.asarray(reference, dtype=np.float64)
+    if left.shape != right.shape:
+        raise ValueError(
+            f"cannot compare Hessians of shape {left.shape} and {right.shape}"
+        )
+    difference = left - right
     error = np.abs(difference)
     return {
         "max_absolute_error": float(error.max()) if error.size else 0.0,

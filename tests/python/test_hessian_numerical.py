@@ -510,3 +510,22 @@ def test_hessian_error_helpers_report_the_whole_distribution():
     assert difference["max_absolute_error"] == pytest.approx(1.0)
     assert difference["rms_error"] == pytest.approx(1.0)
     assert difference["shape"] == [1, 3, 1, 3]
+
+
+def test_hessian_helpers_reject_wrong_layouts():
+    """A matrix held in another layout must be rejected, not reduced.
+
+    ``(3N, 3N)`` and ``(natom, natom, 3, 3)`` both hold the same numbers, and
+    both would be reduced against the wrong axis pairs if these helpers
+    accepted them -- the same silent-wrong-answer class the oracle's evaluation
+    path guards against.
+    """
+
+    with pytest.raises(ValueError, match="must have shape"):
+        hessian_symmetry_error(np.zeros((6, 6)))
+    with pytest.raises(ValueError, match="must have shape"):
+        hessian_translation_error(np.zeros((2, 2, 3, 3)))
+    with pytest.raises(ValueError, match="square in its atom indices"):
+        hessian_symmetry_error(np.zeros((2, 3, 3, 3)))
+    with pytest.raises(ValueError, match="cannot compare Hessians"):
+        hessian_difference(np.zeros((2, 3, 2, 3)), np.zeros((2, 2, 3, 3)))
