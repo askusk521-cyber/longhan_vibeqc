@@ -6,6 +6,7 @@
 #include "molecule/basis.hpp"
 #include "scf/cuda/launch_geometry.hpp"
 #include "scf/cuda/rhf_policy.hpp"
+#include "scf/cuda/scf_constants.hpp"
 #include "scf/direct_task_layout.hpp"
 
 namespace vibeqc::scf::cuda_execution {
@@ -50,15 +51,6 @@ constexpr std::size_t kBoundedGeneratedMaximumTaskCapacity = 8U * 1024U * 1024U;
 // allocation before it can fall back to the bounded streaming route.
 constexpr std::size_t kFixedGeneratedTaskArenaMaximumBytes = std::size_t{1} << 30;
 constexpr std::size_t kDirectCudaStackLimitBytes = std::size_t{64} << 10;
-// Matrix reductions use one complete warp per system. Keep this independent
-// from the generic capture-safe launch width so tuning other kernels cannot
-// silently drop reductions from additional warps.
-constexpr unsigned kMatrixReductionThreads = 32;
-// External warm densities require an O(N^2) symmetry and metric-trace pass
-// before they can enter a captured SCF replay. One block owns each system so
-// batch-size-one production runs can spread that setup scan across the GPU.
-constexpr unsigned kWarmDensityThreads = 256;
-static_assert(kWarmDensityThreads % 32 == 0);
 // Persistent direct-force workers retain one AO-quartet warp per block. Eight
 // resident workers per SM balance the high-register force kernels while
 // replacing topology-capacity grids with device-side work stealing.
@@ -192,13 +184,6 @@ static_assert(detail::kDirectQuartetThreads == 32);
 // queue. Keeping the order explicit avoids coupling runtime selection to one
 // generated shell class such as dppp.
 constexpr unsigned kGenericOrderFiveAngularOrder = 5;
-// Direct J/K scatters millions of independently evaluated AO quartets through
-// FP64 atomics. Their nondeterministic accumulation order changes the total
-// energy by a small number of representable values even after the density is
-// stationary. Add only a machine-precision-scaled comparison guard; the
-// requested absolute tolerance remains the dominant term for ordinary cases.
-constexpr double kDirectFockEnergyRoundoffFactor = 16.0;
-constexpr double kDoubleMachineEpsilon = 2.2204460492503131e-16;
 // Force-product screening is an additional approximation on top of the Fock
 // quartet gate. Do not inherit deliberately loose SCF screening thresholds:
 // doing so removes derivative terms that remain present in the screened

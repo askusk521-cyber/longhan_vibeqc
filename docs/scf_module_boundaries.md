@@ -27,7 +27,7 @@ and `cuda_ownership_current.json`, under #231.
 | `rhf.cpp`: compatibility entry points | Public RHF/UHF CPU/CUDA wrappers and CPU-build CUDA stubs | Keep existing method/ABI signatures, failure behavior and per-item ordering. |
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Move by the existing #231 scientific ownership regions; do not copy formulas or turn the independent oracle into generated production arithmetic. |
 | `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host bounded class partitioning, stream ordering and partial-page ranges are extracted to `cuda/queue_plan.*`, with queue diagnostics in `cuda/queue_profile.cpp`. Device compaction and queue consumers remain pending. |
-| `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution is extracted to `cuda/eigensolver.cpp` and `cuda/eigensolver_kernels.cu`, with a borrowed handle/workspace view and narrow launch wrappers. Matrix/update kernels remain pending; scheduling choices do not select a different physical operator. |
+| `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution lives in `cuda/eigensolver.cpp` / `eigensolver_kernels.cu`. Shared matrix, density, DIIS, convergence and state kernels now have separate `cuda/scf_*_kernels.*` owners; public/direct basis transforms use `basis_transform_kernels.*`. Scientific integral/Fock kernels and host bucket control remain pending. |
 | `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. DF source setup/replay and explicit tensor export are now extracted to `cuda/df_source*` and `cuda/df_integral_export*`; resource ownership, graph construction and bucket dispatch remain pending. |
 | Former `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Extracted to `cuda/df_plan*`, `df_setup_internal.hpp`, `df_runtime.*` and `df_metric_kernels.*`. The public handle remains opaque; source transfer and retained metric factors keep their single owner. |
 | Former `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Extracted to `cuda/df_coulomb.cpp`, `df_exchange.cpp`, `df_jk*`. Resident, host-backed and source-backed execution retain the same provider semantics and memory sub-budget. |
@@ -322,3 +322,63 @@ Actual implementation-only edits to `df_plan_setup.cpp`, `df_scf_library.cpp`
 and `df_exchange.cpp` each rebuild only that C++ owner plus the source-identity
 object, then relink dependents. They compile no CUDA kernel object. Each probe
 restores and rebuilds the exact validated source before the next edit.
+
+## Shared SCF device kernels
+
+State initialization and solver-result routing, generic matrix operations,
+density/warm-state preparation, DIIS, physical convergence, and public/direct
+basis transforms now have six distinct kernel owners in `src/scf/cuda/`.
+The 34 host-callable wrappers preserve launch geometry, shared bytes, streams,
+arguments and the two retained-density template specializations. Shared launch
+and convergence constants live in `scf_constants.hpp`; common kernel owners
+cannot include direct queue policy or host plan state.
+
+An audit against `cb12e0a` checks all 36 moved function bodies and the entire
+remaining direct CUDA implementation after removing only the definitions and
+replacing launch syntax. It also checks the 34 wrapper bodies. The warm-density
+block reduction, metric trace normalization, open-shell frontier rotation,
+DIIS reduction/solve, mixed-to-target refinement reset, final-Fock reuse and
+warm-state restoration retain their exact arithmetic and per-item routing.
+No scientific formula is duplicated into another maintained owner.
+
+`cuda_rhf.cu` drops from 16,017 to 15,060 lines; the largest new implementation
+is 370 lines. The ownership ledger retains scientific classification for
+occupied/energy-weighted density and energy equations, while matrix algebra,
+state, DIIS, convergence and launch routing remain runtime code. This still
+leaves the direct scientific, device queue and host graph/bucket groups, plus
+full production build/runtime acceptance, under the open #240 issue.
+
+The following compiler-work sample uses ccache-disabled NVCC 12.9 sm_120
+in development fast-compile mode, with a warm filesystem cache on a shared
+machine. The exact parent and extracted source use separate worktrees, so
+absolute paths differ. It is not production cold-build, device-link or molecular
+runtime evidence.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 37.385 | 8,654,208 |
+| extracted_cuda_rhf | 36.564 | 8,440,480 |
+| scf_state_kernels | 1.008 | 44,184 |
+| scf_matrix_kernels | 1.073 | 128,592 |
+| scf_density_kernels | 1.104 | 172,088 |
+| scf_diis_kernels | 1.004 | 92,808 |
+| scf_convergence_kernels | 1.179 | 226,176 |
+| basis_transform_kernels | 1.024 | 93,000 |
+
+Aggregate compiler work changes from 37.385 to 42.957
+seconds; aggregate object bytes change from 8,654,208 to
+9,197,328. These figures do not establish a cold-build speedup.
+
+The formatted extraction passes four native GPU tests and 123 Python GPU tests
+with no skips, covering direct/DF provider composition, checkpoint replay,
+RHF/UHF batches, precision provenance, final-Fock reuse, higher-angular-momentum
+calculator endpoints and warm-state failure isolation. GPU execution used Slurm
+on the RTX 5090. The combined code-generation/structure run passed 376 checks
+with 48 opt-in compiler probes skipped; its one stale launch-syntax assertion
+was corrected and both affected regression checks pass in the focused rerun.
+Hooks and the complete remaining-source audit also pass.
+
+Actual DIIS and convergence implementation edits each rebuild their own CUDA
+object plus the source-identity object, then relink. Neither probe compiles
+`cuda_rhf.cu` or an unrelated kernel owner. The exact source was restored and
+rebuilt after both probes.

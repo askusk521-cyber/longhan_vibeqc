@@ -89,7 +89,9 @@ def test_eigensolver_cannot_acquire_direct_queue_policy(tmp_path):
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1
 
 
-@pytest.mark.parametrize("owner", ["df_jk_kernels.cu", "df_scf_kernels.cu"])
+@pytest.mark.parametrize(
+    "owner", ["df_jk_kernels.cu", "df_scf_kernels.cu", "scf_density_kernels.cu"]
+)
 def test_df_kernels_cannot_acquire_host_plan_state(tmp_path, owner):
     """Kernel changes must remain independent of resource and graph lifetimes."""
     source = tmp_path / "src/scf/cuda"

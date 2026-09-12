@@ -230,6 +230,13 @@ def _direct_cuda_source():
         (root / path).read_text(encoding="utf-8")
         for path in (
             "cuda/direct_constants.hpp",
+            "cuda/scf_constants.hpp",
+            "cuda/scf_state_kernels.cu",
+            "cuda/scf_matrix_kernels.cu",
+            "cuda/scf_density_kernels.cu",
+            "cuda/scf_diis_kernels.cu",
+            "cuda/scf_convergence_kernels.cu",
+            "cuda/basis_transform_kernels.cu",
             "cuda/launch_geometry.hpp",
             "cuda/direct_metadata.hpp",
             "cuda_rhf.cu",
@@ -3665,8 +3672,9 @@ def test_warm_density_validation_parallelizes_each_system_matrix():
     assert "constexpr unsigned kWarmDensityThreads = 256" in source
     assert "warm_density_block_sum<kWarmDensityThreads>" in source
     for kernel in ("apply_warm_density_kernel", "apply_uhf_warm_density_kernel"):
-        launch = rf"{kernel}<<<static_cast<unsigned>\(batch_size\),\s*"
+        launch = rf"launch_{kernel}\(\s*static_cast<unsigned>\(batch_size\),\s*"
         assert re.search(launch + r"kWarmDensityThreads", source)
+        assert f"{kernel}<<<grid, block, shared_bytes, stream>>>" in source
 
 
 def test_force_density_product_screening_is_force_only_and_conservative():

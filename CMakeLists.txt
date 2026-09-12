@@ -311,6 +311,12 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/scf_state_kernels.cu
+    src/scf/cuda/scf_matrix_kernels.cu
+    src/scf/cuda/scf_density_kernels.cu
+    src/scf/cuda/scf_diis_kernels.cu
+    src/scf/cuda/scf_convergence_kernels.cu
+    src/scf/cuda/basis_transform_kernels.cu
     src/scf/cuda/df_source_setup.cpp
     src/scf/cuda/df_source.cpp
     src/scf/cuda/df_source_kernels.cu
