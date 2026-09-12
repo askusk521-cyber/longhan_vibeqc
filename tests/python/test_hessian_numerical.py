@@ -39,15 +39,45 @@ from tools.vibeqc_hessian import (
     hessian_translation_error,
     numerical_hessian,
 )
+from tools.vibeqc_posthf.fixtures import load_fixture, source_arguments
+
+
+def _bundled_basis(fixture_name, atomic_numbers):
+    """Return the exact bundled shells a validation fixture was built with.
+
+    Handing PySCF a basis *name* would compare two different basis definitions
+    and call it a like-for-like reference: PySCF's built-in tables are rounded,
+    and its ``sto-3g`` hydrogen exponent is 3.42525091 where VibeQC bundles
+    3.425250914. The repository's validation contract requires molecular
+    references to use the bundled coefficients, and the fixtures under
+    ``tests/reference_data/posthf`` are where those exact records live.
+
+    The records carry an ``atom_index``, so the fixture's element order has to
+    match the case's. That is asserted rather than assumed, because a mismatch
+    would quietly attach shells to the wrong atoms.
+    """
+    metadata, _ = load_fixture(fixture_name)
+    arguments = source_arguments(metadata)
+    order = tuple(atom.atomic_number for atom in arguments["atoms"])
+    if order != tuple(atomic_numbers):
+        raise AssertionError(
+            f"fixture {fixture_name!r} holds elements {order}, "
+            f"expected {tuple(atomic_numbers)}"
+        )
+    return arguments["basis"]
+
 
 # H2 at a geometry that is not the equilibrium bond length: an exact Hessian is
 # symmetric and translation-invariant at any geometry, so using an off-minimum
 # point additionally keeps the test from passing on a stationary-point accident.
+# The basis is the bundled one, not a basis name -- see _bundled_basis.
 H2 = {
     "symbols": ("H", "H"),
     "coordinates": np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     "charge": 0,
     "multiplicity": 1,
+    "basis": _bundled_basis("h2", (1, 1)),
+    "representation": "cartesian",
 }
 
 # The familiar 0.958 A / 104.5 degree water structure converted to Bohr
@@ -65,6 +95,8 @@ WATER = {
     ),
     "charge": 0,
     "multiplicity": 1,
+    "basis": _bundled_basis("water", (8, 1, 1)),
+    "representation": "cartesian",
 }
 
 # An 18-AO system built from explicit s/d/f shells on the helium centre. The
@@ -82,6 +114,7 @@ HEH_DF = {
         Shell(0, 3, (Primitive(0.6, 1.0),)),
         Shell(1, 0, (Primitive(1.2, 1.0),)),
     ),
+    "representation": "cartesian",
 }
 
 STEPS = (1e-2, 3e-3, 1e-3)
@@ -143,9 +176,13 @@ def _calculator_gradient(case):
     tolerances are tight enough that the SCF residual does not dominate the
     finite-difference error.
     """
+    # No basis-name fallback: every case must carry the exact bundled shells,
+    # because a name would silently load whatever the native layer resolves it
+    # to and would be compared against a PySCF reference built from records the
+    # two sides could disagree about.
     calculator = Calculator(
         method="rhf",
-        basis=case.get("basis", "sto-3g"),
+        basis=case["basis"],
         device="cpu",
         energy_tolerance=1.0e-12,
         density_tolerance=1.0e-10,
@@ -176,21 +213,19 @@ def _calculator_gradient(case):
 
 
 def _pyscf_basis(case, labels):
-    """Translate a case's basis into the form PySCF expects.
+    """Translate a case's bundled shells into PySCF's per-atom mapping.
 
-    A named basis string passes through unchanged. An explicit VibeQC shell
-    tuple does **not**: each ``Shell`` carries its own ``atom_index``, and
-    PySCF wants the equivalent per-atom mapping. Handing the tuple straight to
-    ``gto.M`` does not establish that ownership -- PySCF ends up subscripting a
-    ``Shell`` and raising -- so the mapping is rebuilt here the same way the
-    repository's ``pyscf_molecule`` reference helper does it.
+    Every case carries explicit shell records, so there is no basis-name
+    pass-through. A name would let PySCF substitute its own rounded tables for
+    the bundled coefficients, which turns an "independent reference" into a
+    reference for a slightly different basis. Each ``Shell`` carries its own
+    ``atom_index``, and handing the tuple straight to ``gto.M`` does not
+    establish that ownership -- PySCF subscripts a ``Shell`` and raises -- so
+    the mapping is rebuilt here the way the repository's ``pyscf_molecule``
+    reference helper does it.
     """
-    basis = case.get("basis", "sto-3g")
-    if isinstance(basis, str):
-        return basis, None
-
     per_atom = {label: [] for label in labels}
-    for shell in basis:
+    for shell in case["basis"]:
         per_atom[labels[shell.atom_index]].append(
             [
                 shell.angular_momentum,
@@ -201,10 +236,59 @@ def _pyscf_basis(case, labels):
             ]
         )
     # PySCF tolerates a missing basis key but rejects an explicit empty list.
-    return (
-        {label: shells for label, shells in per_atom.items() if shells},
-        [shell.angular_momentum for shell in basis],
-    )
+    return {label: shells for label, shells in per_atom.items() if shells}
+
+
+def _assert_loaded_basis(mol, shells):
+    """Verify PySCF loaded exactly the requested shells.
+
+    Angular momenta alone would not catch a rounded coefficient table, which is
+    the substitution this guards against, so the exponents and contraction
+    coefficients are compared as well. Both are checked because either kind of
+    mismatch, silently reordered or silently rounded, would make the reference
+    describe a different scientific model while still producing a plausible
+    matrix.
+    """
+    requested_angular = [shell.angular_momentum for shell in shells]
+    actual_angular = [int(mol.bas_angular(index)) for index in range(mol.nbas)]
+    if actual_angular != requested_angular:
+        raise ValueError(
+            f"PySCF reordered the requested shells: {actual_angular} != "
+            f"{requested_angular}"
+        )
+
+    for index, shell in enumerate(shells):
+        # Exponents are compared exactly: they are stored verbatim and are the
+        # discriminator for a substituted table, since the built-in one rounds
+        # them (3.42525091 against the bundled 3.425250914).
+        requested_exponents = np.sort(
+            np.asarray([primitive.exponent for primitive in shell.primitives], float)
+        )
+        actual_exponents = np.sort(np.asarray(mol.bas_exps()[index], float))
+        if not np.array_equal(actual_exponents, requested_exponents):
+            raise ValueError(
+                f"shell {index}: PySCF loaded exponents {actual_exponents.tolist()}, "
+                f"requested {requested_exponents.tolist()}"
+            )
+
+        # Coefficients need a tolerance rather than equality: PySCF renormalizes
+        # the contraction, which perturbs them at the 1e-11 level. That is still
+        # four orders below the 1e-8 a rounded table differs by, so the
+        # substitution this guards against remains detected.
+        requested_coefficients = np.sort(
+            np.asarray([primitive.coefficient for primitive in shell.primitives], float)
+        )
+        actual_coefficients = np.sort(
+            np.asarray(mol.bas_ctr_coeff(index), dtype=float)[:, 0]
+        )
+        if not np.allclose(
+            actual_coefficients, requested_coefficients, rtol=1.0e-9, atol=0.0
+        ):
+            raise ValueError(
+                f"shell {index}: PySCF loaded coefficients "
+                f"{actual_coefficients.tolist()}, requested "
+                f"{requested_coefficients.tolist()}"
+            )
 
 
 def _pyscf_hessian(case):
@@ -229,14 +313,13 @@ def _pyscf_hessian(case):
     gto = pytest.importorskip("pyscf.gto")
     scf = pytest.importorskip("pyscf.scf")
     labels = [f"{symbol}{index}" for index, symbol in enumerate(case["symbols"])]
-    basis, requested_angular = _pyscf_basis(case, labels)
 
     mol = gto.M(
         atom=[
             [label, [float(value) for value in row]]
             for label, row in zip(labels, case["coordinates"], strict=True)
         ],
-        basis=basis,
+        basis=_pyscf_basis(case, labels),
         charge=case["charge"],
         spin=case["multiplicity"] - 1,
         unit="Bohr",
@@ -246,19 +329,27 @@ def _pyscf_hessian(case):
         verbose=0,
     )
 
-    if requested_angular is not None:
-        # A silently reordered basis would make the reference a different
-        # scientific model than the one VibeQC was given, and the comparison
-        # would still look plausible.
-        actual = [int(mol.bas_angular(index)) for index in range(mol.nbas)]
-        if actual != requested_angular:
-            raise ValueError(
-                f"PySCF reordered the requested shells: {actual} != {requested_angular}"
-            )
+    # A reordered or rounded basis would make the reference a different
+    # scientific model than the one VibeQC was handed, while the comparison
+    # still looked plausible.
+    _assert_loaded_basis(mol, case["basis"])
 
     mean_field = scf.RHF(mol)
     mean_field.conv_tol = 1.0e-12
+    mean_field.max_cycle = 200
     mean_field.run()
+
+    # ``run()`` can return with ``converged == False`` and ``Hessian().kernel()``
+    # still produces a matrix-like result, so an unconverged reference would
+    # otherwise be consumed here as an independent oracle without complaint.
+    # There is no meaningful fallback: the whole point of this function is to be
+    # the independent check on the other one.
+    if not mean_field.converged:
+        raise AssertionError(
+            "the PySCF reference SCF did not converge, so it cannot serve as "
+            "an independent oracle"
+        )
+
     values = np.asarray(mean_field.Hessian().kernel())
     assert values.shape == (len(case["symbols"]),) * 2 + (3, 3), values.shape
     return values.transpose(0, 2, 1, 3)
@@ -442,19 +533,49 @@ def test_pyscf_basis_preserves_per_atom_ownership():
     """
 
     labels = ["He0", "H1"]
-    basis, requested = _pyscf_basis(HEH_DF, labels)
+    basis = _pyscf_basis(HEH_DF, labels)
 
-    assert requested == [0, 2, 3, 0]
     assert list(basis) == ["He0", "H1"]
     assert [shell[0] for shell in basis["He0"]] == [0, 2, 3]
     assert [shell[0] for shell in basis["H1"]] == [0]
     assert basis["He0"][0][1] == (1.5, 1.0)
 
-    # A named basis needs no translation, and the angular-momentum guard is
-    # only meaningful for an explicitly requested shell set.
-    named, requested_named = _pyscf_basis(H2, ["H0", "H1"])
-    assert named == "sto-3g"
-    assert requested_named is None
+    # The bundled cases go through the same translation, so no case can reach
+    # PySCF as a basis name and pick up its rounded tables instead.
+    bundled = _pyscf_basis(H2, ["H0", "H1"])
+    assert list(bundled) == ["H0", "H1"]
+    assert bundled["H0"][0][1] == (3.425250914, 0.1543289673)
+
+
+def test_rounded_basis_table_is_rejected():
+    """A reference built from a rounded table must be refused.
+
+    This makes the exact-basis requirement concrete rather than a convention:
+    PySCF's built-in ``sto-3g`` hydrogen exponent is 3.42525091 where VibeQC
+    bundles 3.425250914, so a reference that silently substituted the built-in
+    table would describe a slightly different basis. Pinning the detection here
+    means the substitution cannot return unnoticed.
+    """
+
+    gto = pytest.importorskip("pyscf.gto")
+    rounded = gto.M(
+        atom=[["H0", [0.0, 0.0, -0.7]], ["H1", [0.0, 0.0, 0.7]]],
+        basis="sto-3g",
+        unit="Bohr",
+        verbose=0,
+    )
+    with pytest.raises(ValueError, match="exponents"):
+        _assert_loaded_basis(rounded, H2["basis"])
+
+    # The bundled shells themselves load cleanly through the same check, so the
+    # guard is not simply rejecting everything.
+    exact = gto.M(
+        atom=[["H0", [0.0, 0.0, -0.7]], ["H1", [0.0, 0.0, 0.7]]],
+        basis=_pyscf_basis(H2, ["H0", "H1"]),
+        unit="Bohr",
+        verbose=0,
+    )
+    _assert_loaded_basis(exact, H2["basis"])
 
 
 def test_pyscf_basis_builds_the_requested_angular_momenta():
@@ -467,20 +588,19 @@ def test_pyscf_basis_builds_the_requested_angular_momenta():
 
     gto = pytest.importorskip("pyscf.gto")
     labels = ["He0", "H1"]
-    basis, requested = _pyscf_basis(HEH_DF, labels)
     mol = gto.M(
         atom=[
             [label, [float(value) for value in row]]
             for label, row in zip(labels, HEH_DF["coordinates"], strict=True)
         ],
-        basis=basis,
+        basis=_pyscf_basis(HEH_DF, labels),
         charge=1,
         spin=0,
         unit="Bohr",
         cart=True,
         verbose=0,
     )
-    assert [int(mol.bas_angular(index)) for index in range(mol.nbas)] == requested
+    _assert_loaded_basis(mol, HEH_DF["basis"])
     # Cartesian s + d + f on helium plus s on hydrogen: 1 + 6 + 10 + 1.
     assert mol.nao == 18
 
