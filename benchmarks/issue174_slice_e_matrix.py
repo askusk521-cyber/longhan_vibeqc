@@ -14,9 +14,9 @@ Design constraints taken from the issue:
   same-tolerance FP64 solve.
 * Five interleaved samples per configuration, with the accuracy-requesting
   order alternated so one policy does not systematically see a colder state.
-* Cold, same-geometry warm and changed-geometry warm states are separate
-  recorded kinds; a failed or unconverged run is retained in the report rather
-  than dropped.
+* Singlepoint calls are always cold native solves. Persistent prepared batches
+  measure cold, same-geometry warm and changed-geometry warm states separately;
+  failures and unconverged runs are retained.
 * Per-item provenance comes from the public getters, so a run that fell back to
   FP64 is reported as such instead of being assumed mixed.
 * The large topology case is bounded-streaming and needs an explicit flag: it
@@ -37,10 +37,12 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import math
 import os
 import sys
 import time
 import types
+from contextlib import ExitStack
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -294,35 +296,40 @@ def _strict_reference(case, arguments, atoms, properties, backend) -> dict[str, 
         screening_tolerance=arguments.reference_screening_tolerance,
         max_iterations=arguments.reference_max_iterations,
     )
-    started = time.perf_counter()
-    result = calculator.singlepoint(
-        atoms,
-        charge=case.charge,
-        multiplicity=case.multiplicity,
-        properties=properties,
+    model = calculator.resolved_model(
+        atoms, charge=case.charge, multiplicity=case.multiplicity
     )
-    _synchronize(backend)
-    wall = time.perf_counter() - started
-    return {
-        "result": result,
-        "model": calculator.resolved_model(
-            atoms, charge=case.charge, multiplicity=case.multiplicity
-        ),
-        "record": {
-            "converged": result.converged,
-            "iterations": result.iterations,
-            "energy": result.energy,
-            "force_max_abs": _force_max_abs(result),
-            "wall_seconds": wall,
-            "precision": result.precision,
-            "controls": {
-                "energy_tolerance": arguments.reference_energy_tolerance,
-                "density_tolerance": arguments.reference_density_tolerance,
-                "screening_tolerance": arguments.reference_screening_tolerance,
-                "max_iterations": arguments.reference_max_iterations,
-            },
-        },
+    record = {
+        "controls": {
+            "energy_tolerance": arguments.reference_energy_tolerance,
+            "density_tolerance": arguments.reference_density_tolerance,
+            "screening_tolerance": arguments.reference_screening_tolerance,
+            "max_iterations": arguments.reference_max_iterations,
+        }
     }
+    result = None
+    try:
+        _synchronize(backend)
+        started = time.perf_counter()
+        result = calculator.singlepoint(
+            atoms,
+            charge=case.charge,
+            multiplicity=case.multiplicity,
+            properties=properties,
+        )
+        record.update(
+            {
+                "wall_seconds": _synchronized_seconds(started, backend),
+                "converged": result.converged,
+                "iterations": result.iterations,
+                "energy": result.energy,
+                "force_max_abs": _force_max_abs(result),
+                "precision": result.precision,
+            }
+        )
+    except Exception as error:  # noqa: BLE001 - preserve failed reference evidence
+        record.update(converged=False, failure=f"{type(error).__name__}: {error}")
+    return {"result": result, "model": model, "record": record}
 
 
 def _accuracy_target(arguments, tolerance: float):
@@ -375,7 +382,11 @@ def _error_columns(result, reference) -> dict[str, Any]:
         "energy_absolute_error": None,
         "force_max_abs_error": None,
     }
-    if reference is None or not reference["result"].converged:
+    if (
+        reference is None
+        or reference["result"] is None
+        or not reference["result"].converged
+    ):
         return columns
     reference_result = reference["result"]
     columns["energy_absolute_error"] = abs(result.energy - reference_result.energy)
@@ -396,10 +407,9 @@ def _tolerance_matrix(case_name, case, atoms_base, atoms_moved, arguments, backe
         for label, atoms in (("base", atoms_base), ("moved", atoms_moved))
     }
     records: list[dict[str, Any]] = []
-    # A fixed three-step plan per cycle yields a cold start, a same-geometry
-    # warm start and a changed-geometry warm start without inventing extra
-    # states; cycles after the first therefore begin on the moved geometry.
-    plan = (("base", atoms_base), ("base", atoms_base), ("moved", atoms_moved))
+    # singlepoint creates and destroys its native calculation on every call;
+    # retaining a Python Calculator does not retain an SCF seed or native plan.
+    plan = (("base", atoms_base), ("moved", atoms_moved))
     for tolerance in arguments.tolerances:
         target = _accuracy_target(arguments, tolerance)
         calculators = {
@@ -408,33 +418,21 @@ def _tolerance_matrix(case_name, case, atoms_base, atoms_moved, arguments, backe
             )
             for mode in arguments.modes
         }
-        previous_label = {mode: None for mode in arguments.modes}
-        seen_any = {mode: False for mode in arguments.modes}
         for cycle in range(arguments.repeats):
             for step, (label, atoms) in enumerate(plan):
-                # Alternate which policy runs first so neither systematically
-                # inherits a colder or warmer state than the other.
                 ordered = (
                     arguments.modes
                     if (cycle + step) % 2 == 0
                     else tuple(reversed(arguments.modes))
                 )
                 for order, mode in enumerate(ordered):
-                    kind = "cold"
-                    if seen_any[mode]:
-                        kind = (
-                            "warm_same_geometry"
-                            if previous_label[mode] == label
-                            else "warm_changed_geometry"
-                        )
-                    seen_any[mode] = True
                     reference = references[label]
                     record: dict[str, Any] = {
                         "case": case_name,
                         "tolerance": tolerance,
                         "mode": mode,
                         "geometry": label,
-                        "kind": kind,
+                        "kind": "cold",
                         "cycle": cycle,
                         "step": step,
                         "order": order,
@@ -463,7 +461,11 @@ def _tolerance_matrix(case_name, case, atoms_base, atoms_moved, arguments, backe
                             }
                         )
                         record.update(_error_columns(result, reference))
-                        if result.converged and reference["result"].converged:
+                        if (
+                            result.converged
+                            and reference["result"] is not None
+                            and reference["result"].converged
+                        ):
                             values = {"energy": result.energy}
                             reference_values = {"energy": reference["result"].energy}
                             if result.forces is not None:
@@ -478,7 +480,6 @@ def _tolerance_matrix(case_name, case, atoms_base, atoms_moved, arguments, backe
                             )
                     except Exception as error:  # noqa: BLE001 - retained in report
                         record["failure"] = f"{type(error).__name__}: {error}"
-                    previous_label[mode] = label
                     records.append(record)
     return records, references
 
@@ -488,52 +489,104 @@ def _batch_matrix(
 ):
     """Measure complete ragged batch solves, including per-item provenance."""
 
-    systems = (atoms_base, atoms_moved, atoms_base, atoms_moved)
-    expected = [
-        (references[label]["result"].energy, references[label]["result"].forces)
-        for label in ("base", "moved", "base", "moved")
-    ]
     records: list[dict[str, Any]] = []
     for tolerance in arguments.tolerances:
-        for mode in arguments.modes:
+        target = _accuracy_target(arguments, tolerance)
+        for batch_size in arguments.batch_sizes:
+            labels = tuple(
+                "base" if index % 2 == 0 else "moved" for index in range(batch_size)
+            )
+            changed_labels = tuple(
+                "moved" if label == "base" else "base" for label in labels
+            )
+            geometries = {"base": atoms_base, "moved": atoms_moved}
+            systems = [geometries[label] for label in labels]
+            changed_coordinates = [
+                [position for _, position in geometries[label]]
+                for label in changed_labels
+            ]
             for sample in range(arguments.repeats):
-                record: dict[str, Any] = {
-                    "case": case_name,
-                    "tolerance": tolerance,
-                    "mode": mode,
-                    "sample": sample,
-                    "batch_size": len(systems),
-                }
-                try:
-                    calculator = _calculator(
-                        case, arguments, precision=mode, energy_tolerance=tolerance
+                # Each sample owns a fresh plan, so all three states receive
+                # exactly repeats observations. Keep both policies alive and
+                # alternate their order separately at every measured state.
+                with ExitStack() as stack:
+                    batches = {}
+                    sample_records = {}
+                    ordered = (
+                        arguments.modes
+                        if sample % 2 == 0
+                        else tuple(reversed(arguments.modes))
                     )
-                    _synchronize(backend)
-                    started = time.perf_counter()
-                    batch = calculator.prepare_batch(
-                        [atoms for atoms in systems],
-                        charges=[case.charge] * len(systems),
-                        multiplicities=[case.multiplicity] * len(systems),
-                        warm_start=True,
-                    )
-                    record["prepare_wall_seconds"] = time.perf_counter() - started
-                    with batch:
-                        _synchronize(backend)
-                        started = time.perf_counter()
-                        cold = batch.execute(strict=False)
-                        record["cold_execute_wall_seconds"] = _synchronized_seconds(
-                            started, backend
+                    for order, mode in enumerate(ordered):
+                        record = {
+                            "case": case_name,
+                            "tolerance": tolerance,
+                            "mode": mode,
+                            "sample": sample,
+                            "batch_size": batch_size,
+                            "prepare_order": order,
+                            "properties": ["energy", "forces"],
+                        }
+                        records.append(record)
+                        sample_records[mode] = record
+                        try:
+                            calculator = _calculator(
+                                case,
+                                arguments,
+                                precision=mode,
+                                energy_tolerance=tolerance,
+                            )
+                            _synchronize(backend)
+                            started = time.perf_counter()
+                            batches[mode] = stack.enter_context(
+                                calculator.prepare_batch(
+                                    systems,
+                                    charges=[case.charge] * batch_size,
+                                    multiplicities=[case.multiplicity] * batch_size,
+                                    warm_start=True,
+                                )
+                            )
+                            record["prepare_wall_seconds"] = _synchronized_seconds(
+                                started, backend
+                            )
+                        except Exception as error:  # noqa: BLE001 - retain failures
+                            record["failure"] = f"{type(error).__name__}: {error}"
+                    for step, (state, coordinates, expected_labels) in enumerate(
+                        (
+                            ("cold", None, labels),
+                            ("warm", None, labels),
+                            ("changed", changed_coordinates, changed_labels),
                         )
-                        started = time.perf_counter()
-                        warm = batch.execute(strict=False)
-                        record["warm_execute_wall_seconds"] = _synchronized_seconds(
-                            started, backend
+                    ):
+                        ordered = (
+                            arguments.modes
+                            if (sample + step) % 2 == 0
+                            else tuple(reversed(arguments.modes))
                         )
-                        record["cold_items"] = _batch_items(cold, expected)
-                        record["warm_items"] = _batch_items(warm, expected)
-                except Exception as error:  # noqa: BLE001 - retained in report
-                    record["failure"] = f"{type(error).__name__}: {error}"
-                records.append(record)
+                        expected = [references[label] for label in expected_labels]
+                        for order, mode in enumerate(ordered):
+                            record = sample_records[mode]
+                            if "failure" in record:
+                                continue
+                            record[f"{state}_order"] = order
+                            try:
+                                _synchronize(backend)
+                                started = time.perf_counter()
+                                result = batches[mode].execute(
+                                    coordinates, strict=False
+                                )
+                                record[f"{state}_execute_wall_seconds"] = (
+                                    _synchronized_seconds(started, backend)
+                                )
+                                # Save each result before the next state runs;
+                                # a later failure must not erase earlier samples.
+                                record[f"{state}_items"] = _batch_items(
+                                    result, expected, target
+                                )
+                            except Exception as error:  # noqa: BLE001 - retain failures
+                                record["failure"] = (
+                                    f"{state}: {type(error).__name__}: {error}"
+                                )
     return records
 
 
@@ -544,7 +597,7 @@ def _synchronized_seconds(started: float, backend) -> float:
     return time.perf_counter() - started
 
 
-def _batch_items(result, expected) -> list[dict[str, Any]]:
+def _batch_items(result, expected, target) -> list[dict[str, Any]]:
     """Describe each input-ordered item, keeping failures in their slot."""
 
     items = []
@@ -567,14 +620,27 @@ def _batch_items(result, expected) -> list[dict[str, Any]]:
             ),
             "force_max_abs_error": None,
         }
-        if item.index < len(expected):
-            reference_energy, reference_forces = expected[item.index]
-            if item.succeeded and reference_energy is not None:
-                record["energy_absolute_error"] = abs(item.energy - reference_energy)
-                if item.forces is not None and reference_forces is not None:
-                    record["force_max_abs_error"] = float(
-                        abs(item.forces - reference_forces).max()
-                    )
+        if 0 <= item.index < len(expected):
+            reference = expected[item.index]
+            reference_result = reference["result"]
+            if (
+                item.succeeded
+                and reference_result is not None
+                and reference_result.converged
+            ):
+                record.update(_error_columns(item, reference))
+                values = {"energy": item.energy}
+                reference_values = {"energy": reference_result.energy}
+                if item.forces is not None:
+                    values["forces"] = item.forces
+                    reference_values["forces"] = reference_result.forces
+                record["accuracy"] = _evidence(
+                    reference["model"],
+                    values,
+                    reference_values,
+                    target,
+                    item.converged,
+                )
         items.append(record)
     return items
 
@@ -589,10 +655,11 @@ def _summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             record.get("tolerance"),
             record.get("mode"),
             record.get("kind"),
+            record.get("geometry"),
         )
         groups.setdefault(key, []).append(record)
     summary = []
-    for (case, tolerance, mode, kind), items in sorted(
+    for (case, tolerance, mode, kind, geometry), items in sorted(
         groups.items(), key=lambda entry: str(entry[0])
     ):
         walls = [item["wall_seconds"] for item in items if "wall_seconds" in item]
@@ -613,6 +680,7 @@ def _summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tolerance": tolerance,
                 "mode": mode,
                 "kind": kind,
+                "geometry": geometry,
                 "samples": len(items),
                 "failures": sum(1 for item in items if "failure" in item),
                 "unconverged": sum(
@@ -654,11 +722,16 @@ def _summarize_batch(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "case": record["case"],
                     "tolerance": record["tolerance"],
                     "mode": record["mode"],
+                    "batch_size": record["batch_size"],
                     "failure": record["failure"],
                 }
             )
             continue
-        items = list(record["cold_items"]) + list(record["warm_items"])
+        items = [
+            item
+            for state in ("cold", "warm", "changed")
+            for item in record[f"{state}_items"]
+        ]
         energy_errors = [
             item["energy_absolute_error"]
             for item in items
@@ -669,10 +742,12 @@ def _summarize_batch(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "case": record["case"],
                 "tolerance": record["tolerance"],
                 "mode": record["mode"],
+                "batch_size": record["batch_size"],
                 "sample": record["sample"],
                 "prepare_wall_seconds": record["prepare_wall_seconds"],
                 "cold_execute_wall_seconds": record["cold_execute_wall_seconds"],
                 "warm_execute_wall_seconds": record["warm_execute_wall_seconds"],
+                "changed_execute_wall_seconds": record["changed_execute_wall_seconds"],
                 "mixed_items": sum(
                     1
                     for item in items
@@ -710,10 +785,15 @@ def main() -> None:
     parser.add_argument("--displacement-bohr", type=float, default=0.05)
     parser.add_argument("--properties", default="energy,forces")
     parser.add_argument("--skip-batch", action="store_true")
+    parser.add_argument("--batch-sizes", default="1,4")
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
-    if arguments.repeats < 1 or arguments.max_iterations < 1:
-        parser.error("--repeats and --max-iterations must be positive")
+    if (
+        arguments.repeats < 1
+        or arguments.max_iterations < 1
+        or arguments.reference_max_iterations < 1
+    ):
+        parser.error("repeat and iteration counts must be positive")
     if not os.environ.get("SLURM_JOB_ID"):
         parser.error("this real-GPU benchmark must run inside a Slurm allocation")
 
@@ -722,16 +802,53 @@ def main() -> None:
         requested.extend(LARGE_CASES)
     if arguments.include_bounded_streaming:
         requested.extend(BOUNDED_STREAMING_CASES)
-    arguments.tolerances = [float(value) for value in arguments.tolerances.split(",")]
+    try:
+        arguments.tolerances = [
+            float(value) for value in arguments.tolerances.split(",")
+        ]
+        arguments.batch_sizes = tuple(
+            int(value) for value in arguments.batch_sizes.split(",")
+        )
+    except ValueError:
+        parser.error("tolerances must be numbers and batch sizes must be integers")
+    if any(size < 1 for size in arguments.batch_sizes):
+        parser.error("batch sizes must be positive")
+    controls = [
+        *arguments.tolerances,
+        arguments.density_tolerance,
+        arguments.screening_tolerance,
+        arguments.reference_energy_tolerance,
+        arguments.reference_density_tolerance,
+        arguments.reference_screening_tolerance,
+        arguments.force_target,
+    ]
+    if any(not math.isfinite(value) or value <= 0 for value in controls):
+        parser.error("tolerances and force targets must be finite and positive")
+    if (
+        arguments.reference_density_tolerance >= arguments.density_tolerance
+        or arguments.reference_screening_tolerance >= arguments.screening_tolerance
+    ):
+        parser.error("the reference density and screening controls must be stricter")
+    if (
+        not math.isfinite(arguments.displacement_bohr)
+        or arguments.displacement_bohr == 0
+    ):
+        parser.error("the changed-geometry displacement must be finite and nonzero")
     arguments.modes = tuple(
         mode.strip() for mode in arguments.modes.split(",") if mode.strip()
     )
     unsupported = sorted(set(arguments.modes) - set(MODES))
+    if not arguments.modes or not requested:
+        parser.error("at least one case and precision mode are required")
     if unsupported:
         parser.error(f"unsupported precision modes: {unsupported}")
     arguments.properties = tuple(
         name.strip() for name in arguments.properties.split(",") if name.strip()
     )
+    if not arguments.skip_batch and set(arguments.properties) != {"energy", "forces"}:
+        parser.error(
+            "prepared batches evaluate energy and forces; use --skip-batch for energy-only"
+        )
     if "energy" not in arguments.properties:
         parser.error("--properties must include energy")
     if arguments.reference_energy_tolerance >= min(arguments.tolerances):
@@ -787,13 +904,14 @@ def main() -> None:
             )
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "benchmark": "issue174_slice_e_matrix",
         "controls": {
             "cases": requested,
             "tolerances": arguments.tolerances,
             "modes": list(arguments.modes),
             "repeats": arguments.repeats,
+            "batch_sizes": list(arguments.batch_sizes),
             "max_iterations": arguments.max_iterations,
             "density_tolerance": arguments.density_tolerance,
             "screening_tolerance": arguments.screening_tolerance,
@@ -834,8 +952,9 @@ def main() -> None:
                 "re-run here."
             ),
             (
-                "The single-solve endpoint reports no warm-state flags; the batch "
-                "section carries warm_start_used/warm_start_fallback per item."
+                "Every singlepoint call is a cold native solve. Prepared batches "
+                "own warm states and carry warm_start_used/warm_start_fallback "
+                "per item; changed rows include the geometry update in timing."
             ),
             (
                 "Reported wall time is synchronized host time around the public "
