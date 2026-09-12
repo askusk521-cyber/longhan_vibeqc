@@ -12632,11 +12632,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   const std::optional<double> requested_mixed_precision_fock_threshold =
       requested_precision_policy.threshold;
   const bool requested_mixed_precision_fock = requested_mixed_precision_fock_threshold.has_value();
-  // An iterative mixed Fock is not the exact final matrix associated with the
-  // converged density. Force a complete FP64 rebuild before final energy,
-  // orbitals, and analytic forces consume it.
-  const bool requested_reuse_converged_fock =
-      reuse_converged_fock_requested() && !requested_mixed_precision_fock;
+  // A mixed item is promoted to exact FP64 by the target refinement before any
+  // consumer runs, so the matrix it retains is target precision. The density
+  // criterion and convergence check below still decide each item's reuse.
+  const bool requested_reuse_converged_fock = reuse_converged_fock_requested();
   // Direct consumers expand each compact logical tile into one-warp blocks;
   // validate the resulting fixed Graph grid before narrowing it to unsigned.
   if (total_shell_pairs > std::numeric_limits<unsigned>::max() ||
@@ -16379,7 +16378,7 @@ std::vector<RhfBucketItem> run_hf_cuda_bucket_cached(
                 .threshold
           : std::nullopt;
   const bool mixed_precision_fock = mixed_precision_fock_threshold.has_value();
-  const bool reuse_converged_fock = reuse_converged_fock_requested() && !mixed_precision_fock;
+  const bool reuse_converged_fock = reuse_converged_fock_requested();
   const bool graph_native_eigensolver_override = graph_native_eigensolver_override_requested();
   if (*plan != nullptr && (*plan)->initialized &&
       ((*plan)->resources.device_id_ != device_id || !same_topology((*plan)->topology, candidate) ||
