@@ -91,11 +91,17 @@ Renaming the dummy indices in the exchange sum so that its ``(ac|bd)`` becomes
 the same integral:
 
 ```text
-E_2 = Σ_{μνλσ} [ ½ P_μν P_λσ − ¼ P_μλ P_νσ ] (μν|λσ)  =  Σ_{μνλσ} W_μνλσ (μν|λσ).
+E_2 = Σ_{μνλσ} [ ½ P_μν P_λσ − ¼ P_μλ P_νσ ] (μν|λσ)  =  Σ_{μνλσ} W2_μνλσ (μν|λσ).
 ```
 
-**The outer ``½`` is already inside ``W``.** Writing the skeleton as
-``½ Σ W ∂²(μν|λσ)`` on top of this ``W`` would halve both the Coulomb and the
+``W2`` is a **four-index** integral weight and is a different object from the
+two-index energy-weighted density ``W`` defined above; the two are deliberately
+given distinct names so a reader never has to infer which one appears in a
+formula. The same distinction applies to the weight slot in the table below,
+which is written out rather than abbreviated.
+
+**The outer ``½`` is already inside ``W2``.** Writing the skeleton as
+``½ Σ W2 ∂²(μν|λσ)`` on top of this ``W2`` would halve both the Coulomb and the
 exchange contribution — the row below therefore carries no further factor. The
 folding is implemented as ``two_electron_weight`` in
 :mod:`tools.vibeqc_hessian.weights` and checked against a direct
@@ -105,9 +111,9 @@ rather than only asserted here.
 | # | Term | Form | Supplier |
 |---|---|---|---|
 | 1 | Nuclear repulsion | `∂²E_nuc/∂R∂R'` | caller, closed form |
-| 2 | One-electron skeleton | `Tr[P ∂²h/∂R∂R']` | #178 `build_one_electron_second_ir`, families `overlap`/`kinetic`/`nuclear_attraction`, `weighted_hessian`, W = P |
-| 3 | Overlap (Pulay) skeleton | `-Tr[W ∂²S/∂R∂R']` | same provider, W = -W |
-| 4 | Two-electron skeleton | `Σ_{μνλσ} W_μνλσ ∂²(μν|λσ)/∂R∂R'` with `W_μνλσ = ½ P_μν P_λσ - ¼ P_μλ P_νσ` (no further factor; see the derivation above) | #178 `build_eri_second_ir`, `weighted_hessian` |
+| 2 | One-electron skeleton | `Tr[P ∂²h/∂R∂R']` | #178 `build_one_electron_second_ir`, families `overlap`/`kinetic`/`nuclear_attraction`, `weighted_hessian`, provider weight = `P` |
+| 3 | Overlap (Pulay) skeleton | `-Tr[W ∂²S/∂R∂R']` | same provider, `weighted_hessian`, provider weight = `-W` (negated **energy-weighted density**) |
+| 4 | Two-electron skeleton | `Σ_{μνλσ} W2_μνλσ ∂²(μν|λσ)/∂R∂R'` with `W2_μνλσ = ½ P_μν P_λσ - ¼ P_μλ P_νσ` (no further factor; see the derivation above) | #178 `build_eri_second_ir`, `weighted_hessian`, provider weight = `W2` |
 | 5 | Fock-derivative RHS | `b_ai = (∂F/∂R)_ai` at frozen P, occ-virt block, MO basis | caller: one-electron part from #141 raw `∂h/∂R`; two-electron part from #144 weighted ERI first derivative |
 | 6 | Orbital response | solve `A u = -b` | #179 `RHFResponseOperator` + `solve_many` |
 | 7 | Relaxation contribution | `u` combined with first derivatives of h, S, and the ERIs | caller |

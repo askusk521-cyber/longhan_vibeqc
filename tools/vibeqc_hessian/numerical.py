@@ -97,13 +97,14 @@ def hessian_difference(actual, reference) -> dict:
     element is filtered out: the full error distribution is returned so a
     caller cannot promote on a favourable subset.
 
-    The shapes must match exactly. Subtracting a broadcastable but different
-    shape would silently reduce against the wrong elements and report an error
-    statistic that describes nothing -- the same defect the evaluation path
-    guards against, so it is guarded here too.
+    The layout is validated the same way the symmetry and translation helpers
+    validate it, and the shapes must match exactly. Two Hessians both stored as
+    ``(3N, 3N)`` would otherwise subtract happily and return a statistic that
+    does not describe the layout this function documents; a broadcastable but
+    different shape would silently reduce against the wrong elements.
     """
-    left = np.asarray(actual, dtype=np.float64)
-    right = np.asarray(reference, dtype=np.float64)
+    left = _as_hessian(actual, name="actual")
+    right = _as_hessian(reference, name="reference")
     if left.shape != right.shape:
         raise ValueError(
             f"cannot compare Hessians of shape {left.shape} and {right.shape}"
@@ -196,9 +197,14 @@ def numerical_hessian(
             }
         )
 
+    # The record stores the round-tripped policy, not the caller's object: that
+    # is what the evaluator actually received, and it cannot be mutated after
+    # the call to disagree with settings_hash. The hash is unchanged by the
+    # round trip because canonical_hash encodes through JSON as well.
+    recorded = json.loads(policy)
     return {
-        "settings": settings,
-        "settings_hash": canonical_hash(settings),
+        "settings": recorded,
+        "settings_hash": canonical_hash(recorded),
         "coordinates": xyz.tolist(),
         "samples": samples,
     }

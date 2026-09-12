@@ -94,6 +94,21 @@ SLOW_CASES = ("heh_df",)
 ROUNDOFF_RELATIVE = 1.0e-9
 
 
+def _hessian_scale(samples):
+    """Return the largest absolute Hessian element across the reported steps.
+
+    This is deliberately **not** clamped to 1. Clamping would silently turn
+    every "relative" bound built on it into an absolute one whenever a system's
+    Hessian elements are all below 1 -- which is exactly the case where a
+    relative statement is the only meaningful one, and exactly the case in this
+    file. A degenerate all-zero Hessian is reported rather than divided by.
+    """
+    magnitude = max(float(sample["max_absolute"]) for sample in samples)
+    if not magnitude > 0.0:
+        raise AssertionError("an all-zero Hessian has no meaningful relative scale")
+    return magnitude
+
+
 def _case(name):
     if name in SLOW_CASES and os.environ.get("VIBEQC_HESSIAN_SLOW") != "1":
         pytest.skip(
@@ -288,7 +303,7 @@ def test_invariance_residuals_follow_the_second_order_law(name):
     samples = report["samples"]
     assert len(samples) == 3
 
-    scale = max(1.0, max(sample["max_absolute"] for sample in samples))
+    scale = _hessian_scale(samples)
 
     for coarse, fine in pairwise(samples):
         ratio = coarse["step_bohr"] / fine["step_bohr"]
@@ -298,9 +313,18 @@ def test_invariance_residuals_follow_the_second_order_law(name):
             # A residual that is already at the roundoff floor carries no
             # convergence information: there is nothing left to shrink, and
             # requiring a decrease there would only assert that the noise
-            # happens to be monotone. Only the truncation-limited regime is
-            # informative, so it is the regime the law is asserted in.
+            # happens to be monotone. What is informative for those steps is
+            # that the residual *is* negligible -- asserted here rather than
+            # skipped, because skipping would leave them covered by nothing
+            # tighter than the final bound, which is orders of magnitude
+            # looser than the floor.
             if coarse_relative <= ROUNDOFF_RELATIVE:
+                assert fine_relative <= ROUNDOFF_RELATIVE, (
+                    f"{name}: {key} was at the roundoff floor ({coarse_relative}) "
+                    f"at h={coarse['step_bohr']} but rose to {fine_relative} "
+                    f"at h={fine['step_bohr']}, relative to a Hessian scale of "
+                    f"{scale}"
+                )
                 continue
             # Allow the residual to fall as slowly as half the ideal h^2 rate,
             # so the assertion is about the order of convergence rather than
@@ -355,7 +379,11 @@ def test_hessian_matches_pyscf_analytic_reference(name):
     case = _case(name)
     report = _report(name)
     reference = _pyscf_hessian(case)
-    scale = max(1.0, float(np.max(np.abs(reference))))
+    # Unclamped, for the same reason as in the invariance check above: clamping
+    # to 1 would make this an absolute bound for any system whose Hessian
+    # elements are all below 1, which is both of the fast cases here.
+    scale = float(np.max(np.abs(reference)))
+    assert scale > 0.0
 
     for sample in report["samples"]:
         actual = np.asarray(sample["hessian"])
@@ -527,5 +555,32 @@ def test_hessian_helpers_reject_wrong_layouts():
         hessian_translation_error(np.zeros((2, 2, 3, 3)))
     with pytest.raises(ValueError, match="square in its atom indices"):
         hessian_symmetry_error(np.zeros((2, 3, 3, 3)))
+    # hessian_difference validates its layout too, not only that the two
+    # arguments agree with each other.
+    with pytest.raises(ValueError, match="must have shape"):
+        hessian_difference(np.zeros((6, 6)), np.zeros((6, 6)))
     with pytest.raises(ValueError, match="cannot compare Hessians"):
-        hessian_difference(np.zeros((2, 3, 2, 3)), np.zeros((2, 2, 3, 3)))
+        hessian_difference(np.zeros((2, 3, 2, 3)), np.zeros((3, 3, 3, 3)))
+
+
+def test_numerical_hessian_records_an_independent_settings_copy():
+    """The recorded policy must not alias the caller's dict.
+
+    ``settings_hash`` is computed at call time, so a caller mutating its dict
+    afterwards would leave the record internally inconsistent. The record also
+    stores the JSON round trip the evaluator actually received, so a tuple
+    value is recorded as the list that was evaluated.
+    """
+
+    settings = {"charge": 0, "tolerances": (1.0e-12, 1.0e-10)}
+    report = numerical_hessian(
+        lambda xyz, policy: np.zeros_like(xyz),
+        H2["coordinates"],
+        settings=settings,
+        steps=STEPS,
+    )
+
+    settings["charge"] = 7
+    assert report["settings"]["charge"] == 0
+    assert report["settings"]["tolerances"] == [1.0e-12, 1.0e-10]
+    assert settings["tolerances"] == (1.0e-12, 1.0e-10)
