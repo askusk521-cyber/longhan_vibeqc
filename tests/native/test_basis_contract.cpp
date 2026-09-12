@@ -57,10 +57,19 @@ int main() {
                 VIBEQC_STATUS_INVALID_ARGUMENT,
             "electron plus spin occupation intermediate must not overflow");
     auto unsupported = system();
-    unsupported.shells[0].angular_momentum = 4;
+    auto g = system();
+    g.shells[0].angular_momentum = 4;
+    require(vibeqc::molecule::validate_and_normalize(g, detail) == VIBEQC_STATUS_SUCCESS,
+            "CPU g normalization must be accepted");
+    require(vibeqc::molecule::cartesian_components(4).size() == 15,
+            "g shell must have all fifteen Cartesian components");
+    const auto harmonics = vibeqc::molecule::ao_expansions(4, VIBEQC_BASIS_SPHERICAL);
+    require(harmonics.size() == 9 && harmonics[4].size() == 6,
+            "g spherical expansion must retain all nine AOs and six m=0 terms");
+    unsupported.shells[0].angular_momentum = 5;
     require(vibeqc::molecule::validate_and_normalize(unsupported, detail) ==
                     VIBEQC_STATUS_NOT_IMPLEMENTED &&
-                detail.find("l=4") != std::string::npos,
+                detail.find("l=5") != std::string::npos,
             "high angular momentum must identify the missing shell");
     auto invalid_atom = system();
     invalid_atom.atoms[0].atomic_number = 119;
