@@ -297,6 +297,12 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda_density_fitting.cu
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/arena.cpp
+    src/scf/cuda/topology.cpp
+    src/scf/cuda/queue_plan.cpp
+    src/scf/cuda/queue_profile.cpp
+    src/scf/cuda/eigensolver.cpp
+    src/scf/cuda/eigensolver_kernels.cu
     src/scf/cuda_hf_entry.cpp
   )
   set_property(TARGET vibeqc PROPERTY JOB_POOL_COMPILE vibeqc_cuda_compile)

@@ -304,6 +304,23 @@
       "subsystem": "runtime"
     },
     {
+      "bytes": 359,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 9,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/device_timer.cuh",
+      "physical_lines": 14,
+      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "bd618e90db6f7c0e05399ad0b7ec0e4e4e72f1f1c607f919420edefea38959b0",
+      "subsystem": "runtime"
+    },
+    {
       "bytes": 5372,
       "code_lines": {
         "fallback": 0,
@@ -370,6 +387,74 @@
       "role": "scientific",
       "sha256": "845ba9198cef66a5cc5b2acc5d68494935957173b122c403a85137bfd7b9ca4b",
       "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 1628,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 32,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/eigensolver.hpp",
+      "physical_lines": 46,
+      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "fdec2080f754c8794ccd9defd98ce9c4e76512f0985f4ccad4881b64338f123e",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 21658,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 408,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/eigensolver_kernels.cu",
+      "physical_lines": 458,
+      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "54d86cf8e8a166410d908b7bd5e807826dcb62e8f28702726988101213c99fc0",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 3186,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 36,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/eigensolver_kernels.hpp",
+      "physical_lines": 55,
+      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "4ed275be10ac532685b61d1103c59bda3b26d0499424bdb07acf81bcc5696a95",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 442,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 7,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/matrix_index.cuh",
+      "physical_lines": 14,
+      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "3ac48e5d7b780399bf2355e7a446cd2f5637a069654d646787b01d39b51042a7",
+      "subsystem": "runtime"
     },
     {
       "bytes": 8911,
@@ -614,22 +699,22 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 1048372,
+      "bytes": 938309,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 10376,
+        "runtime": 8569,
         "scientific": 7322
       },
       "path": "src/scf/cuda_rhf.cu",
-      "physical_lines": 19754,
+      "physical_lines": 17658,
       "reason": "Remaining device recurrences, physical screening bounds and method contractions are conservatively scientific; explicit regions separate generic runtime.",
       "regions": [
         {
-          "code_lines": 815,
+          "code_lines": 605,
           "first_line": 1,
-          "last_line": 1047,
+          "last_line": 693,
           "reason": "Includes, task metadata, scalar arithmetic/AD, stable special functions and generic geometry/packing helpers.",
           "role": "runtime",
           "start": "#include <cublas_v2.h>",
@@ -637,17 +722,17 @@
         },
         {
           "code_lines": 66,
-          "first_line": 1109,
-          "last_line": 1190,
+          "first_line": 755,
+          "last_line": 836,
           "reason": "Angular/task indexing and public-layout helpers.",
           "role": "runtime",
           "start": "__device__ unsigned angular_axis(",
           "stop": "__device__ void boys_values("
         },
         {
-          "code_lines": 539,
-          "first_line": 6278,
-          "last_line": 6874,
+          "code_lines": 167,
+          "first_line": 5924,
+          "last_line": 6107,
           "reason": "State, instrumentation, generic dense eigensolvers and matrix products.",
           "role": "runtime",
           "start": "__global__ void initialize_state_kernel",
@@ -655,8 +740,8 @@
         },
         {
           "code_lines": 107,
-          "first_line": 6952,
-          "last_line": 7065,
+          "first_line": 6185,
+          "last_line": 6298,
           "reason": "Validated warm-density copy/normalization and state handling.",
           "role": "runtime",
           "start": "__device__ double warm_density_block_sum",
@@ -664,8 +749,8 @@
         },
         {
           "code_lines": 9,
-          "first_line": 7152,
-          "last_line": 7171,
+          "first_line": 6385,
+          "last_line": 6404,
           "reason": "Generic atomic maximum implementation.",
           "role": "runtime",
           "start": "__device__ void atomic_max_double",
@@ -673,8 +758,8 @@
         },
         {
           "code_lines": 547,
-          "first_line": 7504,
-          "last_line": 8169,
+          "first_line": 6737,
+          "last_line": 7402,
           "reason": "Task compaction, signature/class indexing, prefix scans, materialization and queue profiling.",
           "role": "runtime",
           "start": "__global__ void compact_active_shell_quartet_tiles_kernel",
@@ -682,8 +767,8 @@
         },
         {
           "code_lines": 64,
-          "first_line": 8311,
-          "last_line": 8378,
+          "first_line": 7544,
+          "last_line": 7611,
           "reason": "Generic tuple permutations and duplicate suppression.",
           "role": "runtime",
           "start": "__device__ void eri_symmetry_permutation",
@@ -691,8 +776,8 @@
         },
         {
           "code_lines": 129,
-          "first_line": 8425,
-          "last_line": 8563,
+          "first_line": 7658,
+          "last_line": 7796,
           "reason": "Matrix initialization and public/direct basis transforms.",
           "role": "runtime",
           "start": "__global__ void initialize_direct_fock_kernel",
@@ -700,8 +785,8 @@
         },
         {
           "code_lines": 18,
-          "first_line": 8746,
-          "last_line": 8765,
+          "first_line": 7979,
+          "last_line": 7998,
           "reason": "Component-index mapping.",
           "role": "runtime",
           "start": "__device__ __forceinline__ unsigned order2_component_index",
@@ -709,8 +794,8 @@
         },
         {
           "code_lines": 104,
-          "first_line": 8894,
-          "last_line": 9011,
+          "first_line": 8127,
+          "last_line": 8244,
           "reason": "Queue/launch wrappers around separately owned scientific contractions.",
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
@@ -718,8 +803,8 @@
         },
         {
           "code_lines": 149,
-          "first_line": 9012,
-          "last_line": 9172,
+          "first_line": 8245,
+          "last_line": 8405,
           "reason": "Generic matrix residual and DIIS operations.",
           "role": "runtime",
           "start": "__global__ void subtract_matrix_batches_kernel",
@@ -727,8 +812,8 @@
         },
         {
           "code_lines": 173,
-          "first_line": 9219,
-          "last_line": 9429,
+          "first_line": 8452,
+          "last_line": 8662,
           "reason": "Convergence controls and iteration-state routing.",
           "role": "runtime",
           "start": "__device__ __forceinline__ double direct_fock_energy_roundoff_guard",
@@ -736,8 +821,8 @@
         },
         {
           "code_lines": 13,
-          "first_line": 9484,
-          "last_line": 9497,
+          "first_line": 8717,
+          "last_line": 8730,
           "reason": "Generic spin-matrix addition.",
           "role": "runtime",
           "start": "__global__ void sum_uhf_spin_matrices_kernel",
@@ -745,8 +830,8 @@
         },
         {
           "code_lines": 42,
-          "first_line": 11050,
-          "last_line": 11096,
+          "first_line": 10283,
+          "last_line": 10329,
           "reason": "Generic prefix scans for force signatures.",
           "role": "runtime",
           "start": "__global__ void scan_bounded_force_signature_counts_kernel",
@@ -754,17 +839,17 @@
         },
         {
           "code_lines": 164,
-          "first_line": 11524,
-          "last_line": 11723,
+          "first_line": 10757,
+          "last_line": 10956,
           "reason": "Persistent force task wrappers; primitive/equation contractions are separate above.",
           "role": "runtime",
           "start": "__global__ void two_electron_force_quartet_kernel",
           "stop": "cudaError_t prepare_generated_shell_tasks("
         },
         {
-          "code_lines": 7402,
-          "first_line": 11724,
-          "last_line": 19754,
+          "code_lines": 6177,
+          "first_line": 10957,
+          "last_line": 17658,
           "reason": "Host resource planning, library/state/graph execution and ABI dispatch; numerical device equations are classified above.",
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
@@ -772,8 +857,8 @@
         },
         {
           "code_lines": 35,
-          "first_line": 5985,
-          "last_line": 6030,
+          "first_line": 5631,
+          "last_line": 5676,
           "reason": "Packed basis ABI adapter and generated-policy instantiation; no DF recurrence or operator-specific primitive contraction.",
           "role": "runtime",
           "start": "/** Borrow the packed integral metadata through the common normalized-basis ABI. */",
@@ -781,7 +866,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "c1999a043fc850c4774d454208cd36d4b27bdc31b4f3a2cf1538b7e1739b5057",
+      "sha256": "a1d3e2b4cf2f95d806162408606470ffa123bda4b28ab717cd464732dc42b381",
       "subsystem": "direct_integrals"
     },
     {
@@ -961,7 +1046,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 122,
-    "runtime": 15844,
+    "runtime": 14529,
     "scientific": 9387
   },
   "migration_ledger": {
@@ -1114,7 +1199,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 10376,
+      "runtime": 8569,
       "scientific": 7422
     },
     "low_rank": {
@@ -1142,7 +1227,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 2387,
+      "runtime": 2879,
       "scientific": 0
     },
     "scf_tensor": {

@@ -28,6 +28,58 @@ ALLOWED = {
         "runtime/",
     ),
 }
+# CUDA planning and linear algebra have separate rebuild ownership. Enumerate
+# these extracted owners rather than exempting all historical cuda/ fragments.
+CUDA_MODULES = {
+    "cuda_planning": (
+        "arena",
+        "checked_layout",
+        "direct_constants",
+        "direct_metadata",
+        "packed_basis",
+        "topology",
+        "queue_plan",
+        "queue_profile",
+    ),
+    "cuda_eigensolver": (
+        "eigensolver",
+        "eigensolver_kernels",
+        "eigensolver_types",
+        "matrix_index",
+        "device_timer",
+        "launch_geometry",
+    ),
+}
+CUDA_ALLOWED = {
+    "cuda_planning": (
+        "scf/cuda/arena.",
+        "scf/cuda/checked_layout.",
+        "scf/cuda/direct_constants.",
+        "scf/cuda/direct_metadata.",
+        "scf/cuda/packed_basis.",
+        "scf/cuda/topology.",
+        "scf/cuda/queue_plan.",
+        "scf/cuda/queue_profile.",
+        "scf/cuda/eigensolver_types.",
+        "scf/cuda/launch_geometry.",
+        "scf/cuda/rhf_policy.hpp",
+        "scf/cuda_batch.hpp",
+        "scf/direct_task_layout.hpp",
+        "scf/generated_shell_task.hpp",
+        "scf/aot_shell_registry.hpp",
+        "molecule/",
+        "core/",
+    ),
+    "cuda_eigensolver": (
+        "scf/cuda/eigensolver.",
+        "scf/cuda/eigensolver_kernels.",
+        "scf/cuda/eigensolver_types.",
+        "scf/cuda/matrix_index.",
+        "scf/cuda/device_timer.",
+        "scf/cuda/launch_geometry.",
+        "scf/cuda_batch.hpp",
+    ),
+}
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,8 +93,19 @@ def audit_scf_structure(root: Path = ROOT) -> dict:
     """
     source = (root / "src").resolve()
     errors, edges, modules = [], [], []
-    for owner, allowed in ALLOWED.items():
-        for path in sorted((source / "scf" / owner).rglob("*")):
+    groups = [
+        (owner, allowed, sorted((source / "scf" / owner).rglob("*")))
+        for owner, allowed in ALLOWED.items()
+    ]
+    for owner, stems in CUDA_MODULES.items():
+        paths = [
+            source / "scf/cuda" / (stem + suffix)
+            for stem in stems
+            for suffix in sorted(SUFFIXES)
+        ]
+        groups.append((owner, CUDA_ALLOWED[owner], paths))
+    for owner, allowed, paths in groups:
+        for path in paths:
             if path.suffix not in SUFFIXES or not path.is_file():
                 continue
             content = path.read_text()

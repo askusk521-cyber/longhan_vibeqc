@@ -26,9 +26,9 @@ and `cuda_ownership_current.json`, under #231.
 | `rhf.cpp`: stationary forces | `analytic_forces`, `analytic_uhf_forces`, DF/CUDA gradient adapters and final force assembly | Provider-based stationary assembly is extracted to `gradient/hf_gradient.*`, taking the provider's explicit positive derivative rather than owning a plan. Legacy CUDA/DF gradient adapters and finalization remain; their provider, overlap/Pulay, one-electron and nuclear terms must remain distinct. |
 | `rhf.cpp`: compatibility entry points | Public RHF/UHF CPU/CUDA wrappers and CPU-build CUDA stubs | Keep existing method/ABI signatures, failure behavior and per-item ordering. |
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Move by the existing #231 scientific ownership regions; do not copy formulas or turn the independent oracle into generated production arithmetic. |
-| `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Remaining bounded-task runtime interface, with validated offsets and shared buffer lifetimes. |
-| `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Remaining matrix-kernel and eigensolver modules; scheduling choices must not select a different physical operator. |
-| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Separate common views from ownership, then move ordinary host policy/planning to C++ wrappers. Preserve #111's existing compilation-unit selection. |
+| `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host bounded class partitioning, stream ordering and partial-page ranges are extracted to `cuda/queue_plan.*`, with queue diagnostics in `cuda/queue_profile.cpp`. Device compaction and queue consumers remain pending. |
+| `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution is extracted to `cuda/eigensolver.cpp` and `cuda/eigensolver_kernels.cu`, with a borrowed handle/workspace view and narrow launch wrappers. Matrix/update kernels remain pending; scheduling choices do not select a different physical operator. |
+| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. Resource ownership, source integration, graph construction and bucket dispatch remain pending. |
 | `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Remaining DF plan/metric module; preserve resident versus source-backed/host-backed distinctions. |
 | `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Remaining DF execution module using the same provider semantics and explicit memory sub-budget. |
 | `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | Continue #143/#205 integration through `cuda/df_gradient_bridge.*`; its current host response staging must remain visible until #205 replaces it. |
@@ -133,3 +133,60 @@ mean-field-driver edit rebuilds that C++ object and `c_api_tuning.cpp` (source
 identity), then relinks the library and dependent probes/tests. It recompiles
 no CUDA kernel object. Full cold-build and device-link measurements remain
 part of the later CUDA decomposition acceptance.
+
+## CUDA topology, planning and eigensolver extraction
+
+The next runtime move removes approximately 2,100 lines from `cuda_rhf.cu`.
+Host topology packing, checked arena sizing, bounded queue partitioning and
+queue diagnostics compile in ordinary C++ owners. Generic native/library
+eigensolver dispatch borrows the existing cuSOLVER handles and workspaces;
+only six narrow launch wrappers and the unchanged native Jacobi/instrumentation
+kernels require CUDA compilation. The largest new implementation is 458 lines.
+Shared headers contain POD layouts or narrow contracts; there is no umbrella
+header containing the remaining scientific recurrence implementations.
+
+A source audit against `bd657ec` verifies 26 function bodies, including the
+remaining bucket executor, after two explicit interface changes: borrowed
+library resources and host-callable launch wrappers. Each wrapper preserves
+launch geometry, stream, shared bytes and argument ordering. Provider input
+sanitization, inactive-state profiling, Jacobi rotations, stable eigenpair
+sorting and last-error checks retain their existing order. Dependency gates
+reject method-driver imports in these runtime owners and direct queue-policy
+imports in the generic eigensolver owner.
+
+Validation completed on the extracted implementation: 16 native CPU tests,
+3 native CUDA runtime/provider/composition tests, and 106 Python GPU checks
+with no skips. GPU execution used Slurm on the RTX 5090. The Python checks
+cover RHF/UHF direct/DF Fock composition, checkpoint replay, public batch
+behavior and the larger def2-TZVP water eigensolver endpoint.
+
+Compiler samples below use GCC 11.4 Release and NVCC 12.9 sm_120 with the
+explicit development fast-compile mode enabled, disabling ccache for each
+invocation. These are single compiler-work samples with a warm filesystem
+cache on a shared machine; production cold-build, device-link and performance
+acceptance remain outstanding.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 43.269 | 9,891,176 |
+| extracted_cuda_rhf | 41.937 | 9,815,088 |
+| arena | 0.674 | 15,832 |
+| topology | 1.120 | 26,440 |
+| queue_plan | 0.683 | 10,568 |
+| queue_profile | 0.681 | 10,864 |
+| eigensolver | 0.781 | 5,520 |
+| eigensolver_kernels | 2.826 | 267,552 |
+
+Summed compiler work rises from 43.269 to 48.702
+seconds; summed object bytes rise from 9,891,176 to
+10,151,864. Actual implementation-only edits to
+`topology.cpp` and `eigensolver.cpp` each rebuild their own C++ object plus
+`c_api_tuning.cpp` source identity, then relink dependents. Neither edit
+recompiles a CUDA kernel. The exact source was restored and rebuilt after
+each probe.
+
+`cuda_rhf.cu` remains 17,658 lines. Scientific direct Fock/force kernels,
+device queue execution, graph/bucket control, source-backed DF integration,
+and `cuda_density_fitting.cu` decomposition are still required for full #240
+acceptance. The lower CUDA ownership line count from moving host code into
+C++ is a structural move, not retirement of scientific arithmetic.
