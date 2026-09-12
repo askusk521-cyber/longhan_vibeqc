@@ -121,9 +121,9 @@
     },
     {
       "path": "src/runtime/strided_range.hpp",
+      "reason": "Generic two-dimensional strided tile indexing shared by bounded host producers and CUDA consumers; no scientific expressions.",
       "role": "runtime",
-      "subsystem": "runtime",
-      "reason": "Generic two-dimensional strided tile indexing shared by bounded host producers and CUDA consumers; no scientific expressions."
+      "subsystem": "runtime"
     },
     {
       "path": "src/scf/aot_shell_registry.hpp",
@@ -149,6 +149,20 @@
     {
       "path": "src/scf/cuda/df_gradient_bridge.cu",
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/df_response_weights.cu",
+      "reason": "Native HF density response contractions and spectral Frechet map, moved to bounded device execution for #205. Conservatively scientific method arithmetic; primitive values and derivatives still use the #142/#143 generated interfaces.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/df_response_weights.cuh",
+      "reason": "Native HF density response contractions and spectral Frechet map, moved to bounded device execution for #205. Conservatively scientific method arithmetic; primitive values and derivatives still use the #142/#143 generated interfaces.",
       "regions": [],
       "role": "scientific",
       "subsystem": "df_derivatives"

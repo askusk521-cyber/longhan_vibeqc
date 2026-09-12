@@ -1192,10 +1192,34 @@ int main() {
             require(resources.auxiliary_weight_tile < integrals.naux &&
                         integrals.naux % resources.auxiliary_weight_tile != 0,
                     "generated DF-HF response must exercise a final partial weight block");
-            require(resources.device_to_host_bytes >= integrals.ncoord * sizeof(double) &&
-                        ((response_plan == resident_plan.get()) ==
-                         (resources.device_to_host_bytes == integrals.ncoord * sizeof(double))),
-                    "generated DF-HF value staging boundary is incorrectly reported");
+            require(resources.device_to_host_bytes == integrals.ncoord * sizeof(double),
+                    "generated DF-HF replay downloaded more than its final gradient");
+            if (response_plan == source_plan.get()) {
+              require(resources.device_response && resources.tensor_host_to_device_bytes == 0 &&
+                          resources.tensor_device_to_host_bytes == 0 &&
+                          resources.response_host_to_device_bytes == 0 &&
+                          resources.density_host_to_device_bytes ==
+                              terms.size() * rhf_density.size() * sizeof(double) &&
+                          resources.recomputed_value_bytes > 0 &&
+                          resources.device_response_bytes ==
+                              (integrals.nbf * integrals.nbf * integrals.naux +
+                               integrals.naux * integrals.naux) *
+                                  sizeof(double),
+                      "bounded source response staged tensor/weights or lost transfer accounting");
+              // Borrow no raw host tensor/metric, and replay the same plan after
+              // each derivative traversal. Serial derivative scheduling promises
+              // bitwise repeatability; both routes preserve the independent force.
+              std::vector<double> first, second;
+              for (auto* out : {&first, &second})
+                require(vibeqc::scf::execute_cuda_density_fitting_generated_force_response(
+                            response_plan, 0, orbital, auxiliary, {}, {}, terms, 1, budget,
+                            resources.auxiliary_weight_tile, *out,
+                            generated_detail) == VIBEQC_STATUS_SUCCESS,
+                        generated_detail.c_str());
+              require(first == second, "device response serial replay is not deterministic");
+              require_matrix_close(first, generated_gradient, 8e-10,
+                                   "serial device response differs from threaded derivative");
+            }
             const auto saved = generated_gradient;
             require(vibeqc::scf::execute_cuda_density_fitting_generated_force_response(
                         response_plan, 0, orbital, auxiliary, integrals.three_center,
@@ -1204,6 +1228,51 @@ int main() {
                         generated_gradient == saved,
                     "generated DF-HF budget failure changed caller output");
           }
+        }
+      }
+
+      // A finite discarded eigenspace has a nonzero response when the metric
+      // rotates. Compare its GPU Frechet map to the independent raw derivative
+      // oracle, rather than testing only the full-rank -M+ E M+ shortcut.
+      {
+        vibeqc::scf::CudaDensityFittingIntegralSource* truncated_source = nullptr;
+        std::vector<double> metrics;
+        std::size_t n = 0, a = 0;
+        require(vibeqc::scf::create_cuda_density_fitting_integral_source(
+                    0, {orbital}, {auxiliary}, &truncated_source, metrics, n, a, source_detail) ==
+                    VIBEQC_STATUS_SUCCESS,
+                source_detail.c_str());
+        vibeqc::scf::CudaDensityFittingJkPlan* raw_plan = nullptr;
+        std::vector<vibeqc::scf::CudaDensityFittingMetricDiagnostic> diagnostics;
+        constexpr double cutoff = 0.1;
+        require(vibeqc::scf::create_cuda_density_fitting_jk_plan_from_source(
+                    0, &truncated_source, 1, n, a, metrics, cutoff, 3, 3, &raw_plan, diagnostics,
+                    source_detail) == VIBEQC_STATUS_SUCCESS,
+                source_detail.c_str());
+        CudaPlan truncated_plan(raw_plan, &vibeqc::scf::destroy_cuda_density_fitting_jk_plan);
+        require(diagnostics[0].effective_rank > 0 && diagnostics[0].effective_rank < a,
+                "device response fixture did not discard a positive metric eigenspace");
+        for (bool unrestricted : {false, true}) {
+          const std::vector<vibeqc::scf::DensityFittingDensityResponse> terms =
+              unrestricted
+                  ? std::vector<vibeqc::scf::DensityFittingDensityResponse>{{generated_total, 1, 0},
+                                                                            {alpha_density, 0, .5},
+                                                                            {beta_density, 0, .5}}
+                  : std::vector<vibeqc::scf::DensityFittingDensityResponse>{
+                        {generated_rhf_density, 1, .25}};
+          const auto expected = unrestricted ? vibeqc::scf::build_density_fitting_uhf_gradient(
+                                                   integrals, alpha_density, beta_density, cutoff)
+                                                   .derivative
+                                             : vibeqc::scf::build_density_fitting_rhf_gradient(
+                                                   integrals, generated_rhf_density, cutoff)
+                                                   .derivative;
+          std::vector<double> actual;
+          require(vibeqc::scf::execute_cuda_density_fitting_generated_force_response(
+                      truncated_plan.get(), 0, orbital, auxiliary, {}, {}, terms, 0, 16384, 3,
+                      actual, source_detail) == VIBEQC_STATUS_SUCCESS,
+                  source_detail.c_str());
+          require_matrix_close(actual, expected, 8e-10,
+                               "device metric response omitted discarded-subspace motion");
         }
       }
 

@@ -35,7 +35,15 @@ def sdf_case_inputs(method, count):
 
 
 def run_case(
-    monkeypatch, mapping, *, method, representation, fitted, count, device="cuda"
+    monkeypatch,
+    mapping,
+    *,
+    method,
+    representation,
+    fitted,
+    count,
+    device="cuda",
+    df_budget=0,
 ):
     """Exercise cold, unchanged and changed geometry on one fixed topology."""
     if mapping is None:
@@ -49,6 +57,7 @@ def run_case(
         basis=basis,
         basis_representation=representation,
         density_fitting=device if fitted else "none",
+        density_fitting_memory_budget_bytes=df_budget,
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
         screening_tolerance=1e-14,

@@ -232,7 +232,8 @@ if(VIBEQC_ENABLE_CUDA)
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py" ${VIBEQC_DF_GENERATOR_INPUTS}
     VERBATIM)
   target_sources(vibeqc PRIVATE "${VIBEQC_DF_DERIVATIVE_HEADER}" "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}" "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}"
-                 src/scf/cuda/df_derivatives.cu src/scf/cuda/df_gradient_bridge.cu)
+                 src/scf/cuda/df_derivatives.cu src/scf/cuda/df_gradient_bridge.cu
+                 src/scf/cuda/df_response_weights.cu)
 
   # One-electron lowering is compiled in its own TU, keeping the generic HF
   # fallback independent of generated scalar-family source size.
