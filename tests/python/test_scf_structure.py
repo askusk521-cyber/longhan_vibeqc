@@ -12,14 +12,28 @@ def test_current_shared_scf_dependencies_are_valid():
 
 
 @pytest.mark.parametrize("include", ['"scf/rhf.hpp"', '"../rhf.hpp"', "<scf/rhf.hpp>"])
-def test_method_dependency_cannot_hide_behind_include_spelling(tmp_path, include):
+@pytest.mark.parametrize("owner", ["reference", "solver", "gradient"])
+def test_method_dependency_cannot_hide_behind_include_spelling(
+    tmp_path, include, owner
+):
     source = tmp_path / "src/scf"
-    (source / "reference").mkdir(parents=True)
+    (source / owner).mkdir(parents=True)
     (source / "rhf.hpp").write_text("// Method-owned state\n")
-    (source / "reference/linalg.cpp").write_text(f"#include {include}\n")
+    (source / owner / "implementation.cpp").write_text(f"#include {include}\n")
     report = audit_scf_structure(tmp_path)
     assert len(report["errors"]) == 1
-    assert "forbidden reference dependency on scf/rhf.hpp" in report["errors"][0]
+    assert f"forbidden {owner} dependency on scf/rhf.hpp" in report["errors"][0]
+
+
+def test_gradient_assembly_cannot_depend_on_solver_state(tmp_path):
+    source = tmp_path / "src/scf"
+    (source / "solver").mkdir(parents=True)
+    (source / "gradient").mkdir()
+    (source / "solver/diis.hpp").write_text("// Trajectory state\n")
+    (source / "gradient/hf_gradient.cpp").write_text('#include "scf/solver/diis.hpp"\n')
+    report = audit_scf_structure(tmp_path)
+    assert len(report["errors"]) == 1
+    assert "forbidden gradient dependency on scf/solver/diis.hpp" in report["errors"][0]
 
 
 def test_initial_guess_consumes_reference_without_reverse_edge(tmp_path):

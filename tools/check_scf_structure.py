@@ -13,6 +13,20 @@ from pathlib import Path
 ALLOWED = {
     "reference": ("scf/reference/",),
     "initial_guess": ("scf/reference/", "scf/initial_guess/", "core/", "integrals/"),
+    "gradient": ("scf/gradient/", "scf/reference/", "integrals/", "core/"),
+    "solver": (
+        "scf/solver/",
+        "scf/gradient/",
+        "scf/reference/",
+        "scf/initial_guess/",
+        "scf/types.hpp",
+        "scf/proposals.hpp",
+        "scf/fock_prepared.hpp",
+        "scf/fock_build.hpp",
+        "core/",
+        "integrals/",
+        "runtime/",
+    ),
 }
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]

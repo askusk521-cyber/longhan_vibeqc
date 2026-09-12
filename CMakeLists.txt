@@ -160,6 +160,10 @@ add_library(vibeqc SHARED
   src/scf/fock_prepared.cpp
   src/scf/fock_execution.cpp
   src/scf/rhf.cpp
+  src/scf/solver/diis.cpp
+  src/scf/solver/proposal_control.cpp
+  src/scf/solver/mean_field_driver.cpp
+  src/scf/gradient/hf_gradient.cpp
   src/scf/reference/linalg.cpp
   src/scf/reference/mean_field.cpp
   src/scf/initial_guess/density.cpp
