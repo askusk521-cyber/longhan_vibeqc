@@ -110,3 +110,21 @@ def test_matrix_library_cannot_acquire_bucket_resource_owner(tmp_path):
     (source / "resources.hpp").write_text("// Stream/graph/arena owner\n")
     (source / "matrix_library.cpp").write_text('#include "resources.hpp"\n')
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner", ["direct_bounded_tasks.cu", "direct_queue_scan.cu", "direct_screening.cuh"]
+)
+@pytest.mark.parametrize(
+    "dependency",
+    ["resources.hpp", "one_electron_reference.cuh", "df_plan_internal.hpp"],
+)
+def test_direct_queue_owners_cannot_acquire_plan_or_integral_state(
+    tmp_path, owner, dependency
+):
+    """Queue rebuilds stay independent of host ownership and integral recurrences."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / dependency).write_text("// Separately owned plan or scientific code\n")
+    (source / owner).write_text(f'#include "{dependency}"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1

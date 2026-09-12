@@ -311,6 +311,15 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/direct_tile_validation.cu
+    src/scf/cuda/direct_density_bounds.cu
+    src/scf/cuda/direct_tile_compaction.cu
+    src/scf/cuda/direct_generated_tasks.cu
+    src/scf/cuda/direct_resident_tasks.cu
+    src/scf/cuda/direct_bounded_pages.cu
+    src/scf/cuda/direct_bounded_tasks.cu
+    src/scf/cuda/direct_queue_scan.cu
+    src/scf/cuda/direct_queue_diagnostics.cu
     src/scf/cuda/resources.cpp
     src/scf/cuda/matrix_library.cpp
     src/scf/cuda/runtime_support.cpp

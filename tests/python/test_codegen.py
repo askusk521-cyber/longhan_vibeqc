@@ -239,6 +239,20 @@ def _direct_cuda_source():
             "cuda/basis_transform_kernels.cu",
             "cuda/launch_geometry.hpp",
             "cuda/direct_metadata.hpp",
+            "cuda/direct_queue_index.cuh",
+            "cuda/direct_screening.cuh",
+            "cuda/direct_task_encoding.cuh",
+            "cuda/direct_page_screening.cuh",
+            "cuda/direct_queue_profile.cuh",
+            "cuda/direct_tile_validation.cu",
+            "cuda/direct_density_bounds.cu",
+            "cuda/direct_tile_compaction.cu",
+            "cuda/direct_generated_tasks.cu",
+            "cuda/direct_resident_tasks.cu",
+            "cuda/direct_bounded_pages.cu",
+            "cuda/direct_bounded_tasks.cu",
+            "cuda/direct_queue_scan.cu",
+            "cuda/direct_queue_diagnostics.cu",
             "cuda_rhf.cu",
         )
     )
@@ -3566,16 +3580,26 @@ def test_bounded_dppp_force_uses_nonterminating_paged_screening():
     )
     assert "std::sort" not in queue_source[order_begin:order_end]
 
-    compact_begin = source.index(
+    # Compaction now has its own owner. Bound each assertion by the next
+    # function in that owner rather than by a comment in a different file.
+    compact_source = (
+        REPOSITORY_ROOT / "src/scf/cuda/direct_bounded_pages.cu"
+    ).read_text()
+    compact_begin = compact_source.index(
         "__global__ void compact_bounded_exact_class_force_wave_kernel"
     )
-    compact_end = source.index("/**\n * Consume one paged exact class", compact_begin)
+    compact_end = compact_source.index(
+        "void launch_compact_bounded_exact_class_force_wave_kernel", compact_begin
+    )
     low_order_begin = source.index(
         "__global__ void contract_bounded_exact_low_order_force_page_kernel"
     )
-    low_order_end = source.index("/** Scan bounded signature chunks", low_order_begin)
+    low_order_end = source.index(
+        "__global__ __launch_bounds__(kBoundedDirectThreads, 1) void bounded_direct_shell_quartet_kernel",
+        low_order_begin,
+    )
     for page_source in (
-        source[compact_begin:compact_end],
+        compact_source[compact_begin:compact_end],
         source[low_order_begin:low_order_end],
     ):
         force_gate = re.search(

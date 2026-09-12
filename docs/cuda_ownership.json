@@ -275,28 +275,22 @@
           "stop": "__device__ void boys_values("
         },
         {
-          "reason": "Direct class timing instrumentation retained after common SCF kernel extraction.",
-          "role": "runtime",
-          "start": "__global__ void start_bounded_fock_class_timer_kernel",
-          "stop": "__global__ void build_fock_kernel"
-        },
-        {
           "reason": "Generic atomic maximum implementation.",
           "role": "runtime",
           "start": "__device__ void atomic_max_double",
           "stop": "__global__ void build_schwarz_and_shell_pair_bounds_packed_kernel"
         },
         {
-          "reason": "Task compaction, signature/class indexing, prefix scans, materialization and queue profiling.",
-          "role": "runtime",
-          "start": "__global__ void compact_active_shell_quartet_tiles_kernel",
-          "stop": "__global__ void build_fock_direct_packed_kernel"
-        },
-        {
           "reason": "Generic tuple permutations and duplicate suppression.",
           "role": "runtime",
           "start": "__device__ void eri_symmetry_permutation",
           "stop": "__device__ __forceinline__ void accumulate_direct_fock_integral"
+        },
+        {
+          "reason": "Host sequencing of resident-bra grouping, scans and materialization; device kernels have separate owners.",
+          "role": "runtime",
+          "start": "cudaError_t prepare_ppps_resident_tasks(",
+          "stop": "__global__ void build_fock_direct_packed_kernel"
         },
         {
           "reason": "Component-index mapping.",
@@ -309,12 +303,6 @@
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
           "stop": "__global__ void nuclear_force_kernel"
-        },
-        {
-          "reason": "Generic prefix scans for force signatures.",
-          "role": "runtime",
-          "start": "__global__ void scan_bounded_force_signature_counts_kernel",
-          "stop": "__device__ __forceinline__ bool bounded_generated_class_enabled"
         },
         {
           "reason": "Persistent force task wrappers; primitive/equation contractions are separate above.",
@@ -623,6 +611,195 @@
       "subsystem": "runtime",
       "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
       "regions": []
+    },
+    {
+      "path": "src/scf/cuda/direct_bounded_pages.cu",
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [
+        {
+          "reason": "Host forwarding preserves the resolved template policy and launch geometry.",
+          "role": "runtime",
+          "start": "void launch_compact_bounded_exact_class_force_wave_kernel",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_bounded_pages.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_bounded_tasks.cu",
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [
+        {
+          "reason": "Host forwarding preserves the resolved template policy and launch geometry.",
+          "role": "runtime",
+          "start": "void launch_compact_bounded_generated_tasks_kernel",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_bounded_tasks.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_density_bounds.cu",
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [
+        {
+          "reason": "Host forwarding preserves the resolved template policy and launch geometry.",
+          "role": "runtime",
+          "start": "void launch_reduce_shell_pair_density_bounds_kernel",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_density_bounds.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_generated_tasks.cu",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_generated_tasks.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_page_screening.cuh",
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_queue_diagnostics.cu",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_queue_diagnostics.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_queue_index.cuh",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_queue_profile.cuh",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_queue_scan.cu",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_queue_scan.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_resident_tasks.cu",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_resident_tasks.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_screening.cuh",
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_task_encoding.cuh",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_tile_compaction.cu",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [
+        {
+          "reason": "Per-item FP32 contribution cutoff tied to the physical Fock error budget.",
+          "role": "scientific",
+          "start": "__device__ __forceinline__ double mixed_fock_item_cutoff",
+          "stop": "template <bool Unrestricted, DirectScreeningPurpose Purpose>"
+        }
+      ],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_tile_compaction.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_tile_validation.cu",
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_tile_validation.hpp",
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "direct_integrals"
     }
   ],
   "generated_families": [

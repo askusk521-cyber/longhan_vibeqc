@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cub/block/block_scan.cuh>
 #include <limits>
 #include <memory>
 #include <new>
@@ -29,8 +28,22 @@
 #include "scf/cuda/basis_transform_kernels.hpp"
 #include "scf/cuda/checked_layout.hpp"
 #include "scf/cuda/device_timer.cuh"
+#include "scf/cuda/direct_bounded_pages.hpp"
+#include "scf/cuda/direct_bounded_tasks.hpp"
 #include "scf/cuda/direct_constants.hpp"
+#include "scf/cuda/direct_density_bounds.hpp"
+#include "scf/cuda/direct_generated_tasks.hpp"
 #include "scf/cuda/direct_metadata.hpp"
+#include "scf/cuda/direct_page_screening.cuh"
+#include "scf/cuda/direct_queue_diagnostics.hpp"
+#include "scf/cuda/direct_queue_index.cuh"
+#include "scf/cuda/direct_queue_profile.cuh"
+#include "scf/cuda/direct_queue_scan.hpp"
+#include "scf/cuda/direct_resident_tasks.hpp"
+#include "scf/cuda/direct_screening.cuh"
+#include "scf/cuda/direct_task_encoding.cuh"
+#include "scf/cuda/direct_tile_compaction.hpp"
+#include "scf/cuda/direct_tile_validation.hpp"
 #include "scf/cuda/eigensolver.hpp"
 #include "scf/cuda/matrix_index.cuh"
 #include "scf/cuda/matrix_library.hpp"
@@ -106,14 +119,6 @@ using cuda_policy::reuse_converged_fock_requested;
 using cuda_policy::xsyev_probe_skip_diagnostic_requested;
 
 constexpr double kPi = 3.141592653589793238462643383279502884;
-
-/** Add one compacted page count to a profiling-only 64-bit accumulator. */
-__global__ void accumulate_fock_precision_work_kernel(const std::uint32_t* page_count,
-                                                      unsigned long long* total_count) {
-  if (blockIdx.x == 0U && threadIdx.x == 0U && page_count != nullptr && total_count != nullptr) {
-    atomicAdd(total_count, static_cast<unsigned long long>(*page_count));
-  }
-}
 
 struct Dual {
   double value;
@@ -336,279 +341,6 @@ __device__ std::size_t eri_index(std::size_t i, std::size_t j, std::size_t k, st
   return ((i * n + j) * n + k) * n + l;
 }
 
-__device__ void decode_lower_triangle(std::size_t packed, std::size_t& first, std::size_t& second) {
-  first = static_cast<std::size_t>(0.5 * (sqrt(8.0 * static_cast<double>(packed) + 1.0) - 1.0));
-  while ((first + 1) * (first + 2) / 2 <= packed) ++first;
-  while (first * (first + 1) / 2 > packed) --first;
-  second = packed - first * (first + 1) / 2;
-}
-
-__device__ std::int32_t shell_quartet_system(const DeviceBatch& batch, std::size_t quartet) {
-  std::int32_t lower = 0;
-  std::int32_t upper = batch.batch_size;
-  while (lower + 1 < upper) {
-    const std::int32_t middle = lower + (upper - lower) / 2;
-    if (static_cast<std::size_t>(batch.system_shell_quartet_offsets[middle]) <= quartet) {
-      lower = middle;
-    } else {
-      upper = middle;
-    }
-  }
-  return lower;
-}
-
-/** Resolve one packed lower-triangular shell-pair-block task to its system. */
-__device__ std::int32_t shell_pair_block_quartet_system(const DeviceBatch& batch,
-                                                        std::size_t block_quartet) {
-  std::int32_t lower = 0;
-  std::int32_t upper = batch.batch_size;
-  while (lower + 1 < upper) {
-    const std::int32_t middle = lower + (upper - lower) / 2;
-    if (static_cast<std::size_t>(batch.system_shell_pair_block_quartet_offsets[middle]) <=
-        block_quartet) {
-      lower = middle;
-    } else {
-      upper = middle;
-    }
-  }
-  return lower;
-}
-
-__device__ std::size_t shell_ao_pair_count(const DeviceBatch& batch, std::size_t shell_pair) {
-  const std::int32_t first_shell = batch.shell_pair_first[shell_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[shell_pair];
-  const std::size_t first_count = static_cast<std::size_t>(
-      batch.shell_direct_ao_offsets[first_shell + 1] - batch.shell_direct_ao_offsets[first_shell]);
-  const std::size_t second_count =
-      static_cast<std::size_t>(batch.shell_direct_ao_offsets[second_shell + 1] -
-                               batch.shell_direct_ao_offsets[second_shell]);
-  return first_shell == second_shell ? first_count * (first_count + 1) / 2
-                                     : first_count * second_count;
-}
-
-__device__ void decode_shell_ao_pair(const DeviceBatch& batch, std::size_t shell_pair,
-                                     std::size_t ordinal, std::size_t system_ao_begin,
-                                     std::size_t& first, std::size_t& second) {
-  const std::int32_t first_shell = batch.shell_pair_first[shell_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[shell_pair];
-  const std::size_t first_begin =
-      static_cast<std::size_t>(batch.shell_direct_ao_offsets[first_shell]);
-  const std::size_t second_begin =
-      static_cast<std::size_t>(batch.shell_direct_ao_offsets[second_shell]);
-  const std::size_t second_count =
-      static_cast<std::size_t>(batch.shell_direct_ao_offsets[second_shell + 1]) - second_begin;
-  std::size_t first_component = 0;
-  std::size_t second_component = 0;
-  if (first_shell == second_shell) {
-    decode_lower_triangle(ordinal, first_component, second_component);
-  } else {
-    first_component = ordinal / second_count;
-    second_component = ordinal % second_count;
-  }
-  first = first_begin + first_component - system_ao_begin;
-  second = second_begin + second_component - system_ao_begin;
-}
-
-__device__ bool direct_shell_ao_range_valid(const DeviceBatch& batch, std::int32_t shell,
-                                            std::size_t system_ao_begin, std::size_t direct_nbf,
-                                            std::size_t& count) {
-  const std::int64_t begin_value = batch.shell_direct_ao_offsets[shell];
-  const std::int64_t end_value = batch.shell_direct_ao_offsets[shell + 1];
-  if (begin_value < 0 || end_value < begin_value) return false;
-  const std::size_t begin = static_cast<std::size_t>(begin_value);
-  const std::size_t end = static_cast<std::size_t>(end_value);
-  if (begin < system_ao_begin || end < begin || end - system_ao_begin > direct_nbf) {
-    return false;
-  }
-  count = end - begin;
-  return true;
-}
-
-/** Record one validation failure without perturbing the production path. */
-__device__ void record_direct_tile_validation_failure(
-    DirectTileValidationRecord* record, DirectTileValidationError error, unsigned angular_order,
-    std::size_t slot, const ActiveShellQuartetTile& tile, const std::int32_t* shells,
-    std::size_t direct_nbf, std::size_t first_pair_count, std::size_t second_pair_count,
-    std::size_t i, std::size_t j, std::size_t k, std::size_t l, std::size_t active_tile_count,
-    std::size_t partition_capacity, std::size_t partition_begin) {
-  const std::uint32_t code = static_cast<std::uint32_t>(error);
-  if (atomicCAS(&record->error, kDirectTileValidationNoError, code) !=
-      kDirectTileValidationNoError) {
-    return;
-  }
-  record->angular_order = angular_order;
-  record->slot = static_cast<std::uint32_t>(slot);
-  record->tile = tile.tile;
-  record->first_pair = tile.first_pair;
-  record->second_pair = tile.second_pair;
-#pragma unroll
-  for (unsigned center = 0; center < 4U; ++center) {
-    record->shell[center] = shells == nullptr ? -1 : shells[center];
-  }
-  record->direct_nbf = static_cast<std::uint32_t>(direct_nbf);
-  record->first_pair_count = static_cast<std::uint32_t>(first_pair_count);
-  record->second_pair_count = static_cast<std::uint32_t>(second_pair_count);
-  record->i = static_cast<std::uint32_t>(i);
-  record->j = static_cast<std::uint32_t>(j);
-  record->k = static_cast<std::uint32_t>(k);
-  record->l = static_cast<std::uint32_t>(l);
-  record->active_tile_count = static_cast<std::uint32_t>(active_tile_count);
-  record->partition_capacity = static_cast<std::uint32_t>(partition_capacity);
-  record->partition_begin = static_cast<std::uint32_t>(partition_begin);
-}
-
-__device__ bool decode_direct_tile_ao_ordinal(
-    const DeviceBatch& batch, const ActiveShellQuartetTile& tile, std::size_t ordinal,
-    std::size_t first_pair_ao_count, std::size_t second_pair_ao_count, std::size_t system_ao_begin,
-    std::size_t direct_nbf, std::size_t& i, std::size_t& j, std::size_t& k, std::size_t& l) {
-  if (first_pair_ao_count == 0U || second_pair_ao_count == 0U) {
-    return false;
-  }
-  std::size_t first_ao_pair = ordinal / second_pair_ao_count;
-  std::size_t second_ao_pair = ordinal % second_pair_ao_count;
-  if (tile.first_pair == tile.second_pair) {
-    decode_lower_triangle(ordinal, first_ao_pair, second_ao_pair);
-  }
-  decode_shell_ao_pair(batch, tile.first_pair, first_ao_pair, system_ao_begin, i, j);
-  decode_shell_ao_pair(batch, tile.second_pair, second_ao_pair, system_ao_begin, k, l);
-  return i < direct_nbf && j < direct_nbf && k < direct_nbf && l < direct_nbf;
-}
-
-/** Validate compact direct tiles before any generated or handwritten consumer. */
-__global__ void validate_direct_tile_descriptors_kernel(DeviceBatch batch,
-                                                        const std::uint32_t* active_tile_offsets,
-                                                        const std::uint32_t* active_tile_counts,
-                                                        const ActiveShellQuartetTile* active_tiles,
-                                                        std::size_t total_tile_capacity,
-                                                        DirectTileValidationRecord* record) {
-  const std::size_t slot = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (slot >= total_tile_capacity) return;
-
-  unsigned angular_order = 0;
-  while (angular_order + 1U < detail::kDirectQuartetAngularOrderCount &&
-         slot >= active_tile_offsets[angular_order + 1U]) {
-    ++angular_order;
-  }
-  const std::size_t partition_begin = active_tile_offsets[angular_order];
-  const std::size_t partition_end = active_tile_offsets[angular_order + 1U];
-  const std::size_t partition_capacity =
-      partition_end >= partition_begin ? partition_end - partition_begin : 0U;
-  const std::size_t active_tile_count = active_tile_counts[angular_order];
-  ActiveShellQuartetTile empty_tile{};
-  if (partition_end < partition_begin || active_tile_count > partition_capacity) {
-    record_direct_tile_validation_failure(
-        record, DirectTileValidationError::count_exceeds_capacity, angular_order, slot, empty_tile,
-        nullptr, static_cast<std::size_t>(batch.direct_nbf), 0, 0, 0, 0, 0, 0, active_tile_count,
-        partition_capacity, partition_begin);
-    return;
-  }
-  if (slot - partition_begin >= active_tile_count) return;
-
-  const ActiveShellQuartetTile tile = active_tiles[slot];
-  if (tile.first_pair >= static_cast<std::uint32_t>(batch.total_shell_pairs) ||
-      tile.second_pair >= static_cast<std::uint32_t>(batch.total_shell_pairs)) {
-    record_direct_tile_validation_failure(
-        record, DirectTileValidationError::pair_out_of_bounds, angular_order, slot, tile, nullptr,
-        static_cast<std::size_t>(batch.direct_nbf), 0, 0, 0, 0, 0, 0, active_tile_count,
-        partition_capacity, partition_begin);
-    return;
-  }
-
-  const std::int32_t shells[4] = {
-      batch.shell_pair_first[tile.first_pair],
-      batch.shell_pair_second[tile.first_pair],
-      batch.shell_pair_first[tile.second_pair],
-      batch.shell_pair_second[tile.second_pair],
-  };
-  for (unsigned center = 0; center < 4U; ++center) {
-    if (shells[center] < 0 || shells[center] >= static_cast<std::int32_t>(batch.total_shells)) {
-      record_direct_tile_validation_failure(
-          record, DirectTileValidationError::shell_out_of_bounds, angular_order, slot, tile, shells,
-          static_cast<std::size_t>(batch.direct_nbf), 0, 0, 0, 0, 0, 0, active_tile_count,
-          partition_capacity, partition_begin);
-      return;
-    }
-  }
-
-  const std::int32_t system = batch.shell_pair_systems[tile.first_pair];
-  const std::int32_t second_system = batch.shell_pair_systems[tile.second_pair];
-  if (system < 0 || system >= batch.batch_size || second_system != system) {
-    record_direct_tile_validation_failure(
-        record, DirectTileValidationError::shell_out_of_bounds, angular_order, slot, tile, shells,
-        static_cast<std::size_t>(batch.direct_nbf), 0, 0, 0, 0, 0, 0, active_tile_count,
-        partition_capacity, partition_begin);
-    return;
-  }
-  const std::size_t direct_nbf = static_cast<std::size_t>(batch.direct_nbf);
-  const std::size_t system_ao_begin = static_cast<std::size_t>(system) * direct_nbf;
-  std::size_t shell_counts[4]{};
-  for (unsigned center = 0; center < 4U; ++center) {
-    if (!direct_shell_ao_range_valid(batch, shells[center], system_ao_begin, direct_nbf,
-                                     shell_counts[center])) {
-      record_direct_tile_validation_failure(
-          record, DirectTileValidationError::ao_range_invalid, angular_order, slot, tile, shells,
-          direct_nbf, 0, 0, 0, 0, 0, 0, active_tile_count, partition_capacity, partition_begin);
-      return;
-    }
-  }
-  const std::size_t first_pair_ao_count = shells[0] == shells[1]
-                                              ? shell_counts[0] * (shell_counts[0] + 1U) / 2U
-                                              : shell_counts[0] * shell_counts[1];
-  const std::size_t second_pair_ao_count = shells[2] == shells[3]
-                                               ? shell_counts[2] * (shell_counts[2] + 1U) / 2U
-                                               : shell_counts[2] * shell_counts[3];
-  const std::size_t ao_quartet_count = tile.first_pair == tile.second_pair
-                                           ? first_pair_ao_count * (first_pair_ao_count + 1U) / 2U
-                                           : first_pair_ao_count * second_pair_ao_count;
-  const std::size_t expected_tiles =
-      (ao_quartet_count + detail::kDirectQuartetTileSize - 1U) / detail::kDirectQuartetTileSize;
-  if (tile.tile >= expected_tiles || first_pair_ao_count == 0U || second_pair_ao_count == 0U) {
-    record_direct_tile_validation_failure(record, DirectTileValidationError::tile_out_of_bounds,
-                                          angular_order, slot, tile, shells, direct_nbf,
-                                          first_pair_ao_count, second_pair_ao_count, 0, 0, 0, 0,
-                                          active_tile_count, partition_capacity, partition_begin);
-    return;
-  }
-
-  const std::size_t ordinal = static_cast<std::size_t>(tile.tile) * detail::kDirectQuartetTileSize;
-  std::size_t i = 0;
-  std::size_t j = 0;
-  std::size_t k = 0;
-  std::size_t l = 0;
-  if (!decode_direct_tile_ao_ordinal(batch, tile, ordinal, first_pair_ao_count,
-                                     second_pair_ao_count, system_ao_begin, direct_nbf, i, j, k,
-                                     l)) {
-    record_direct_tile_validation_failure(record, DirectTileValidationError::ao_range_invalid,
-                                          angular_order, slot, tile, shells, direct_nbf,
-                                          first_pair_ao_count, second_pair_ao_count, i, j, k, l,
-                                          active_tile_count, partition_capacity, partition_begin);
-    return;
-  }
-  const std::size_t last_ordinal =
-      min(ao_quartet_count - 1U, ordinal + detail::kDirectQuartetTileSize - 1U);
-  if (!decode_direct_tile_ao_ordinal(batch, tile, last_ordinal, first_pair_ao_count,
-                                     second_pair_ao_count, system_ao_begin, direct_nbf, i, j, k,
-                                     l)) {
-    record_direct_tile_validation_failure(record, DirectTileValidationError::ao_range_invalid,
-                                          angular_order, slot, tile, shells, direct_nbf,
-                                          first_pair_ao_count, second_pair_ao_count, i, j, k, l,
-                                          active_tile_count, partition_capacity, partition_begin);
-  }
-}
-
-/** Return the packed lower-triangle index for two shells in one system. */
-__device__ std::size_t system_shell_pair_index(const DeviceBatch& batch, std::int32_t system,
-                                               std::int32_t first_shell,
-                                               std::int32_t second_shell) {
-  const std::size_t shell_begin = static_cast<std::size_t>(batch.system_shell_offsets[system]);
-  const std::size_t first = static_cast<std::size_t>(first_shell) - shell_begin;
-  const std::size_t second = static_cast<std::size_t>(second_shell) - shell_begin;
-  const std::size_t high = first > second ? first : second;
-  const std::size_t low = first > second ? second : first;
-  return static_cast<std::size_t>(batch.system_shell_pair_offsets[system]) + high * (high + 1) / 2 +
-         low;
-}
-
 template <typename Scalar>
 __device__ Vec3<Scalar> atom_position(const DeviceBatch& batch, std::int64_t atom,
                                       std::int64_t derivative_coordinate) {
@@ -765,40 +497,6 @@ __device__ void add_angular_axis(Angular& angular, int axis, int delta) {
 
 __device__ unsigned angular_total(const Angular& angular) {
   return angular.x + angular.y + angular.z;
-}
-
-/** Match the host planner's symmetry-reduced s/p/d/f shell-class encoding. */
-__host__ __device__ constexpr unsigned direct_triangular_class_high(unsigned index) {
-  unsigned high = 0;
-  while ((high + 1) * (high + 2) / 2 <= index) ++high;
-  return high;
-}
-
-/** Resolve one class template to its exact Coulomb recurrence order. */
-__host__ __device__ constexpr unsigned direct_shell_class_angular_order(unsigned shell_class) {
-  const unsigned first_pair = direct_triangular_class_high(shell_class);
-  const unsigned second_pair = shell_class - first_pair * (first_pair + 1) / 2;
-  const unsigned first_high = direct_triangular_class_high(first_pair);
-  const unsigned first_low = first_pair - first_high * (first_high + 1) / 2;
-  const unsigned second_high = direct_triangular_class_high(second_pair);
-  const unsigned second_low = second_pair - second_high * (second_high + 1) / 2;
-  return first_high + first_low + second_high + second_low;
-}
-
-__host__ __device__ constexpr unsigned direct_shell_pair_class_cuda(unsigned first,
-                                                                    unsigned second) {
-  const unsigned high = first > second ? first : second;
-  const unsigned low = first > second ? second : first;
-  return high * (high + 1) / 2 + low;
-}
-
-__device__ unsigned direct_quartet_shell_class_device(unsigned first, unsigned second,
-                                                      unsigned third, unsigned fourth) {
-  const unsigned first_pair = direct_shell_pair_class_cuda(first, second);
-  const unsigned second_pair = direct_shell_pair_class_cuda(third, fourth);
-  const unsigned high_pair = max(first_pair, second_pair);
-  const unsigned low_pair = min(first_pair, second_pair);
-  return high_pair * (high_pair + 1) / 2 + low_pair;
 }
 
 __device__ bool is_s_function(const Angular& angular) { return angular_total(angular) == 0; }
@@ -5687,23 +5385,6 @@ __global__ void build_nuclear_repulsion_kernel(DeviceBatch batch, double* nuclea
   nuclear_repulsion[system] = result;
 }
 
-/** Record a stream-ordered timestamp immediately before one Fock class. */
-__global__ void start_bounded_fock_class_timer_kernel(unsigned shell_class, std::uint64_t* starts) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
-  starts[shell_class] = globaltimer_nanoseconds();
-}
-
-/** Accumulate exact stream time consumed by one bounded Fock class launch. */
-__global__ void finish_bounded_fock_class_timer_kernel(unsigned shell_class,
-                                                       const std::uint64_t* starts,
-                                                       std::uint64_t* elapsed,
-                                                       std::uint32_t* launches) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
-  const std::uint64_t stop = globaltimer_nanoseconds();
-  elapsed[shell_class] += stop - starts[shell_class];
-  ++launches[shell_class];
-}
-
 __global__ void build_fock_kernel(std::int32_t batch_size, std::int32_t nbf, const double* hcore,
                                   const double* eri, const double* density,
                                   const std::uint8_t* active, double* fock) {
@@ -5860,805 +5541,6 @@ __global__ void build_schwarz_and_shell_pair_bounds_packed_kernel(DeviceBatch ba
   atomic_max_double(shell_pair_bounds + shell_pair, bound);
 }
 
-/**
- * Reduce the current AO density to the shell-block magnitudes used by J/K.
- *
- * The direct quartet kernels scatter every ERI symmetry permutation, so a
- * shell quartet can contribute through its two Coulomb density blocks or any
- * of its four crossed exchange blocks. UHF alpha and beta exchange bounds
- * remain separate so the force gate never invents an opposite-spin product.
- * RHF stores its one physical density in the alpha field; the Fock gate
- * applies the existing one-half exchange factor when it consumes that field.
- */
-template <bool Unrestricted>
-__global__ void reduce_shell_pair_density_bounds_kernel(
-    DeviceBatch batch, const double* density, const std::uint8_t* active,
-    ShellPairDensityBounds* shell_pair_density_bounds) {
-  extern __shared__ double block_maxima[];
-  double* coulomb_maxima = block_maxima;
-  double* exchange_alpha_maxima = block_maxima + blockDim.x;
-  double* exchange_beta_maxima = block_maxima + 2 * blockDim.x;
-  const std::size_t shell_pair = static_cast<std::size_t>(blockIdx.x);
-  if (shell_pair >= static_cast<std::size_t>(batch.total_shell_pairs)) return;
-  const std::int32_t system = batch.shell_pair_systems[shell_pair];
-  const std::size_t n = static_cast<std::size_t>(batch.direct_nbf);
-  const std::size_t matrix_size = n * n;
-  const std::size_t physical_offset = static_cast<std::size_t>(system) * matrix_size;
-  const std::size_t spin_offset = static_cast<std::size_t>(system) * 2 * matrix_size;
-  const std::size_t system_ao_begin = static_cast<std::size_t>(system) * n;
-  const std::size_t ao_pair_count = shell_ao_pair_count(batch, shell_pair);
-
-  double local_coulomb = 0.0;
-  double local_exchange_alpha = 0.0;
-  double local_exchange_beta = 0.0;
-  if (active == nullptr || active[system] != 0) {
-    for (std::size_t ordinal = threadIdx.x; ordinal < ao_pair_count; ordinal += blockDim.x) {
-      std::size_t first = 0;
-      std::size_t second = 0;
-      decode_shell_ao_pair(batch, shell_pair, ordinal, system_ao_begin, first, second);
-      const std::size_t forward = matrix_index(first, second, n);
-      const std::size_t reverse = matrix_index(second, first, n);
-      if constexpr (Unrestricted) {
-        const double alpha_forward = density[spin_offset + forward];
-        const double beta_forward = density[spin_offset + matrix_size + forward];
-        const double alpha_reverse = density[spin_offset + reverse];
-        const double beta_reverse = density[spin_offset + matrix_size + reverse];
-        local_coulomb = fmax(local_coulomb, fmax(fabs(alpha_forward + beta_forward),
-                                                 fabs(alpha_reverse + beta_reverse)));
-        local_exchange_alpha =
-            fmax(local_exchange_alpha, fmax(fabs(alpha_forward), fabs(alpha_reverse)));
-        local_exchange_beta =
-            fmax(local_exchange_beta, fmax(fabs(beta_forward), fabs(beta_reverse)));
-      } else {
-        const double magnitude = fmax(fabs(density[physical_offset + forward]),
-                                      fabs(density[physical_offset + reverse]));
-        local_coulomb = fmax(local_coulomb, magnitude);
-        local_exchange_alpha = fmax(local_exchange_alpha, magnitude);
-      }
-    }
-  }
-
-  coulomb_maxima[threadIdx.x] = local_coulomb;
-  exchange_alpha_maxima[threadIdx.x] = local_exchange_alpha;
-  exchange_beta_maxima[threadIdx.x] = local_exchange_beta;
-  __syncthreads();
-  for (unsigned stride = blockDim.x / 2; stride != 0; stride /= 2) {
-    if (threadIdx.x < stride) {
-      coulomb_maxima[threadIdx.x] =
-          fmax(coulomb_maxima[threadIdx.x], coulomb_maxima[threadIdx.x + stride]);
-      exchange_alpha_maxima[threadIdx.x] =
-          fmax(exchange_alpha_maxima[threadIdx.x], exchange_alpha_maxima[threadIdx.x + stride]);
-      exchange_beta_maxima[threadIdx.x] =
-          fmax(exchange_beta_maxima[threadIdx.x], exchange_beta_maxima[threadIdx.x + stride]);
-    }
-    __syncthreads();
-  }
-  if (threadIdx.x == 0) {
-    shell_pair_density_bounds[shell_pair] = {coulomb_maxima[0], exchange_alpha_maxima[0],
-                                             exchange_beta_maxima[0]};
-  }
-}
-
-/**
- * Reduce one permutation-contiguous shell-pair block to its Schwarz maximum.
- *
- * The permutation is refreshed whenever geometry changes so similarly sized
- * pairs share a coarse gate and class streams retain a monotonic Schwarz tail.
- */
-__global__ void reduce_bounded_shell_pair_block_bounds_kernel(DeviceBatch batch,
-                                                              const std::uint32_t* shell_pair_order,
-                                                              const double* shell_pair_bounds,
-                                                              double* shell_pair_block_bounds) {
-  extern __shared__ double block_maxima[];
-  const std::size_t block = static_cast<std::size_t>(blockIdx.x);
-  if (block >= static_cast<std::size_t>(batch.total_shell_pair_blocks)) return;
-
-  std::int32_t system = 0;
-  while (system + 1 < batch.batch_size &&
-         static_cast<std::size_t>(batch.system_shell_pair_block_offsets[system + 1]) <= block) {
-    ++system;
-  }
-  const std::size_t local_block =
-      block - static_cast<std::size_t>(batch.system_shell_pair_block_offsets[system]);
-  const std::size_t pair_begin = static_cast<std::size_t>(batch.system_shell_pair_offsets[system]);
-  const std::size_t pair_end =
-      static_cast<std::size_t>(batch.system_shell_pair_offsets[system + 1]);
-  const std::size_t ordered_begin =
-      pair_begin + local_block * detail::kBoundedDirectShellPairBlockSize;
-  const std::size_t ordered_end =
-      min(pair_end, ordered_begin + detail::kBoundedDirectShellPairBlockSize);
-
-  double local_maximum = 0.0;
-  for (std::size_t ordered = ordered_begin + threadIdx.x; ordered < ordered_end;
-       ordered += blockDim.x) {
-    local_maximum = fmax(local_maximum, shell_pair_bounds[shell_pair_order[ordered]]);
-  }
-  block_maxima[threadIdx.x] = local_maximum;
-  __syncthreads();
-  for (unsigned stride = blockDim.x / 2; stride != 0; stride /= 2) {
-    if (threadIdx.x < stride) {
-      block_maxima[threadIdx.x] =
-          fmax(block_maxima[threadIdx.x], block_maxima[threadIdx.x + stride]);
-    }
-    __syncthreads();
-  }
-  if (threadIdx.x == 0) {
-    shell_pair_block_bounds[block] = block_maxima[0];
-  }
-}
-
-/**
- * Reduce per-system density maxima for both block and class-level tails.
- *
- * The scalar maximum remains the conservative gate for arbitrary block-pair
- * products.  Generated streams know their fixed shell class, so retaining a
- * ten-entry pair-class maximum avoids using (for example) a large d/d density
- * to gate an s/s stream.
- */
-__global__ void reduce_bounded_system_density_bounds_kernel(
-    DeviceBatch batch, const ShellPairDensityBounds* shell_pair_density_bounds,
-    double* system_density_bounds, double* system_pair_density_bounds) {
-  extern __shared__ double block_maxima[];
-  constexpr unsigned class_count = detail::kDirectShellPairClassCount;
-  const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
-  if (system >= batch.batch_size) return;
-  const std::size_t pair_begin = static_cast<std::size_t>(batch.system_shell_pair_offsets[system]);
-  const std::size_t pair_end =
-      static_cast<std::size_t>(batch.system_shell_pair_offsets[system + 1]);
-  for (unsigned pair_class = 0; pair_class < class_count; ++pair_class) {
-    block_maxima[pair_class * blockDim.x + threadIdx.x] = 0.0;
-  }
-  for (std::size_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
-    const ShellPairDensityBounds bound = shell_pair_density_bounds[pair];
-    const std::int32_t first_shell = batch.shell_pair_first[pair];
-    const std::int32_t second_shell = batch.shell_pair_second[pair];
-    const unsigned pair_class = direct_shell_pair_class_cuda(batch.shell_angular[first_shell],
-                                                             batch.shell_angular[second_shell]);
-    block_maxima[pair_class * blockDim.x + threadIdx.x] =
-        fmax(block_maxima[pair_class * blockDim.x + threadIdx.x],
-             fmax(bound.coulomb, fmax(bound.exchange_alpha, bound.exchange_beta)));
-  }
-  __syncthreads();
-  for (unsigned stride = blockDim.x / 2; stride != 0; stride /= 2) {
-    if (threadIdx.x < stride) {
-      for (unsigned pair_class = 0; pair_class < class_count; ++pair_class) {
-        block_maxima[pair_class * blockDim.x + threadIdx.x] =
-            fmax(block_maxima[pair_class * blockDim.x + threadIdx.x],
-                 block_maxima[pair_class * blockDim.x + threadIdx.x + stride]);
-      }
-    }
-    __syncthreads();
-  }
-  if (threadIdx.x == 0) {
-    double overall_maximum = 0.0;
-    for (unsigned pair_class = 0; pair_class < class_count; ++pair_class) {
-      const double maximum = block_maxima[pair_class * blockDim.x];
-      system_pair_density_bounds[static_cast<std::size_t>(system) * class_count + pair_class] =
-          maximum;
-      overall_maximum = fmax(overall_maximum, maximum);
-    }
-    system_density_bounds[system] = overall_maximum;
-  }
-}
-
-__global__ void clear_active_shell_quartet_tile_counts_kernel(
-    std::uint32_t* active_shell_quartet_tile_counts, std::uint32_t* persistent_fock_task_heads,
-    std::uint32_t* fp32_shell_quartet_tile_counts, std::uint32_t* fp32_persistent_fock_task_heads) {
-  const std::size_t order = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (order < detail::kDirectQuartetAngularOrderCount) {
-    active_shell_quartet_tile_counts[order] = 0;
-    if (fp32_shell_quartet_tile_counts != nullptr) {
-      fp32_shell_quartet_tile_counts[order] = 0;
-    }
-  }
-  // Reset queue state in the same captured Graph node as the active counts.
-  // A separate tiny kernel here would be replayed for every SCF iteration.
-  if (order < kPersistentFockAngularOrderCount) {
-    persistent_fock_task_heads[order] = 0;
-    if (fp32_persistent_fock_task_heads != nullptr) {
-      fp32_persistent_fock_task_heads[order] = 0;
-    }
-  }
-}
-
-/** Apply the shell-level Schwarz and density gate for one direct consumer. */
-template <bool Unrestricted, DirectScreeningPurpose Purpose>
-__device__ __forceinline__ bool direct_shell_quartet_survives_screening(
-    const DeviceBatch& batch, std::size_t first_pair, std::size_t second_pair,
-    double screening_tolerance, const double* shell_pair_bounds,
-    const ShellPairDensityBounds* shell_pair_density_bounds,
-    double* fock_contribution_bound = nullptr) {
-  const double quartet_bound = shell_pair_bounds[first_pair] * shell_pair_bounds[second_pair];
-  if (quartet_bound < screening_tolerance) return false;
-
-  const std::int32_t system = batch.shell_pair_systems[first_pair];
-  const std::int32_t first_shell = batch.shell_pair_first[first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[second_pair];
-  const std::size_t ac_pair = system_shell_pair_index(batch, system, first_shell, third_shell);
-  const std::size_t ad_pair = system_shell_pair_index(batch, system, first_shell, fourth_shell);
-  const std::size_t bc_pair = system_shell_pair_index(batch, system, second_shell, third_shell);
-  const std::size_t bd_pair = system_shell_pair_index(batch, system, second_shell, fourth_shell);
-  const ShellPairDensityBounds ab = shell_pair_density_bounds[first_pair];
-  const ShellPairDensityBounds cd = shell_pair_density_bounds[second_pair];
-  const ShellPairDensityBounds ac = shell_pair_density_bounds[ac_pair];
-  const ShellPairDensityBounds ad = shell_pair_density_bounds[ad_pair];
-  const ShellPairDensityBounds bc = shell_pair_density_bounds[bc_pair];
-  const ShellPairDensityBounds bd = shell_pair_density_bounds[bd_pair];
-
-  double fock_density_bound = fmax(ab.coulomb, cd.coulomb);
-  if constexpr (Unrestricted) {
-    fock_density_bound = fmax(fock_density_bound, fmax(fmax(ac.exchange_alpha, ac.exchange_beta),
-                                                       fmax(ad.exchange_alpha, ad.exchange_beta)));
-    fock_density_bound = fmax(fock_density_bound, fmax(fmax(bc.exchange_alpha, bc.exchange_beta),
-                                                       fmax(bd.exchange_alpha, bd.exchange_beta)));
-  } else {
-    // Preserve the established RHF Fock gate exactly: F = J - K/2.
-    const double exchange_bound = fmax(fmax(ac.exchange_alpha, ad.exchange_alpha),
-                                       fmax(bc.exchange_alpha, bd.exchange_alpha));
-    fock_density_bound = fmax(fock_density_bound, 0.5 * exchange_bound);
-  }
-  const double contribution_bound = quartet_bound * fock_density_bound;
-  if (fock_contribution_bound != nullptr) {
-    *fock_contribution_bound = contribution_bound;
-  }
-  if (contribution_bound < screening_tolerance) return false;
-  if constexpr (Purpose == DirectScreeningPurpose::Fock) return true;
-
-  // Screen J and each same-spin K contraction independently. Combining the
-  // exact symmetry-reduced coefficient here would exploit cancellation and
-  // can make loose-screening analytic forces disagree with finite differences.
-  const double force_screening_tolerance =
-      fmin(screening_tolerance, kForceDensityProductScreeningTolerance);
-  if (quartet_bound * ab.coulomb * cd.coulomb >= force_screening_tolerance) {
-    return true;
-  }
-  if constexpr (Unrestricted) {
-    return quartet_bound * ac.exchange_alpha * bd.exchange_alpha >= force_screening_tolerance ||
-           quartet_bound * ac.exchange_beta * bd.exchange_beta >= force_screening_tolerance ||
-           quartet_bound * ad.exchange_alpha * bc.exchange_alpha >= force_screening_tolerance ||
-           quartet_bound * ad.exchange_beta * bc.exchange_beta >= force_screening_tolerance;
-  } else {
-    return quartet_bound * ac.exchange_alpha * bd.exchange_alpha >= force_screening_tolerance ||
-           quartet_bound * ad.exchange_alpha * bc.exchange_alpha >= force_screening_tolerance;
-  }
-}
-
-/**
- * Contribution cutoff for one item's FP32 tiles: the largest cutoff whose
- * worst-case accumulation `eps32 * cutoff * census` fits the reserved error.
- * A zero census keeps the whole item on the exact FP64 path, and an
- * item-agnostic diagnostic cutoff (no per-item budget) is returned unchanged.
- */
-__device__ __forceinline__ double mixed_fock_item_cutoff(double cutoff_ceiling, double budget_error,
-                                                         const std::uint32_t* item_census,
-                                                         std::int32_t item) {
-  if (!(cutoff_ceiling > 0.0) || item_census == nullptr) return 0.0;
-  const std::uint32_t census = item_census[item];
-  if (census == 0U) return 0.0;
-  if (!(budget_error > 0.0)) return cutoff_ceiling;
-  return fmin(cutoff_ceiling,
-              budget_error / (kMixedPrecisionFloat32UnitRoundoff * static_cast<double>(census)));
-}
-template <bool Unrestricted, DirectScreeningPurpose Purpose>
-__global__ void compact_active_shell_quartet_tiles_kernel(
-    DeviceBatch batch, double screening_tolerance, const double* shell_pair_bounds,
-    const ShellPairDensityBounds* shell_pair_density_bounds, const std::uint8_t* active,
-    const std::uint32_t* active_shell_quartet_tile_offsets,
-    std::uint32_t* active_shell_quartet_tile_counts,
-    ActiveShellQuartetTile* active_shell_quartet_tiles, bool mixed_precision_enabled,
-    double mixed_precision_cutoff_ceiling, double mixed_precision_budget_error,
-    const std::uint32_t* mixed_precision_item_census,
-    const std::uint32_t* fp32_shell_quartet_tile_offsets,
-    std::uint32_t* fp32_shell_quartet_tile_counts,
-    ActiveShellQuartetTile* fp32_shell_quartet_tiles) {
-  const std::size_t shell_quartet = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (shell_quartet >= static_cast<std::size_t>(batch.total_shell_quartets)) {
-    return;
-  }
-
-  const std::int32_t system = shell_quartet_system(batch, shell_quartet);
-  if (active != nullptr && active[system] == 0) return;
-  const std::size_t local_quartet =
-      shell_quartet - static_cast<std::size_t>(batch.system_shell_quartet_offsets[system]);
-  std::size_t first_pair_local = 0;
-  std::size_t second_pair_local = 0;
-  decode_lower_triangle(local_quartet, first_pair_local, second_pair_local);
-  const std::size_t pair_begin = static_cast<std::size_t>(batch.system_shell_pair_offsets[system]);
-  const std::size_t first_pair = pair_begin + first_pair_local;
-  const std::size_t second_pair = pair_begin + second_pair_local;
-  double contribution_bound = 0.0;
-  if (!direct_shell_quartet_survives_screening<Unrestricted, Purpose>(
-          batch, first_pair, second_pair, screening_tolerance, shell_pair_bounds,
-          shell_pair_density_bounds,
-          Purpose == DirectScreeningPurpose::Fock ? &contribution_bound : nullptr))
-    return;
-
-  const std::int32_t first_shell = batch.shell_pair_first[first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[second_pair];
-
-  const std::size_t first_ao_pair_count = shell_ao_pair_count(batch, first_pair);
-  const std::size_t second_ao_pair_count = shell_ao_pair_count(batch, second_pair);
-  const std::size_t ao_quartet_count = first_pair == second_pair
-                                           ? first_ao_pair_count * (first_ao_pair_count + 1) / 2
-                                           : first_ao_pair_count * second_ao_pair_count;
-  const std::uint32_t tile_count = static_cast<std::uint32_t>(
-      (ao_quartet_count + detail::kDirectQuartetTileSize - 1) / detail::kDirectQuartetTileSize);
-  const unsigned angular_order =
-      batch.shell_angular[first_shell] + batch.shell_angular[second_shell] +
-      batch.shell_angular[third_shell] + batch.shell_angular[fourth_shell];
-  if (angular_order >= detail::kDirectQuartetAngularOrderCount) return;
-
-  // Compaction expands each active shell quartet into only its populated AO
-  // tiles inside a fixed angular-order partition. Exact shell-class dispatch
-  // happens inside the consumer so Graph replay retains only 13 launch nodes.
-  // Order within one partition need not be stable because consumers use
-  // double atomics and promise numerical, rather than bitwise, replay.
-  bool use_fp32 = false;
-  if constexpr (Purpose == DirectScreeningPurpose::Fock) {
-    // Low-order shell-fused workers remain FP64; routing them through the
-    // generic evaluator would conflate precision with a scheduling regression.
-    // The cutoff is per item: a system without a certified census keeps every
-    // one of its tiles in the FP64 list regardless of its batch neighbors.
-    const double item_cutoff =
-        mixed_fock_item_cutoff(mixed_precision_cutoff_ceiling, mixed_precision_budget_error,
-                               mixed_precision_item_census, system);
-    use_fp32 = mixed_precision_enabled && item_cutoff > 0.0 &&
-               angular_order >= kMixedFockMinimumAngularOrder &&
-               fp32_shell_quartet_tile_counts != nullptr && contribution_bound < item_cutoff;
-  }
-  std::uint32_t* selected_counts =
-      use_fp32 ? fp32_shell_quartet_tile_counts : active_shell_quartet_tile_counts;
-  ActiveShellQuartetTile* selected_tiles =
-      use_fp32 ? fp32_shell_quartet_tiles : active_shell_quartet_tiles;
-  const std::uint32_t* selected_offsets =
-      use_fp32 ? fp32_shell_quartet_tile_offsets : active_shell_quartet_tile_offsets;
-  const std::uint32_t slot =
-      selected_offsets[angular_order] + atomicAdd(selected_counts + angular_order, tile_count);
-  for (std::uint32_t tile = 0; tile < tile_count; ++tile) {
-    selected_tiles[slot + tile] = {static_cast<std::uint32_t>(first_pair),
-                                   static_cast<std::uint32_t>(second_pair), tile};
-  }
-}
-
-constexpr std::uint8_t kNoGeneratedShellClass = std::numeric_limits<std::uint8_t>::max();
-
-/**
- * Return the canonical ``pp`` pair for an active ppps tile.
- *
- * Direct compaction stores an unordered pair-of-pairs, while generated
- * kernels consume the pair with the larger triangular class in slot zero.
- * Keeping this test in one device helper makes resident grouping use exactly
- * the same symmetry convention as generated task materialization.  The
- * primitive-pair limit is part of the predicate: a bra that cannot fit in
- * shared memory must remain visible to the ordinary generated ppps queue.
- */
-__device__ __forceinline__ bool resident_ppps_bra_pair(const DeviceBatch& batch,
-                                                       const ActiveShellQuartetTile& tile,
-                                                       std::uint32_t& bra_pair) {
-  if (tile.tile != 0U) return false;
-  const std::int32_t first_shell = batch.shell_pair_first[tile.first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[tile.first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[tile.second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[tile.second_pair];
-  const unsigned first_pair_class = direct_shell_pair_class_cuda(batch.shell_angular[first_shell],
-                                                                 batch.shell_angular[second_shell]);
-  const unsigned second_pair_class = direct_shell_pair_class_cuda(
-      batch.shell_angular[third_shell], batch.shell_angular[fourth_shell]);
-  if (first_pair_class == 2U && second_pair_class == 1U) {
-    bra_pair = tile.first_pair;
-  } else if (first_pair_class == 1U && second_pair_class == 2U) {
-    bra_pair = tile.second_pair;
-  } else {
-    return false;
-  }
-  const std::int64_t begin = batch.shell_pair_primitive_offsets[bra_pair];
-  const std::int64_t end =
-      batch.shell_pair_primitive_offsets[static_cast<std::size_t>(bra_pair) + 1U];
-  const std::int64_t count = end - begin;
-  return count > 0 &&
-         count <= static_cast<std::int64_t>(kGeneratedPppsResidentMaximumBraPrimitivePairs);
-}
-
-/** Return the exact orientation/ket-primitive bucket for one resident tile. */
-__device__ __forceinline__ unsigned resident_ppps_signature_bucket(
-    const DeviceBatch& batch, const ActiveShellQuartetTile& tile, std::uint32_t bra_pair) {
-  const bool pair_exchanged = bra_pair == tile.second_pair;
-  const std::uint32_t ket_pair = pair_exchanged ? tile.first_pair : tile.second_pair;
-  const std::int64_t ket_begin = batch.shell_pair_primitive_offsets[ket_pair];
-  const std::int64_t ket_end = batch.shell_pair_primitive_offsets[ket_pair + 1U];
-  const std::uint64_t ket_count =
-      ket_end > ket_begin ? static_cast<std::uint64_t>(ket_end - ket_begin) : 0U;
-  const unsigned primitive_bucket = static_cast<unsigned>(
-      min(ket_count, static_cast<std::uint64_t>(kPppsSignaturePrimitivePairBuckets - 1U)));
-  return (pair_exchanged ? kPppsSignaturePrimitivePairBuckets : 0U) + primitive_bucket;
-}
-
-/** Return the page-local loop/orientation signature for one bounded task. */
-__device__ __forceinline__ unsigned bounded_force_signature_bucket(const DeviceBatch& batch,
-                                                                   std::uint32_t first_pair,
-                                                                   std::uint32_t second_pair) {
-  const std::int64_t first_begin = batch.shell_pair_primitive_offsets[first_pair];
-  const std::int64_t first_end = batch.shell_pair_primitive_offsets[first_pair + 1U];
-  const std::int64_t second_begin = batch.shell_pair_primitive_offsets[second_pair];
-  const std::int64_t second_end = batch.shell_pair_primitive_offsets[second_pair + 1U];
-  const std::uint64_t first_count =
-      first_end > first_begin ? static_cast<std::uint64_t>(first_end - first_begin) : 0U;
-  const std::uint64_t second_count =
-      second_end > second_begin ? static_cast<std::uint64_t>(second_end - second_begin) : 0U;
-  const unsigned first_bucket = static_cast<unsigned>(
-      min(first_count, static_cast<std::uint64_t>(kPppsSignaturePrimitivePairBuckets - 1U)));
-  const unsigned second_bucket = static_cast<unsigned>(
-      min(second_count, static_cast<std::uint64_t>(kPppsSignaturePrimitivePairBuckets - 1U)));
-  const std::int32_t first_shell = batch.shell_pair_first[first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[second_pair];
-  const unsigned orientation =
-      (batch.shell_angular[first_shell] < batch.shell_angular[second_shell] ? 2U : 0U) |
-      (batch.shell_angular[third_shell] < batch.shell_angular[fourth_shell] ? 1U : 0U);
-  return (orientation * kPppsSignaturePrimitivePairBuckets + first_bucket) *
-             kPppsSignaturePrimitivePairBuckets +
-         second_bucket;
-}
-
-/** Return the ordered primitive-pair loop signature for one low-order tile. */
-__device__ __forceinline__ unsigned generated_low_order_signature_bucket(
-    const DeviceBatch& batch, const ActiveShellQuartetTile& tile) {
-  const std::int64_t first_begin = batch.shell_pair_primitive_offsets[tile.first_pair];
-  const std::int64_t first_end = batch.shell_pair_primitive_offsets[tile.first_pair + 1U];
-  const std::int64_t second_begin = batch.shell_pair_primitive_offsets[tile.second_pair];
-  const std::int64_t second_end = batch.shell_pair_primitive_offsets[tile.second_pair + 1U];
-  const std::uint64_t first_count =
-      first_end > first_begin ? static_cast<std::uint64_t>(first_end - first_begin) : 0U;
-  const std::uint64_t second_count =
-      second_end > second_begin ? static_cast<std::uint64_t>(second_end - second_begin) : 0U;
-  const unsigned first_bucket = static_cast<unsigned>(
-      min(first_count, static_cast<std::uint64_t>(kLowOrderSignaturePrimitivePairBuckets - 1U)));
-  const unsigned second_bucket = static_cast<unsigned>(
-      min(second_count, static_cast<std::uint64_t>(kLowOrderSignaturePrimitivePairBuckets - 1U)));
-  return first_bucket * kLowOrderSignaturePrimitivePairBuckets + second_bucket;
-}
-
-/** Map each supported scalar class to its private signature histogram. */
-__device__ __forceinline__ unsigned generated_low_order_signature_index(unsigned shell_class,
-                                                                        unsigned signature) {
-  const unsigned class_slot = shell_class == kPspsShellClass ? 0U : 1U;
-  return class_slot * kLowOrderSignatureBucketsPerClass + signature;
-}
-
-/**
- * Fill the stable generated task ABI from one canonicalized shell quartet.
- *
- * Both the ordinary class queue and the resident ppps queue use this helper.
- * In particular, the two one-bit pair-orientation mask records the swaps
- * applied before pair-exchange canonicalization; generated force code uses
- * it to map primitive-pair product scales back to physical centers.
- */
-__device__ __forceinline__ void populate_generated_shell_task(const DeviceBatch& batch,
-                                                              const ActiveShellQuartetTile& tile,
-                                                              GeneratedShellTask& task) {
-  std::int32_t shells[4] = {
-      batch.shell_pair_first[tile.first_pair],
-      batch.shell_pair_second[tile.first_pair],
-      batch.shell_pair_first[tile.second_pair],
-      batch.shell_pair_second[tile.second_pair],
-  };
-  std::uint32_t shell_pairs[2] = {tile.first_pair, tile.second_pair};
-  std::uint32_t reversed_shell_pair_mask = 0U;
-  if (batch.shell_angular[shells[0]] < batch.shell_angular[shells[1]]) {
-    const std::int32_t swap = shells[0];
-    shells[0] = shells[1];
-    shells[1] = swap;
-    reversed_shell_pair_mask |= 1U;
-  }
-  if (batch.shell_angular[shells[2]] < batch.shell_angular[shells[3]]) {
-    const std::int32_t swap = shells[2];
-    shells[2] = shells[3];
-    shells[3] = swap;
-    reversed_shell_pair_mask |= 2U;
-  }
-  const unsigned first_pair_class =
-      direct_shell_pair_class_cuda(batch.shell_angular[shells[0]], batch.shell_angular[shells[1]]);
-  const unsigned second_pair_class =
-      direct_shell_pair_class_cuda(batch.shell_angular[shells[2]], batch.shell_angular[shells[3]]);
-  if (first_pair_class < second_pair_class) {
-    const std::int32_t first = shells[0];
-    const std::int32_t second = shells[1];
-    shells[0] = shells[2];
-    shells[1] = shells[3];
-    shells[2] = first;
-    shells[3] = second;
-    const std::uint32_t pair_swap = shell_pairs[0];
-    shell_pairs[0] = shell_pairs[1];
-    shell_pairs[1] = pair_swap;
-    reversed_shell_pair_mask =
-        ((reversed_shell_pair_mask & 1U) << 1U) | ((reversed_shell_pair_mask & 2U) >> 1U);
-  }
-
-  const std::int32_t system = batch.shell_pair_systems[tile.first_pair];
-  const std::size_t matrix_order = static_cast<std::size_t>(batch.direct_nbf);
-  const std::size_t matrix_size = matrix_order * matrix_order;
-  const std::size_t system_ao_begin = static_cast<std::size_t>(system) * matrix_order;
-#pragma unroll
-  for (unsigned center = 0; center < 4U; ++center) {
-    const std::int32_t shell = shells[center];
-    task.primitive_begin[center] = static_cast<std::uint64_t>(batch.shell_primitive_offsets[shell]);
-    task.primitive_end[center] =
-        static_cast<std::uint64_t>(batch.shell_primitive_offsets[shell + 1]);
-    const std::size_t ao_begin = static_cast<std::size_t>(batch.shell_direct_ao_offsets[shell]);
-    task.ao_begin[center] = static_cast<std::uint64_t>(ao_begin - system_ao_begin);
-    task.ao_coefficient_begin[center] = static_cast<std::uint64_t>(ao_begin);
-    task.shell[center] = static_cast<std::uint32_t>(shell);
-    task.atom[center] = static_cast<std::uint32_t>(batch.shell_atoms[shell]);
-  }
-  task.density_offset = static_cast<std::uint64_t>(static_cast<std::size_t>(system) * matrix_size);
-  task.spin_offset =
-      static_cast<std::uint64_t>(static_cast<std::size_t>(system) * 2U * matrix_size);
-  task.matrix_order = static_cast<std::uint32_t>(matrix_order);
-  task.shell_pair[0] = shell_pairs[0];
-  task.shell_pair[1] = shell_pairs[1];
-  task.reversed_shell_pair_mask = reversed_shell_pair_mask;
-}
-
-/**
- * Classify every active logical quartet once for all generated consumers.
- *
- * The byte tag is retained across the device-side prefix sum so task
- * materialization does not repeat exact-class decoding. Slots for AO tiles
- * beyond tile zero and classes disabled by the runtime mask remain tagged as
- * unclassified and fall through to the handwritten consumers.
- */
-__global__ void classify_generated_shell_tasks_kernel(
-    DeviceBatch batch, std::size_t total_tile_capacity,
-    const std::uint32_t* active_shell_quartet_tile_offsets,
-    const std::uint32_t* active_shell_quartet_tile_counts,
-    const ActiveShellQuartetTile* active_shell_quartet_tiles,
-    std::uint64_t enabled_shell_class_mask, const std::uint64_t* enabled_shell_class_mask_pointer,
-    bool exclude_resident_ppps, std::uint32_t* generated_task_counts,
-    std::uint8_t* generated_shell_classes, std::uint64_t low_order_signature_mask,
-    std::uint32_t* low_order_signature_counts) {
-  const std::size_t slot = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (slot >= total_tile_capacity) return;
-  generated_shell_classes[slot] = kNoGeneratedShellClass;
-
-  unsigned angular_order = 0;
-  while (angular_order + 1 < detail::kDirectQuartetAngularOrderCount &&
-         slot >= active_shell_quartet_tile_offsets[angular_order + 1]) {
-    ++angular_order;
-  }
-  const std::size_t partition_begin = active_shell_quartet_tile_offsets[angular_order];
-  if (slot - partition_begin >= active_shell_quartet_tile_counts[angular_order]) {
-    return;
-  }
-
-  const ActiveShellQuartetTile tile = active_shell_quartet_tiles[slot];
-  if (tile.tile != 0U) return;
-
-  const std::int32_t first_shell = batch.shell_pair_first[tile.first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[tile.first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[tile.second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[tile.second_pair];
-  const unsigned shell_class = direct_quartet_shell_class_device(
-      batch.shell_angular[first_shell], batch.shell_angular[second_shell],
-      batch.shell_angular[third_shell], batch.shell_angular[fourth_shell]);
-  if (enabled_shell_class_mask_pointer != nullptr) {
-    enabled_shell_class_mask = *enabled_shell_class_mask_pointer;
-  }
-  if (shell_class >= detail::kDirectQuartetShellClassCount ||
-      (enabled_shell_class_mask & (std::uint64_t{1} << shell_class)) == 0U) {
-    return;
-  }
-  // Force preparation can route eligible canonical ppps quartets through the
-  // resident-bra consumer.  Leave oversized bra primitive lists in this
-  // ordinary class queue; otherwise their force contribution would vanish.
-  if (exclude_resident_ppps && shell_class == kPppsShellClass) {
-    std::uint32_t bra_pair = 0;
-    if (resident_ppps_bra_pair(batch, tile, bra_pair)) return;
-  }
-  generated_shell_classes[slot] = static_cast<std::uint8_t>(shell_class);
-  atomicAdd(generated_task_counts + shell_class, 1U);
-  if (low_order_signature_counts != nullptr &&
-      (low_order_signature_mask & (std::uint64_t{1} << shell_class)) != 0U) {
-    const unsigned signature = generated_low_order_signature_bucket(batch, tile);
-    atomicAdd(
-        low_order_signature_counts + generated_low_order_signature_index(shell_class, signature),
-        1U);
-  }
-}
-
-/** Build compact class slices and reset their materialization/worker cursors. */
-__global__ void prefix_generated_shell_task_counts_kernel(
-    const std::uint32_t* generated_task_counts, std::uint32_t* generated_task_offsets,
-    std::uint32_t* generated_task_write_counts, std::uint32_t* generated_task_heads) {
-  if (blockIdx.x != 0U || threadIdx.x != 0U) return;
-  std::uint32_t offset = 0;
-  generated_task_offsets[0] = 0;
-  for (unsigned shell_class = 0; shell_class < detail::kDirectQuartetShellClassCount;
-       ++shell_class) {
-    generated_task_write_counts[shell_class] = 0;
-    generated_task_heads[shell_class] = 0;
-    offset += generated_task_counts[shell_class];
-    generated_task_offsets[shell_class + 1] = offset;
-  }
-}
-
-/** Prefix selected scalar signature slices inside their exact-class ranges. */
-__global__ void prefix_low_order_signature_counts_kernel(
-    const std::uint32_t* generated_task_offsets, std::uint64_t low_order_signature_mask,
-    std::uint32_t* low_order_signature_counts, std::uint32_t* low_order_signature_offsets) {
-  if (blockIdx.x != 0U || threadIdx.x != 0U) return;
-  for (unsigned class_slot = 0; class_slot < kLowOrderSignatureClassCount; ++class_slot) {
-    const unsigned shell_class = class_slot == 0U ? kPspsShellClass : kPpssShellClass;
-    if ((low_order_signature_mask & (std::uint64_t{1} << shell_class)) == 0U) {
-      continue;
-    }
-    std::uint32_t offset = generated_task_offsets[shell_class];
-    const unsigned signature_begin = class_slot * kLowOrderSignatureBucketsPerClass;
-    for (unsigned signature = 0; signature < kLowOrderSignatureBucketsPerClass; ++signature) {
-      const unsigned index = signature_begin + signature;
-      const std::uint32_t count = low_order_signature_counts[index];
-      low_order_signature_offsets[index] = offset;
-      // Reuse the count array as the scatter cursor after preserving the class
-      // total in generated_task_counts for the persistent worker.
-      low_order_signature_counts[index] = 0U;
-      offset += count;
-    }
-  }
-}
-
-/** Canonicalize classified quartets into contiguous exact-class slices. */
-__global__ void materialize_generated_shell_tasks_kernel(
-    DeviceBatch batch, std::size_t total_tile_capacity,
-    const ActiveShellQuartetTile* active_shell_quartet_tiles,
-    const std::uint8_t* generated_shell_classes, const std::uint32_t* generated_task_offsets,
-    std::uint32_t* generated_task_write_counts, GeneratedShellTask* generated_tasks,
-    std::uint64_t low_order_signature_mask, const std::uint32_t* low_order_signature_offsets,
-    std::uint32_t* low_order_signature_write_counts) {
-  const std::size_t active_tile = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (active_tile >= total_tile_capacity) return;
-  const unsigned shell_class = generated_shell_classes[active_tile];
-  if (shell_class == kNoGeneratedShellClass) return;
-
-  const ActiveShellQuartetTile tile = active_shell_quartet_tiles[active_tile];
-  std::uint32_t task_index = 0U;
-  if (low_order_signature_offsets != nullptr && low_order_signature_write_counts != nullptr &&
-      (low_order_signature_mask & (std::uint64_t{1} << shell_class)) != 0U) {
-    const unsigned signature = generated_low_order_signature_bucket(batch, tile);
-    const unsigned index = generated_low_order_signature_index(shell_class, signature);
-    task_index = low_order_signature_offsets[index] +
-                 atomicAdd(low_order_signature_write_counts + index, 1U);
-  } else {
-    task_index = generated_task_offsets[shell_class] +
-                 atomicAdd(generated_task_write_counts + shell_class, 1U);
-  }
-  populate_generated_shell_task(batch, tile, generated_tasks[task_index]);
-}
-
-/**
- * Count force-eligible canonical ppps tiles by their ``pp`` bra pair.
- *
- * This is intentionally indexed by the global shell-pair ordinal rather than
- * by a host-built map.  A direct batch can contain roughly 18k shell pairs;
- * three compact uint32 arrays make that histogram inexpensive and, more
- * importantly, keep active-system and force-screening decisions on device.
- */
-__global__ void count_ppps_resident_bra_tasks_kernel(
-    DeviceBatch batch, std::size_t active_tile_capacity,
-    const std::uint32_t* active_shell_quartet_tile_count,
-    const ActiveShellQuartetTile* active_shell_quartet_tiles,
-    std::uint64_t enabled_shell_class_mask, std::uint32_t* resident_bra_counts,
-    std::uint32_t* resident_signature_counts) {
-  const std::size_t slot = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (slot >= active_tile_capacity || slot >= *active_shell_quartet_tile_count) return;
-  const ActiveShellQuartetTile tile = active_shell_quartet_tiles[slot];
-  if ((enabled_shell_class_mask & (std::uint64_t{1} << kPppsShellClass)) == 0U) {
-    return;
-  }
-  std::uint32_t bra_pair = 0;
-  if (resident_ppps_bra_pair(batch, tile, bra_pair)) {
-    atomicAdd(resident_bra_counts + bra_pair, 1U);
-    if (resident_signature_counts != nullptr) {
-      const unsigned signature = resident_ppps_signature_bucket(batch, tile, bra_pair);
-      atomicAdd(resident_signature_counts +
-                    static_cast<std::size_t>(bra_pair) * kPppsSignatureBucketCount + signature,
-                1U);
-    }
-  }
-}
-
-/**
- * Prefix the ppps bra histogram and initialize one descriptor per bra.
- *
- * Descriptors are stored at their shell-pair ordinal. Inactive ordinals have
- * a zero ``ket_count`` and are harmless when the resident launch uses the
- * fixed shell-pair capacity; this avoids a device-to-host count readback and
- * keeps the force path graph/replay safe. ``resident_bra_offsets`` indexes
- * the transient ppps-sized tail of the generated-task arena. The final-force
- * stream launches the resident consumer before ordinary preparation is
- * allowed to overwrite that tail.
- */
-__global__ void prefix_ppps_resident_bra_tasks_kernel(std::size_t total_shell_pairs,
-                                                      const std::uint32_t* resident_bra_counts,
-                                                      std::uint32_t* resident_bra_offsets,
-                                                      std::uint32_t* resident_bra_write_counts,
-                                                      GeneratedPppsResidentTask* resident_tasks) {
-  if (blockIdx.x != 0U || threadIdx.x != 0U) return;
-  std::uint32_t offset = 0U;
-  resident_bra_offsets[0] = 0U;
-  for (std::size_t bra_pair = 0; bra_pair < total_shell_pairs; ++bra_pair) {
-    resident_bra_write_counts[bra_pair] = 0U;
-    const std::uint32_t count = resident_bra_counts[bra_pair];
-    resident_tasks[bra_pair] = {static_cast<std::uint32_t>(bra_pair), offset, count};
-    // Host topology validation bounds the resident allocation below
-    // UINT32_MAX: every resident ket is one active ppps tile and the tile
-    // capacity is checked before this kernel is launched.
-    offset += count;
-    resident_bra_offsets[bra_pair + 1U] = offset;
-    resident_tasks[bra_pair].ket_begin = resident_bra_offsets[bra_pair];
-  }
-}
-
-/** Build per-bra orientation/primitive bucket offsets for stable scattering. */
-__global__ void prefix_ppps_resident_signature_buckets_kernel(
-    std::size_t total_shell_pairs, const std::uint32_t* resident_bra_offsets,
-    std::uint32_t* resident_signature_counts, std::uint32_t* resident_signature_offsets) {
-  const std::size_t bra_pair = blockIdx.x;
-  if (bra_pair >= total_shell_pairs || threadIdx.x != 0U) return;
-  std::uint32_t offset = resident_bra_offsets[bra_pair];
-  const std::size_t bucket_begin = bra_pair * kPppsSignatureBucketCount;
-  for (unsigned bucket = 0U; bucket < kPppsSignatureBucketCount; ++bucket) {
-    const std::size_t index = bucket_begin + bucket;
-    const std::uint32_t count = resident_signature_counts[index];
-    resident_signature_offsets[index] = offset;
-    resident_signature_counts[index] = 0U;
-    offset += count;
-  }
-}
-
-/** Materialize eligible ppps tasks into the bra-grouped resident array. */
-__global__ void materialize_ppps_resident_bra_tasks_kernel(
-    DeviceBatch batch, std::size_t active_tile_capacity,
-    const std::uint32_t* active_shell_quartet_tile_count,
-    const ActiveShellQuartetTile* active_shell_quartet_tiles,
-    const std::uint32_t* resident_bra_offsets, std::uint32_t* resident_bra_write_counts,
-    const std::uint32_t* resident_signature_offsets, std::uint32_t* resident_signature_write_counts,
-    GeneratedShellTask* resident_ket_tasks, std::uint32_t* resident_ket_signatures) {
-  const std::size_t slot = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (slot >= active_tile_capacity || slot >= *active_shell_quartet_tile_count) return;
-  const ActiveShellQuartetTile tile = active_shell_quartet_tiles[slot];
-  std::uint32_t bra_pair = 0;
-  if (!resident_ppps_bra_pair(batch, tile, bra_pair)) return;
-  const bool pair_exchanged = bra_pair == tile.second_pair;
-  std::uint32_t ket_index = 0U;
-  if (resident_signature_offsets != nullptr && resident_signature_write_counts != nullptr) {
-    const unsigned signature = resident_ppps_signature_bucket(batch, tile, bra_pair);
-    const std::size_t bucket_index =
-        static_cast<std::size_t>(bra_pair) * kPppsSignatureBucketCount + signature;
-    ket_index = resident_signature_offsets[bucket_index] +
-                atomicAdd(resident_signature_write_counts + bucket_index, 1U);
-  } else {
-    ket_index =
-        resident_bra_offsets[bra_pair] + atomicAdd(resident_bra_write_counts + bra_pair, 1U);
-  }
-  populate_generated_shell_task(batch, tile, resident_ket_tasks[ket_index]);
-  if (resident_ket_signatures != nullptr) {
-    const GeneratedShellTask& task = resident_ket_tasks[ket_index];
-    const std::int64_t ket_begin = batch.shell_pair_primitive_offsets[task.shell_pair[1]];
-    const std::int64_t ket_end = batch.shell_pair_primitive_offsets[task.shell_pair[1] + 1U];
-    const std::uint64_t ket_count =
-        ket_end > ket_begin ? static_cast<std::uint64_t>(ket_end - ket_begin) : 0U;
-    constexpr std::uint32_t kCountMask = 0x7fffffffU;
-    const std::uint32_t encoded_count =
-        ket_count > kCountMask ? kCountMask : static_cast<std::uint32_t>(ket_count);
-    const std::uint32_t orientation = pair_exchanged ? 0x80000000U : 0U;
-    resident_ket_signatures[ket_index] = orientation | encoded_count;
-  }
-}
-
 /** Prepare the resident ppps histogram, prefix, descriptors, and ket records. */
 cudaError_t prepare_ppps_resident_tasks(
     cudaStream_t stream, std::size_t active_tile_capacity, std::size_t total_shell_pairs,
@@ -6686,126 +5568,30 @@ cudaError_t prepare_ppps_resident_tasks(
   constexpr unsigned preparation_threads = kCaptureSafeKernelThreads;
   const unsigned preparation_blocks =
       static_cast<unsigned>((active_tile_capacity + preparation_threads - 1) / preparation_threads);
-  count_ppps_resident_bra_tasks_kernel<<<preparation_blocks, preparation_threads, 0, stream>>>(
-      batch, active_tile_capacity, active_tile_count, active_tiles, enabled_mask,
-      resident_bra_counts, resident_signature_counts);
+  launch_count_ppps_resident_bra_tasks_kernel(preparation_blocks, preparation_threads, 0, stream,
+                                              batch, active_tile_capacity, active_tile_count,
+                                              active_tiles, enabled_mask, resident_bra_counts,
+                                              resident_signature_counts);
   error = cudaPeekAtLastError();
   if (error != cudaSuccess) return error;
-  prefix_ppps_resident_bra_tasks_kernel<<<1, 1, 0, stream>>>(
-      total_shell_pairs, resident_bra_counts, resident_bra_offsets, resident_bra_write_counts,
-      resident_tasks);
+  launch_prefix_ppps_resident_bra_tasks_kernel(1, 1, 0, stream, total_shell_pairs,
+                                               resident_bra_counts, resident_bra_offsets,
+                                               resident_bra_write_counts, resident_tasks);
   error = cudaPeekAtLastError();
   if (error != cudaSuccess) return error;
   if (resident_signature_counts != nullptr && resident_signature_offsets != nullptr) {
-    prefix_ppps_resident_signature_buckets_kernel<<<static_cast<unsigned>(total_shell_pairs), 1, 0,
-                                                    stream>>>(
-        total_shell_pairs, resident_bra_offsets, resident_signature_counts,
-        resident_signature_offsets);
+    launch_prefix_ppps_resident_signature_buckets_kernel(
+        static_cast<unsigned>(total_shell_pairs), 1, 0, stream, total_shell_pairs,
+        resident_bra_offsets, resident_signature_counts, resident_signature_offsets);
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
   }
-  materialize_ppps_resident_bra_tasks_kernel<<<preparation_blocks, preparation_threads, 0,
-                                               stream>>>(
-      batch, active_tile_capacity, active_tile_count, active_tiles, resident_bra_offsets,
-      resident_bra_write_counts, resident_signature_offsets, resident_signature_counts,
-      resident_ket_tasks, resident_ket_signatures);
+  launch_materialize_ppps_resident_bra_tasks_kernel(
+      preparation_blocks, preparation_threads, 0, stream, batch, active_tile_capacity,
+      active_tile_count, active_tiles, resident_bra_offsets, resident_bra_write_counts,
+      resident_signature_offsets, resident_signature_counts, resident_ket_tasks,
+      resident_ket_signatures);
   return cudaPeekAtLastError();
-}
-
-/**
- * Compact the order-five fallback after excluding currently enabled AOT
- * classes. This stays separate from exact-class compaction so runtime masks
- * such as ``none``, ``dppp``, and ``all`` retain a correct generic fallback.
- */
-__global__ void compact_generic_order5_tiles_kernel(
-    DeviceBatch batch, const std::uint32_t* active_shell_quartet_tile_count,
-    const ActiveShellQuartetTile* active_shell_quartet_tiles,
-    std::uint64_t generated_shell_class_mask,
-    const std::uint64_t* generated_shell_class_mask_pointer, std::uint32_t* generic_tile_count,
-    ActiveShellQuartetTile* generic_tiles) {
-  // Fock graph replay uploads its runtime selection to device memory, while
-  // the final force path supplies a host-resolved value outside the graph.
-  if (generated_shell_class_mask_pointer != nullptr) {
-    generated_shell_class_mask = *generated_shell_class_mask_pointer;
-  }
-  const std::size_t active_tile = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (active_tile >= static_cast<std::size_t>(*active_shell_quartet_tile_count)) {
-    return;
-  }
-  const ActiveShellQuartetTile tile = active_shell_quartet_tiles[active_tile];
-  const std::int32_t first_shell = batch.shell_pair_first[tile.first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[tile.first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[tile.second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[tile.second_pair];
-  const unsigned shell_class = direct_quartet_shell_class_device(
-      batch.shell_angular[first_shell], batch.shell_angular[second_shell],
-      batch.shell_angular[third_shell], batch.shell_angular[fourth_shell]);
-  if (shell_class < 64U && (generated_shell_class_mask & (std::uint64_t{1} << shell_class)) != 0U) {
-    return;
-  }
-  const std::uint32_t slot = atomicAdd(generic_tile_count, 1U);
-  generic_tiles[slot] = tile;
-}
-
-/**
- * Summarize the exact tile list consumed by the final Fock and force kernels.
- *
- * The fixed grid walks topology capacity, but only slots below each compacted
- * angular partition's active count contribute. Profiling is opt-in, so these
- * atomics and the partition lookup never enter production timing runs.
- */
-__global__ void profile_active_shell_quartet_tiles_kernel(
-    DeviceBatch batch, std::size_t total_tile_capacity,
-    const std::uint32_t* active_shell_quartet_tile_offsets,
-    const std::uint32_t* active_shell_quartet_tile_counts,
-    const ActiveShellQuartetTile* active_shell_quartet_tiles,
-    DeviceShellClassProfileEntry* profile) {
-  const std::size_t slot = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (slot >= total_tile_capacity) return;
-
-  unsigned angular_order = 0;
-  while (angular_order + 1 < detail::kDirectQuartetAngularOrderCount &&
-         slot >= active_shell_quartet_tile_offsets[angular_order + 1]) {
-    ++angular_order;
-  }
-  const std::size_t partition_begin = active_shell_quartet_tile_offsets[angular_order];
-  if (slot - partition_begin >= active_shell_quartet_tile_counts[angular_order]) {
-    return;
-  }
-
-  const ActiveShellQuartetTile task = active_shell_quartet_tiles[slot];
-  const std::int32_t first_shell = batch.shell_pair_first[task.first_pair];
-  const std::int32_t second_shell = batch.shell_pair_second[task.first_pair];
-  const std::int32_t third_shell = batch.shell_pair_first[task.second_pair];
-  const std::int32_t fourth_shell = batch.shell_pair_second[task.second_pair];
-  const unsigned shell_class = direct_quartet_shell_class_device(
-      batch.shell_angular[first_shell], batch.shell_angular[second_shell],
-      batch.shell_angular[third_shell], batch.shell_angular[fourth_shell]);
-  if (shell_class >= detail::kDirectQuartetShellClassCount) return;
-
-  const std::size_t first_ao_pair_count = shell_ao_pair_count(batch, task.first_pair);
-  const std::size_t second_ao_pair_count = shell_ao_pair_count(batch, task.second_pair);
-  const std::size_t ao_quartet_count = task.first_pair == task.second_pair
-                                           ? first_ao_pair_count * (first_ao_pair_count + 1) / 2
-                                           : first_ao_pair_count * second_ao_pair_count;
-  const std::size_t tile_begin =
-      static_cast<std::size_t>(task.tile) * detail::kDirectQuartetTileSize;
-  if (tile_begin >= ao_quartet_count) return;
-  const std::size_t tile_ao_quartets =
-      min(detail::kDirectQuartetTileSize, ao_quartet_count - tile_begin);
-
-  unsigned long long primitive_quartets = static_cast<unsigned long long>(tile_ao_quartets);
-  const std::int32_t shells[4] = {first_shell, second_shell, third_shell, fourth_shell};
-  for (const std::int32_t shell : shells) {
-    primitive_quartets *= static_cast<unsigned long long>(batch.shell_primitive_offsets[shell + 1] -
-                                                          batch.shell_primitive_offsets[shell]);
-  }
-
-  DeviceShellClassProfileEntry& entry = profile[shell_class];
-  if (task.tile == 0) atomicAdd(&entry.shell_quartets, 1ULL);
-  atomicAdd(&entry.tiles, 1ULL);
-  atomicAdd(&entry.ao_quartets, static_cast<unsigned long long>(tile_ao_quartets));
-  atomicAdd(&entry.primitive_quartets, primitive_quartets);
 }
 
 __global__ void build_fock_direct_packed_kernel(
@@ -8593,40 +7379,6 @@ __device__ __noinline__ void contract_bounded_direct_force_subtile(
 #undef VIBEQC_BOUNDED_FORCE_CASE
 }
 
-/** Accumulate the same final-density shell-class ledger as exact compaction. */
-__device__ void profile_bounded_direct_shell_quartet(DeviceBatch batch,
-                                                     const ActiveShellQuartetTile& task,
-                                                     DeviceShellClassProfileEntry* profile) {
-  if (profile == nullptr) return;
-  const std::int32_t shells[4] = {
-      batch.shell_pair_first[task.first_pair],
-      batch.shell_pair_second[task.first_pair],
-      batch.shell_pair_first[task.second_pair],
-      batch.shell_pair_second[task.second_pair],
-  };
-  const unsigned shell_class = direct_quartet_shell_class_device(
-      batch.shell_angular[shells[0]], batch.shell_angular[shells[1]],
-      batch.shell_angular[shells[2]], batch.shell_angular[shells[3]]);
-  if (shell_class >= detail::kDirectQuartetShellClassCount) return;
-  const std::size_t first_count = shell_ao_pair_count(batch, task.first_pair);
-  const std::size_t second_count = shell_ao_pair_count(batch, task.second_pair);
-  const std::size_t ao_quartets = task.first_pair == task.second_pair
-                                      ? first_count * (first_count + 1) / 2
-                                      : first_count * second_count;
-  const std::size_t tiles =
-      (ao_quartets + detail::kDirectQuartetTileSize - 1) / detail::kDirectQuartetTileSize;
-  unsigned long long primitive_quartets = static_cast<unsigned long long>(ao_quartets);
-  for (const std::int32_t shell : shells) {
-    primitive_quartets *= static_cast<unsigned long long>(batch.shell_primitive_offsets[shell + 1] -
-                                                          batch.shell_primitive_offsets[shell]);
-  }
-  DeviceShellClassProfileEntry& entry = profile[shell_class];
-  atomicAdd(&entry.shell_quartets, 1ULL);
-  atomicAdd(&entry.tiles, static_cast<unsigned long long>(tiles));
-  atomicAdd(&entry.ao_quartets, static_cast<unsigned long long>(ao_quartets));
-  atomicAdd(&entry.primitive_quartets, primitive_quartets);
-}
-
 /**
  * Stream only canonical dddd work from class-major shell-pair segments.
  *
@@ -8737,211 +7489,6 @@ __launch_bounds__(detail::kDirectQuartetThreads) void bounded_direct_dddd_stream
       }
       __syncwarp();
     }
-  }
-}
-
-/**
- * Bound the density factors for one exact pair-class page.
- *
- * The class-major stream preserves topology insertion order; it is not
- * sorted by the geometry-dependent Schwarz bounds. These class maxima
- * therefore provide a conservative coarse rejection for the current ket
- * only. They must never terminate the remaining row: a later ket may have
- * a larger Schwarz bound and survive the exact shell-quartet predicate.
- *
- * For exchange, enumerate both orientations of the low pair class so
- * every physical ket orientation remains covered by the class-level bound.
- */
-struct BoundedPageDensityTails {
-  double fock{};
-  double force{};
-};
-
-__device__ __forceinline__ double bounded_page_class_density_bound(
-    const GeneratedShellPairStream& topology, std::int32_t system, unsigned pair_class) {
-  return pair_class < detail::kDirectShellPairClassCount
-             ? topology.system_pair_density_bounds[static_cast<std::size_t>(system) *
-                                                       detail::kDirectShellPairClassCount +
-                                                   pair_class]
-             : 0.0;
-}
-
-__device__ __forceinline__ BoundedPageDensityTails bounded_page_density_tails(
-    const DeviceBatch& batch, const GeneratedShellPairStream& topology, std::int32_t system,
-    std::uint32_t bra_pair, unsigned high_pair_class, unsigned low_pair_class) {
-  const bool has_pair_class_bounds = topology.system_pair_density_bounds != nullptr;
-  const bool has_system_bound = topology.system_density_bounds != nullptr;
-  if (!has_pair_class_bounds) {
-    if (!has_system_bound) return {};
-    const double maximum = topology.system_density_bounds[system];
-    return {maximum, maximum * maximum};
-  }
-
-  const unsigned bra_first_shell = static_cast<unsigned>(batch.shell_pair_first[bra_pair]);
-  const unsigned bra_second_shell = static_cast<unsigned>(batch.shell_pair_second[bra_pair]);
-  const unsigned bra_first_angular = batch.shell_angular[bra_first_shell];
-  const unsigned bra_second_angular = batch.shell_angular[bra_second_shell];
-  const unsigned low_high = direct_triangular_class_high(low_pair_class);
-  const unsigned low_low = low_pair_class - low_high * (low_high + 1U) / 2U;
-
-  double fock_maximum = fmax(bounded_page_class_density_bound(topology, system, high_pair_class),
-                             bounded_page_class_density_bound(topology, system, low_pair_class));
-  double force_maximum = bounded_page_class_density_bound(topology, system, high_pair_class) *
-                         bounded_page_class_density_bound(topology, system, low_pair_class);
-  // The pair-class maxima include both Coulomb and exchange density terms.
-  // RHF exchange carries a one-half coefficient, while UHF does not; using
-  // the larger UHF factor remains a valid conservative tail for both.
-  for (unsigned orientation = 0U; orientation < 2U; ++orientation) {
-    const unsigned ket_first_angular = orientation == 0U ? low_high : low_low;
-    const unsigned ket_second_angular = orientation == 0U ? low_low : low_high;
-    const unsigned ac = direct_shell_pair_class_cuda(bra_first_angular, ket_first_angular);
-    const unsigned ad = direct_shell_pair_class_cuda(bra_first_angular, ket_second_angular);
-    const unsigned bc = direct_shell_pair_class_cuda(bra_second_angular, ket_first_angular);
-    const unsigned bd = direct_shell_pair_class_cuda(bra_second_angular, ket_second_angular);
-    fock_maximum =
-        fmax(fock_maximum, fmax(fmax(bounded_page_class_density_bound(topology, system, ac),
-                                     bounded_page_class_density_bound(topology, system, ad)),
-                                fmax(bounded_page_class_density_bound(topology, system, bc),
-                                     bounded_page_class_density_bound(topology, system, bd))));
-    force_maximum =
-        fmax(force_maximum, fmax(bounded_page_class_density_bound(topology, system, ac) *
-                                     bounded_page_class_density_bound(topology, system, bd),
-                                 bounded_page_class_density_bound(topology, system, ad) *
-                                     bounded_page_class_density_bound(topology, system, bc)));
-  }
-  return {fock_maximum, force_maximum};
-}
-
-/**
- * Materialize one page of an overflowed exact class for its generated kernel.
- *
- * Page membership is determined by the unscreened candidate ordinal so every
- * launch covers a disjoint, deterministic slice without a device-to-host
- * synchronization. Surviving tasks are compacted within that page and then
- * consumed by the exact generated shell-class kernel; this is scheduling,
- * not a generic integral-evaluation fallback.
- */
-template <bool Unrestricted, DirectScreeningPurpose Purpose>
-__global__ void compact_bounded_exact_class_force_wave_kernel(
-    DeviceBatch batch, const GeneratedShellPairStream* topology_pointer, unsigned shell_class,
-    unsigned high_pair_class, unsigned low_pair_class, double screening_tolerance,
-    std::uint64_t page_begin, std::uint32_t page_capacity, std::uint32_t bra_ordinal_begin,
-    std::uint32_t bra_ordinal_end, bool same_pair_class, GeneratedShellTask* tasks,
-    std::uint32_t* task_count, std::uint32_t* bra_head, const std::uint32_t* overflow,
-    bool force_execution, std::uint32_t* signature_counts, const std::uint32_t* signature_offsets) {
-  __shared__ std::uint32_t bra_ordinal;
-  if (shell_class >= detail::kDirectQuartetShellClassCount ||
-      (!force_execution && overflow[shell_class] == 0U)) {
-    return;
-  }
-  const GeneratedShellPairStream& topology = *topology_pointer;
-  const std::size_t stride = static_cast<std::size_t>(topology.batch_size) + 1U;
-  const std::uint32_t bra_begin = topology.pair_class_offsets[high_pair_class * stride];
-  const auto* density_bounds =
-      reinterpret_cast<const ShellPairDensityBounds*>(topology.shell_pair_density_bounds);
-
-  while (true) {
-    if (threadIdx.x == 0U) {
-      // ``bra_head`` is reset for every page.  Starting the scheduler at the
-      // first bra row that intersects this page avoids replaying all earlier
-      // rows when a class spans many pages.  The page range is conservative:
-      // the first row may begin before ``page_begin`` and the last row may
-      // extend beyond ``page_end``; the ket loop below clips both edges.
-      bra_ordinal = bra_ordinal_begin + atomicAdd(bra_head, 1U);
-    }
-    __syncthreads();
-    if (bra_ordinal >= bra_ordinal_end) return;
-    const std::uint32_t bra_pair = topology.pair_order[bra_begin + bra_ordinal];
-    const std::int32_t system = topology.shell_pair_systems[bra_pair];
-    if (topology.active != nullptr && topology.active[system] == 0U) {
-      continue;
-    }
-    // This bound is fixed for the bra row and pair class. Pair-order
-    // segments are not Schwarz-sorted, so it may reject only the current
-    // ket; the exact predicate below still decides every survivor.
-    const BoundedPageDensityTails page_density_tails = bounded_page_density_tails(
-        batch, topology, system, bra_pair, high_pair_class, low_pair_class);
-    const std::uint32_t ket_begin =
-        topology.pair_class_offsets[low_pair_class * stride + static_cast<std::size_t>(system)];
-    const std::uint32_t ket_end =
-        topology
-            .pair_class_offsets[low_pair_class * stride + static_cast<std::size_t>(system) + 1U];
-    const std::uint32_t system_bra_begin =
-        topology.pair_class_offsets[high_pair_class * stride + static_cast<std::size_t>(system)];
-    const std::uint64_t bra_local = bra_begin + bra_ordinal - system_bra_begin;
-    const std::uint64_t ket_count = ket_end - ket_begin;
-    std::uint64_t system_candidate_begin = 0U;
-    for (std::int32_t previous = 0; previous < system; ++previous) {
-      const std::uint32_t previous_bra_begin =
-          topology
-              .pair_class_offsets[high_pair_class * stride + static_cast<std::size_t>(previous)];
-      const std::uint32_t previous_bra_end =
-          topology.pair_class_offsets[high_pair_class * stride +
-                                      static_cast<std::size_t>(previous) + 1U];
-      const std::uint32_t previous_ket_begin =
-          topology.pair_class_offsets[low_pair_class * stride + static_cast<std::size_t>(previous)];
-      const std::uint32_t previous_ket_end =
-          topology.pair_class_offsets[low_pair_class * stride + static_cast<std::size_t>(previous) +
-                                      1U];
-      const std::uint64_t previous_bra_count = previous_bra_end - previous_bra_begin;
-      const std::uint64_t previous_ket_count = previous_ket_end - previous_ket_begin;
-      system_candidate_begin += same_pair_class
-                                    ? previous_bra_count * (previous_bra_count + 1U) / 2U
-                                    : previous_bra_count * previous_ket_count;
-    }
-    // Candidate ordinals are contiguous first by system, then by bra pair;
-    // same-class streams pack each bra row as a lower-triangle row. Restrict
-    // each page to the bra/ket rows that intersect its ordinal interval;
-    // otherwise every page would rescan all bra rows and turn a bounded queue
-    // into an O(number_of_pages * topology) traversal.
-    const std::uint64_t bra_candidate_begin =
-        system_candidate_begin +
-        (same_pair_class ? bra_local * (bra_local + 1U) / 2U : bra_local * ket_count);
-    const std::uint64_t row_candidate_count = same_pair_class ? bra_local + 1U : ket_count;
-    const std::uint64_t bra_candidate_end = bra_candidate_begin + row_candidate_count;
-    const std::uint64_t page_end = page_begin + page_capacity;
-    if (bra_candidate_end <= page_begin) continue;
-    if (bra_candidate_begin >= page_end) return;
-    const std::uint64_t first_page_offset =
-        page_begin > bra_candidate_begin ? page_begin - bra_candidate_begin : 0U;
-    const std::uint64_t last_page_offset =
-        page_end < bra_candidate_end ? page_end - bra_candidate_begin : row_candidate_count;
-    const std::uint32_t ket_first = ket_begin + static_cast<std::uint32_t>(first_page_offset);
-    const std::uint32_t ket_last = ket_begin + static_cast<std::uint32_t>(last_page_offset);
-    const bool has_density_bound =
-        topology.system_pair_density_bounds != nullptr || topology.system_density_bounds != nullptr;
-    for (std::uint32_t ket_ordinal = ket_first + threadIdx.x; ket_ordinal < ket_last;
-         ket_ordinal += blockDim.x) {
-      const std::uint32_t ket_pair = topology.pair_order[ket_ordinal];
-      const double quartet_bound =
-          topology.shell_pair_bounds[bra_pair] * topology.shell_pair_bounds[ket_pair];
-      if constexpr (Purpose == DirectScreeningPurpose::Force) {
-        const double force_tolerance =
-            fmin(screening_tolerance, kForceDensityProductScreeningTolerance);
-        if (has_density_bound && quartet_bound * page_density_tails.force < force_tolerance) {
-          continue;
-        }
-      } else if (has_density_bound &&
-                 quartet_bound * page_density_tails.fock < screening_tolerance) {
-        continue;
-      }
-      if (!direct_shell_quartet_survives_screening<Unrestricted, Purpose>(
-              batch, bra_pair, ket_pair, screening_tolerance, topology.shell_pair_bounds,
-              density_bounds)) {
-        continue;
-      }
-      std::uint32_t ordinal = 0U;
-      if (signature_counts != nullptr) {
-        const unsigned signature = bounded_force_signature_bucket(batch, bra_pair, ket_pair);
-        const std::uint32_t signature_ordinal = atomicAdd(signature_counts + signature, 1U);
-        if (signature_offsets == nullptr) continue;
-        ordinal = signature_offsets[signature] + signature_ordinal;
-      } else {
-        ordinal = atomicAdd(task_count, 1U);
-      }
-      populate_generated_shell_task(batch, {bra_pair, ket_pair, 0U}, tasks[ordinal]);
-    }
-    __syncthreads();
   }
 }
 
@@ -9060,285 +7607,6 @@ __global__ void contract_bounded_exact_low_order_force_page_kernel(
     }
     __syncthreads();
   }
-}
-
-/** Scan bounded signature chunks in parallel and reset them for scatter. */
-__global__ void scan_bounded_force_signature_counts_kernel(std::uint32_t* signature_counts,
-                                                           std::uint32_t* signature_offsets,
-                                                           std::uint32_t* block_offsets) {
-  using BlockScan = cub::BlockScan<std::uint32_t, kBoundedForceSignatureScanThreads>;
-  __shared__ typename BlockScan::TempStorage scan_storage;
-  const unsigned signature = blockIdx.x * kBoundedForceSignatureScanThreads + threadIdx.x;
-  const std::uint32_t count =
-      signature < kBoundedForceSignatureBucketCount ? signature_counts[signature] : 0U;
-  std::uint32_t local_offset = 0U;
-  std::uint32_t block_total = 0U;
-  BlockScan(scan_storage).ExclusiveSum(count, local_offset, block_total);
-  if (signature < kBoundedForceSignatureBucketCount) {
-    signature_offsets[signature] = local_offset;
-    signature_counts[signature] = 0U;
-  }
-  if (threadIdx.x == 0U) block_offsets[blockIdx.x] = block_total;
-}
-
-/** Complete the chunk prefix and publish the bounded page task count. */
-__global__ void prefix_bounded_force_signature_blocks_kernel(std::uint32_t* signature_offsets,
-                                                             std::uint32_t* block_offsets,
-                                                             std::uint32_t* task_count) {
-  using BlockScan = cub::BlockScan<std::uint32_t, kBoundedForceSignatureScanThreads>;
-  __shared__ typename BlockScan::TempStorage scan_storage;
-  const std::uint32_t count =
-      threadIdx.x < kBoundedForceSignatureScanBlockCount ? block_offsets[threadIdx.x] : 0U;
-  std::uint32_t block_offset = 0U;
-  std::uint32_t page_total = 0U;
-  BlockScan(scan_storage).ExclusiveSum(count, block_offset, page_total);
-  if (threadIdx.x < kBoundedForceSignatureScanBlockCount) {
-    block_offsets[threadIdx.x] = block_offset;
-  }
-  __syncthreads();
-  for (unsigned signature = threadIdx.x; signature < kBoundedForceSignatureBucketCount;
-       signature += blockDim.x) {
-    signature_offsets[signature] += block_offsets[signature / kBoundedForceSignatureScanThreads];
-  }
-  if (threadIdx.x == 0U) *task_count = page_total;
-}
-
-template <DirectScreeningPurpose Purpose>
-__device__ __forceinline__ bool bounded_direct_block_pair_survives_screening(
-    std::size_t first_block, std::size_t second_block, std::int32_t system,
-    double screening_tolerance, const double* shell_pair_block_bounds,
-    const double* system_density_bounds);
-
-/** Read the runtime exact-class mask used by the bounded generated routes. */
-__device__ __forceinline__ bool bounded_generated_class_enabled(
-    unsigned shell_class, const std::uint64_t* enabled_mask_pointer, std::uint64_t enabled_mask) {
-  if (enabled_mask_pointer != nullptr) enabled_mask = *enabled_mask_pointer;
-  return shell_class < detail::kDirectQuartetShellClassCount &&
-         (enabled_mask & (std::uint64_t{1} << shell_class)) != 0U;
-}
-
-/**
- * Materialize every enabled exact class in one hierarchical scan.
- *
- * Each class owns a fixed slice whose setup-time weight comes from shell-pair
- * angular histograms. Overflow is recorded per class so a later exact-class
- * page stream can recover only that class without discarding unrelated
- * generated routes or repeating a whole-topology integral evaluation.
- */
-template <bool Unrestricted, DirectScreeningPurpose Purpose, bool Materialize>
-__global__ void compact_bounded_generated_tasks_kernel(
-    DeviceBatch batch, double screening_tolerance, const double* shell_pair_bounds,
-    const ShellPairDensityBounds* shell_pair_density_bounds, const std::uint32_t* shell_pair_order,
-    const double* shell_pair_block_bounds, const double* system_density_bounds,
-    const std::uint8_t* active, const std::uint64_t* enabled_mask_pointer,
-    std::uint64_t enabled_mask, std::uint64_t excluded_mask, const std::uint32_t* selected_classes,
-    const std::uint32_t* selected_any, unsigned long long* global_cursor, GeneratedShellTask* tasks,
-    std::uint32_t* task_counts, const std::uint32_t* task_offsets, std::uint32_t* overflow) {
-  __shared__ unsigned long long block_quartet;
-  if (selected_any != nullptr && *selected_any == 0U) return;
-  const std::size_t total = static_cast<std::size_t>(batch.total_shell_pair_block_quartets);
-  while (true) {
-    if (threadIdx.x == 0) block_quartet = atomicAdd(global_cursor, 1ULL);
-    __syncthreads();
-    if (block_quartet >= total) return;
-
-    const std::size_t packed_block_quartet = static_cast<std::size_t>(block_quartet);
-    const std::int32_t system = shell_pair_block_quartet_system(batch, packed_block_quartet);
-    if (active != nullptr && active[system] == 0) continue;
-    const std::size_t local_block_quartet =
-        packed_block_quartet -
-        static_cast<std::size_t>(batch.system_shell_pair_block_quartet_offsets[system]);
-    std::size_t first_block_local = 0;
-    std::size_t second_block_local = 0;
-    decode_lower_triangle(local_block_quartet, first_block_local, second_block_local);
-    const std::size_t system_block_begin =
-        static_cast<std::size_t>(batch.system_shell_pair_block_offsets[system]);
-    const std::size_t first_block = system_block_begin + first_block_local;
-    const std::size_t second_block = system_block_begin + second_block_local;
-    if (!bounded_direct_block_pair_survives_screening<Purpose>(
-            first_block, second_block, system, screening_tolerance, shell_pair_block_bounds,
-            system_density_bounds)) {
-      continue;
-    }
-
-    const std::size_t system_pair_begin =
-        static_cast<std::size_t>(batch.system_shell_pair_offsets[system]);
-    const std::size_t system_pair_end =
-        static_cast<std::size_t>(batch.system_shell_pair_offsets[system + 1]);
-    const std::size_t first_ordered_begin =
-        system_pair_begin + first_block_local * detail::kBoundedDirectShellPairBlockSize;
-    const std::size_t second_ordered_begin =
-        system_pair_begin + second_block_local * detail::kBoundedDirectShellPairBlockSize;
-    const std::size_t first_count =
-        min(detail::kBoundedDirectShellPairBlockSize, system_pair_end - first_ordered_begin);
-    const std::size_t second_count =
-        min(detail::kBoundedDirectShellPairBlockSize, system_pair_end - second_ordered_begin);
-    const bool same_block = first_block == second_block;
-    const std::size_t candidate_count =
-        same_block ? first_count * (first_count + 1) / 2 : first_count * second_count;
-    for (std::size_t candidate = threadIdx.x; candidate < candidate_count;
-         candidate += blockDim.x) {
-      std::size_t first_local = 0;
-      std::size_t second_local = 0;
-      if (same_block) {
-        decode_lower_triangle(candidate, first_local, second_local);
-      } else {
-        first_local = candidate / second_count;
-        second_local = candidate % second_count;
-      }
-      const std::size_t first_pair = shell_pair_order[first_ordered_begin + first_local];
-      const std::size_t second_pair = shell_pair_order[second_ordered_begin + second_local];
-      if (!direct_shell_quartet_survives_screening<Unrestricted, Purpose>(
-              batch, first_pair, second_pair, screening_tolerance, shell_pair_bounds,
-              shell_pair_density_bounds)) {
-        continue;
-      }
-      const std::int32_t first_shell = batch.shell_pair_first[first_pair];
-      const std::int32_t second_shell = batch.shell_pair_second[first_pair];
-      const std::int32_t third_shell = batch.shell_pair_first[second_pair];
-      const std::int32_t fourth_shell = batch.shell_pair_second[second_pair];
-      const unsigned shell_class = direct_quartet_shell_class_device(
-          batch.shell_angular[first_shell], batch.shell_angular[second_shell],
-          batch.shell_angular[third_shell], batch.shell_angular[fourth_shell]);
-      if (!bounded_generated_class_enabled(shell_class, enabled_mask_pointer, enabled_mask)) {
-        continue;
-      }
-      if ((excluded_mask & (std::uint64_t{1} << shell_class)) != 0U) {
-        continue;
-      }
-      if (selected_classes != nullptr && selected_classes[shell_class] == 0U) {
-        continue;
-      }
-      if constexpr (Materialize) {
-        const std::uint32_t class_slot = atomicAdd(task_counts + shell_class, 1U);
-        const std::uint32_t class_capacity =
-            task_offsets[shell_class + 1U] - task_offsets[shell_class];
-        if (class_slot >= class_capacity) {
-          atomicExch(overflow + shell_class, 1U);
-          continue;
-        }
-        const std::uint32_t slot = task_offsets[shell_class] + class_slot;
-        const ActiveShellQuartetTile tile{static_cast<std::uint32_t>(first_pair),
-                                          static_cast<std::uint32_t>(second_pair), 0U};
-        populate_generated_shell_task(batch, tile, tasks[slot]);
-      } else {
-        atomicAdd(task_counts + shell_class, 1U);
-      }
-    }
-    __syncthreads();
-  }
-}
-
-/**
- * Normalize the first generated wave and plan an exact overflow-only retry.
- *
- * The retry reuses the complete task arena after successful first-wave
- * consumers drain it. Exact observed counts define the second-wave slices;
- * if their sum still exceeds the arena, proportional slices preserve useful
- * generated work while the remaining classes are completed by exact-class
- * paged compaction.
- */
-__global__ void prepare_bounded_generated_retry_kernel(
-    std::uint32_t task_capacity, const std::uint32_t* task_offsets, std::uint32_t* task_counts,
-    std::uint32_t* task_heads, std::uint32_t* overflow, std::uint32_t* retry_mask,
-    std::uint32_t* retry_offsets, std::uint32_t* retry_any, bool preserve_overflow_counts) {
-  if (blockIdx.x != 0 || threadIdx.x != 0) return;
-  std::uint64_t retry_total = 0;
-  for (unsigned shell_class = 0; shell_class < detail::kDirectQuartetShellClassCount;
-       ++shell_class) {
-    const std::uint32_t capacity = task_offsets[shell_class + 1U] - task_offsets[shell_class];
-    const bool retry = overflow[shell_class] != 0U || task_counts[shell_class] > capacity;
-    retry_mask[shell_class] = retry ? 1U : 0U;
-    if (retry) retry_total += task_counts[shell_class];
-  }
-
-  std::uint64_t assigned = 0;
-  if (retry_total > task_capacity) {
-    for (unsigned shell_class = 0; shell_class < detail::kDirectQuartetShellClassCount;
-         ++shell_class) {
-      if (retry_mask[shell_class] == 0U) continue;
-      assigned +=
-          static_cast<std::uint64_t>(task_capacity) * task_counts[shell_class] / retry_total;
-    }
-  }
-  std::uint64_t extra =
-      retry_total > task_capacity ? static_cast<std::uint64_t>(task_capacity) - assigned : 0U;
-  std::uint64_t cursor = 0;
-  for (unsigned shell_class = 0; shell_class < detail::kDirectQuartetShellClassCount;
-       ++shell_class) {
-    retry_offsets[shell_class] = static_cast<std::uint32_t>(cursor);
-    if (retry_mask[shell_class] != 0U) {
-      std::uint64_t capacity =
-          retry_total <= task_capacity
-              ? task_counts[shell_class]
-              : static_cast<std::uint64_t>(task_capacity) * task_counts[shell_class] / retry_total;
-      if (extra != 0U) {
-        ++capacity;
-        --extra;
-      }
-      cursor += capacity;
-    }
-    if (!preserve_overflow_counts && retry_mask[shell_class] != 0U) {
-      task_counts[shell_class] = 0U;
-    }
-    task_heads[shell_class] = 0U;
-    overflow[shell_class] = retry_mask[shell_class];
-  }
-  retry_offsets[detail::kDirectQuartetShellClassCount] = static_cast<std::uint32_t>(cursor);
-  *retry_any = retry_total == 0U ? 0U : 1U;
-}
-
-/** Disable only generated classes that exceeded their fixed arena slice. */
-__global__ void normalize_bounded_generated_task_counts_kernel(const std::uint32_t* task_offsets,
-                                                               std::uint32_t* task_counts,
-                                                               std::uint32_t* task_heads,
-                                                               std::uint32_t* overflow,
-                                                               bool preserve_overflow_counts) {
-  const unsigned shell_class = blockIdx.x * blockDim.x + threadIdx.x;
-  if (shell_class >= detail::kDirectQuartetShellClassCount) return;
-  const std::uint32_t capacity = task_offsets[shell_class + 1U] - task_offsets[shell_class];
-  if (overflow[shell_class] != 0U || task_counts[shell_class] > capacity) {
-    if (!preserve_overflow_counts) task_counts[shell_class] = 0U;
-    overflow[shell_class] = 1U;
-  }
-  task_heads[shell_class] = 0U;
-}
-
-/** Profile a successfully materialized bounded generated queue once. */
-__global__ void profile_bounded_generated_tasks_kernel(DeviceBatch batch,
-                                                       const GeneratedShellTask* tasks,
-                                                       const std::uint32_t* task_offset,
-                                                       const std::uint32_t* task_count,
-                                                       DeviceShellClassProfileEntry* profile) {
-  const std::uint32_t count = *task_count;
-  const std::uint32_t offset = *task_offset;
-  const std::uint32_t stride = blockDim.x * gridDim.x;
-  for (std::uint32_t task = blockIdx.x * blockDim.x + threadIdx.x; task < count; task += stride) {
-    profile_bounded_direct_shell_quartet(
-        batch, {tasks[offset + task].shell_pair[0], tasks[offset + task].shell_pair[1], 0U},
-        profile);
-  }
-}
-
-/** Safely reject a complete shell-pair-block product before exact screening. */
-template <DirectScreeningPurpose Purpose>
-__device__ __forceinline__ bool bounded_direct_block_pair_survives_screening(
-    std::size_t first_block, std::size_t second_block, std::int32_t system,
-    double screening_tolerance, const double* shell_pair_block_bounds,
-    const double* system_density_bounds) {
-  const double quartet_bound =
-      shell_pair_block_bounds[first_block] * shell_pair_block_bounds[second_block];
-  if (quartet_bound < screening_tolerance) return false;
-  const double density_bound = system_density_bounds[system];
-  if (quartet_bound * density_bound < screening_tolerance) return false;
-  if constexpr (Purpose == DirectScreeningPurpose::Force) {
-    const double force_tolerance =
-        fmin(screening_tolerance, kForceDensityProductScreeningTolerance);
-    if (quartet_bound * density_bound * density_bound < force_tolerance) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /**
@@ -9763,28 +8031,29 @@ cudaError_t prepare_generated_shell_tasks(
   constexpr unsigned preparation_threads = kCaptureSafeKernelThreads;
   const unsigned preparation_blocks =
       static_cast<unsigned>((total_tile_capacity + preparation_threads - 1) / preparation_threads);
-  classify_generated_shell_tasks_kernel<<<preparation_blocks, preparation_threads, 0, stream>>>(
-      batch, total_tile_capacity, active_tile_offsets, active_tile_counts, active_tiles,
-      enabled_mask, enabled_mask_pointer, exclude_resident_ppps, generated_task_counts,
-      generated_shell_classes, low_order_signature_mask, low_order_signature_counts);
+  launch_classify_generated_shell_tasks_kernel(
+      preparation_blocks, preparation_threads, 0, stream, batch, total_tile_capacity,
+      active_tile_offsets, active_tile_counts, active_tiles, enabled_mask, enabled_mask_pointer,
+      exclude_resident_ppps, generated_task_counts, generated_shell_classes,
+      low_order_signature_mask, low_order_signature_counts);
   error = cudaPeekAtLastError();
   if (error != cudaSuccess) return error;
-  prefix_generated_shell_task_counts_kernel<<<1, 1, 0, stream>>>(
-      generated_task_counts, generated_task_offsets, generated_task_write_counts,
+  launch_prefix_generated_shell_task_counts_kernel(
+      1, 1, 0, stream, generated_task_counts, generated_task_offsets, generated_task_write_counts,
       generated_task_heads);
   error = cudaPeekAtLastError();
   if (error != cudaSuccess) return error;
   if (low_order_signature_counts != nullptr && low_order_signature_offsets != nullptr) {
-    prefix_low_order_signature_counts_kernel<<<1, 1, 0, stream>>>(
-        generated_task_offsets, low_order_signature_mask, low_order_signature_counts,
-        low_order_signature_offsets);
+    launch_prefix_low_order_signature_counts_kernel(
+        1, 1, 0, stream, generated_task_offsets, low_order_signature_mask,
+        low_order_signature_counts, low_order_signature_offsets);
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
   }
-  materialize_generated_shell_tasks_kernel<<<preparation_blocks, preparation_threads, 0, stream>>>(
-      batch, total_tile_capacity, active_tiles, generated_shell_classes, generated_task_offsets,
-      generated_task_write_counts, generated_tasks, low_order_signature_mask,
-      low_order_signature_offsets, low_order_signature_counts);
+  launch_materialize_generated_shell_tasks_kernel(
+      preparation_blocks, preparation_threads, 0, stream, batch, total_tile_capacity, active_tiles,
+      generated_shell_classes, generated_task_offsets, generated_task_write_counts, generated_tasks,
+      low_order_signature_mask, low_order_signature_offsets, low_order_signature_counts);
   return cudaPeekAtLastError();
 }
 
@@ -11639,60 +9908,60 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       quartet_density = direct_density;
     }
     if (!bounded_direct_streaming) {
-      clear_active_shell_quartet_tile_counts_kernel<<<
-          blocks_for(detail::kDirectQuartetAngularOrderCount), threads, 0, resources.stream_>>>(
+      launch_clear_active_shell_quartet_tile_counts_kernel(
+          blocks_for(detail::kDirectQuartetAngularOrderCount), threads, 0, resources.stream_,
           active_shell_quartet_tile_counts, persistent_fock_task_heads,
           fp32_shell_quartet_tile_counts, fp32_persistent_fock_task_heads);
     }
     if (unrestricted) {
-      reduce_shell_pair_density_bounds_kernel<true>
-          <<<static_cast<unsigned>(total_shell_pairs), threads, 3 * threads * sizeof(double),
-             resources.stream_>>>(device_batch, quartet_density, active, shell_pair_density_bounds);
+      launch_reduce_shell_pair_density_bounds_kernel(
+          true, static_cast<unsigned>(total_shell_pairs), threads, 3 * threads * sizeof(double),
+          resources.stream_, device_batch, quartet_density, active, shell_pair_density_bounds);
       if (bounded_direct_streaming) {
-        reduce_bounded_system_density_bounds_kernel<<<
+        launch_reduce_bounded_system_density_bounds_kernel(
             static_cast<unsigned>(batch_size), threads,
-            detail::kDirectShellPairClassCount * threads * sizeof(double), resources.stream_>>>(
+            detail::kDirectShellPairClassCount * threads * sizeof(double), resources.stream_,
             device_batch, shell_pair_density_bounds, bounded_direct_system_density_bounds,
             bounded_direct_system_pair_density_bounds);
         return cudaPeekAtLastError();
       }
-      compact_active_shell_quartet_tiles_kernel<true, DirectScreeningPurpose::Fock>
-          <<<blocks_for(total_shell_quartets), threads, 0, resources.stream_>>>(
-              device_batch, options.screening_tolerance, shell_pair_bounds,
-              shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
-              active_shell_quartet_tile_counts, active_shell_quartet_tiles,
-              allow_mixed_precision && mixed_precision_fock,
-              requested_precision_policy.item_cutoff_ceiling,
-              requested_precision_policy.item_budget_error, mixed_precision_item_census,
-              fp32_shell_quartet_tile_offsets, fp32_shell_quartet_tile_counts,
-              fp32_shell_quartet_tiles);
+      launch_compact_active_shell_quartet_tiles_kernel(
+          true, DirectScreeningPurpose::Fock, blocks_for(total_shell_quartets), threads, 0,
+          resources.stream_, device_batch, options.screening_tolerance, shell_pair_bounds,
+          shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
+          active_shell_quartet_tile_counts, active_shell_quartet_tiles,
+          allow_mixed_precision && mixed_precision_fock,
+          requested_precision_policy.item_cutoff_ceiling,
+          requested_precision_policy.item_budget_error, mixed_precision_item_census,
+          fp32_shell_quartet_tile_offsets, fp32_shell_quartet_tile_counts,
+          fp32_shell_quartet_tiles);
     } else {
-      reduce_shell_pair_density_bounds_kernel<false>
-          <<<static_cast<unsigned>(total_shell_pairs), threads, 3 * threads * sizeof(double),
-             resources.stream_>>>(device_batch, quartet_density, active, shell_pair_density_bounds);
+      launch_reduce_shell_pair_density_bounds_kernel(
+          false, static_cast<unsigned>(total_shell_pairs), threads, 3 * threads * sizeof(double),
+          resources.stream_, device_batch, quartet_density, active, shell_pair_density_bounds);
       if (bounded_direct_streaming) {
-        reduce_bounded_system_density_bounds_kernel<<<
+        launch_reduce_bounded_system_density_bounds_kernel(
             static_cast<unsigned>(batch_size), threads,
-            detail::kDirectShellPairClassCount * threads * sizeof(double), resources.stream_>>>(
+            detail::kDirectShellPairClassCount * threads * sizeof(double), resources.stream_,
             device_batch, shell_pair_density_bounds, bounded_direct_system_density_bounds,
             bounded_direct_system_pair_density_bounds);
         return cudaPeekAtLastError();
       }
-      compact_active_shell_quartet_tiles_kernel<false, DirectScreeningPurpose::Fock>
-          <<<blocks_for(total_shell_quartets), threads, 0, resources.stream_>>>(
-              device_batch, options.screening_tolerance, shell_pair_bounds,
-              shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
-              active_shell_quartet_tile_counts, active_shell_quartet_tiles,
-              allow_mixed_precision && mixed_precision_fock,
-              requested_precision_policy.item_cutoff_ceiling,
-              requested_precision_policy.item_budget_error, mixed_precision_item_census,
-              fp32_shell_quartet_tile_offsets, fp32_shell_quartet_tile_counts,
-              fp32_shell_quartet_tiles);
+      launch_compact_active_shell_quartet_tiles_kernel(
+          false, DirectScreeningPurpose::Fock, blocks_for(total_shell_quartets), threads, 0,
+          resources.stream_, device_batch, options.screening_tolerance, shell_pair_bounds,
+          shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
+          active_shell_quartet_tile_counts, active_shell_quartet_tiles,
+          allow_mixed_precision && mixed_precision_fock,
+          requested_precision_policy.item_cutoff_ceiling,
+          requested_precision_policy.item_budget_error, mixed_precision_item_census,
+          fp32_shell_quartet_tile_offsets, fp32_shell_quartet_tile_counts,
+          fp32_shell_quartet_tiles);
     }
     if (direct_tile_validation && resources.direct_tile_validation_ != nullptr) {
-      validate_direct_tile_descriptors_kernel<<<blocks_for(plan.total_shell_quartet_tiles), threads,
-                                                0, resources.stream_>>>(
-          device_batch, active_shell_quartet_tile_offsets, active_shell_quartet_tile_counts,
+      launch_validate_direct_tile_descriptors_kernel(
+          blocks_for(plan.total_shell_quartet_tiles), threads, 0, resources.stream_, device_batch,
+          active_shell_quartet_tile_offsets, active_shell_quartet_tile_counts,
           active_shell_quartet_tiles, plan.total_shell_quartet_tiles,
           resources.direct_tile_validation_);
     }
@@ -11710,33 +9979,33 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // The final Fock/metadata path above has already reduced the selected
     // density in the direct Cartesian AO domain. Reuse those bounds and
     // overwrite the no-longer-needed Fock queue with its force-only subset.
-    clear_active_shell_quartet_tile_counts_kernel<<<
-        blocks_for(detail::kDirectQuartetAngularOrderCount), threads, 0, resources.stream_>>>(
+    launch_clear_active_shell_quartet_tile_counts_kernel(
+        blocks_for(detail::kDirectQuartetAngularOrderCount), threads, 0, resources.stream_,
         active_shell_quartet_tile_counts, persistent_fock_task_heads,
         fp32_shell_quartet_tile_counts, fp32_persistent_fock_task_heads);
     if (unrestricted) {
-      compact_active_shell_quartet_tiles_kernel<true, DirectScreeningPurpose::Force>
-          <<<blocks_for(total_shell_quartets), threads, 0, resources.stream_>>>(
-              device_batch, options.screening_tolerance, shell_pair_bounds,
-              shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
-              active_shell_quartet_tile_counts, active_shell_quartet_tiles, false, 0.0, 0.0,
-              nullptr, nullptr, nullptr, nullptr);
+      launch_compact_active_shell_quartet_tiles_kernel(
+          true, DirectScreeningPurpose::Force, blocks_for(total_shell_quartets), threads, 0,
+          resources.stream_, device_batch, options.screening_tolerance, shell_pair_bounds,
+          shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
+          active_shell_quartet_tile_counts, active_shell_quartet_tiles, false, 0.0, 0.0, nullptr,
+          nullptr, nullptr, nullptr);
     } else {
-      compact_active_shell_quartet_tiles_kernel<false, DirectScreeningPurpose::Force>
-          <<<blocks_for(total_shell_quartets), threads, 0, resources.stream_>>>(
-              device_batch, options.screening_tolerance, shell_pair_bounds,
-              shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
-              active_shell_quartet_tile_counts, active_shell_quartet_tiles, false, 0.0, 0.0,
-              nullptr, nullptr, nullptr, nullptr);
+      launch_compact_active_shell_quartet_tiles_kernel(
+          false, DirectScreeningPurpose::Force, blocks_for(total_shell_quartets), threads, 0,
+          resources.stream_, device_batch, options.screening_tolerance, shell_pair_bounds,
+          shell_pair_density_bounds, active, active_shell_quartet_tile_offsets,
+          active_shell_quartet_tile_counts, active_shell_quartet_tiles, false, 0.0, 0.0, nullptr,
+          nullptr, nullptr, nullptr);
     }
     if (direct_tile_validation && resources.direct_tile_validation_ != nullptr) {
       cudaError_t validation_error =
           cudaMemsetAsync(resources.direct_tile_validation_, 0xff,
                           sizeof(DirectTileValidationRecord), resources.stream_);
       if (validation_error != cudaSuccess) return validation_error;
-      validate_direct_tile_descriptors_kernel<<<blocks_for(plan.total_shell_quartet_tiles), threads,
-                                                0, resources.stream_>>>(
-          device_batch, active_shell_quartet_tile_offsets, active_shell_quartet_tile_counts,
+      launch_validate_direct_tile_descriptors_kernel(
+          blocks_for(plan.total_shell_quartet_tiles), threads, 0, resources.stream_, device_batch,
+          active_shell_quartet_tile_offsets, active_shell_quartet_tile_counts,
           active_shell_quartet_tiles, plan.total_shell_quartet_tiles,
           resources.direct_tile_validation_);
     }
@@ -11765,8 +10034,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         continue;
       }
       if (bounded_fock_class_timing) {
-        start_bounded_fock_class_timer_kernel<<<1, 1, 0, resources.stream_>>>(
-            shell_class, bounded_fock_class_timer_starts);
+        launch_start_bounded_fock_class_timer_kernel(1, 1, 0, resources.stream_, shell_class,
+                                                     bounded_fock_class_timer_starts);
         error = cudaPeekAtLastError();
         if (error != cudaSuccess) return error;
       }
@@ -11784,9 +10053,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           bounded_fock_class_timing ? bounded_fock_fp32_work_counts + shell_class : nullptr);
       if (error != cudaSuccess) return error;
       if (bounded_fock_class_timing) {
-        finish_bounded_fock_class_timer_kernel<<<1, 1, 0, resources.stream_>>>(
-            shell_class, bounded_fock_class_timer_starts, bounded_fock_class_timer_elapsed,
-            bounded_fock_class_timer_launches);
+        launch_finish_bounded_fock_class_timer_kernel(
+            1, 1, 0, resources.stream_, shell_class, bounded_fock_class_timer_starts,
+            bounded_fock_class_timer_elapsed, bounded_fock_class_timer_launches);
         error = cudaPeekAtLastError();
         if (error != cudaSuccess) return error;
       }
@@ -11798,8 +10067,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // issue a second class-specific memset here: the native fallback uses the
     // same disjoint head slot as generated classes.
     if (bounded_fock_class_timing) {
-      start_bounded_fock_class_timer_kernel<<<1, 1, 0, resources.stream_>>>(
-          kDdddShellClass, bounded_fock_class_timer_starts);
+      launch_start_bounded_fock_class_timer_kernel(1, 1, 0, resources.stream_, kDdddShellClass,
+                                                   bounded_fock_class_timer_starts);
       error = cudaPeekAtLastError();
       if (error != cudaSuccess) return error;
     }
@@ -11825,9 +10094,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
     if (bounded_fock_class_timing) {
-      finish_bounded_fock_class_timer_kernel<<<1, 1, 0, resources.stream_>>>(
-          kDdddShellClass, bounded_fock_class_timer_starts, bounded_fock_class_timer_elapsed,
-          bounded_fock_class_timer_launches);
+      launch_finish_bounded_fock_class_timer_kernel(
+          1, 1, 0, resources.stream_, kDdddShellClass, bounded_fock_class_timer_starts,
+          bounded_fock_class_timer_elapsed, bounded_fock_class_timer_launches);
       error = cudaPeekAtLastError();
     }
     return error;
@@ -11876,13 +10145,13 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         if (error != cudaSuccess) return error;
 
 #define VIBEQC_COMPACT_BOUNDED_FOCK_PAGE(unrestricted_value)                                      \
-  compact_bounded_exact_class_force_wave_kernel<unrestricted_value, DirectScreeningPurpose::Fock> \
-      <<<plan.persistent_quartet_worker_blocks, kBoundedDirectThreads, 0, resources.stream_>>>(   \
-          device_batch, bounded_stream_topology, shell_class, high_pair_class, low_pair_class,    \
-          options.screening_tolerance, page_begin, page_capacity, page_range.bra_begin,           \
-          page_range.bra_end, high_pair_class == low_pair_class, bounded_direct_generated_tasks,  \
-          bounded_direct_generated_task_counts + shell_class,                                     \
-          bounded_direct_generated_task_heads + shell_class, nullptr, true, nullptr, nullptr)
+  launch_compact_bounded_exact_class_force_wave_kernel(                                           \
+      unrestricted_value, DirectScreeningPurpose::Fock, plan.persistent_quartet_worker_blocks,    \
+      kBoundedDirectThreads, 0, resources.stream_, device_batch, bounded_stream_topology,         \
+      shell_class, high_pair_class, low_pair_class, options.screening_tolerance, page_begin,      \
+      page_capacity, page_range.bra_begin, page_range.bra_end, high_pair_class == low_pair_class, \
+      bounded_direct_generated_tasks, bounded_direct_generated_task_counts + shell_class,         \
+      bounded_direct_generated_task_heads + shell_class, nullptr, true, nullptr, nullptr)
         if (is_unrestricted) {
           VIBEQC_COMPACT_BOUNDED_FOCK_PAGE(true);
         } else {
@@ -11892,8 +10161,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         error = cudaPeekAtLastError();
         if (error != cudaSuccess) return error;
         if (bounded_fock_class_timing) {
-          accumulate_fock_precision_work_kernel<<<1, 1, 0, resources.stream_>>>(
-              bounded_direct_generated_task_counts + shell_class,
+          launch_accumulate_fock_precision_work_kernel(
+              1, 1, 0, resources.stream_, bounded_direct_generated_task_counts + shell_class,
               bounded_fock_fp64_work_counts + shell_class);
           error = cudaPeekAtLastError();
           if (error != cudaSuccess) return error;
@@ -11970,16 +10239,16 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     error =
         cudaMemsetAsync(bounded_direct_cursor, 0, sizeof(unsigned long long), resources.stream_);
     if (error != cudaSuccess) return error;
-#define VIBEQC_LAUNCH_BOUNDED_GENERATED_FOCK(unrestricted_value, task_offsets, selected_classes,   \
-                                             selected_any)                                         \
-  compact_bounded_generated_tasks_kernel<unrestricted_value, DirectScreeningPurpose::Fock, true>   \
-      <<<plan.persistent_quartet_worker_blocks, kBoundedDirectThreads, 0, resources.stream_>>>(    \
-          device_batch, options.screening_tolerance, shell_pair_bounds, shell_pair_density_bounds, \
-          bounded_direct_shell_pair_order, bounded_direct_shell_pair_block_bounds,                 \
-          bounded_direct_system_density_bounds, active, generated_fock_shell_class_mask, 0U,       \
-          host_native_streaming_fock_shell_class_mask, selected_classes, selected_any,             \
-          bounded_direct_cursor, bounded_direct_generated_tasks,                                   \
-          bounded_direct_generated_task_counts, task_offsets, bounded_direct_generated_overflow)
+#define VIBEQC_LAUNCH_BOUNDED_GENERATED_FOCK(unrestricted_value, task_offsets, selected_classes, \
+                                             selected_any)                                       \
+  launch_compact_bounded_generated_tasks_kernel(                                                 \
+      unrestricted_value, DirectScreeningPurpose::Fock, plan.persistent_quartet_worker_blocks,   \
+      kBoundedDirectThreads, 0, resources.stream_, device_batch, options.screening_tolerance,    \
+      shell_pair_bounds, shell_pair_density_bounds, bounded_direct_shell_pair_order,             \
+      bounded_direct_shell_pair_block_bounds, bounded_direct_system_density_bounds, active,      \
+      generated_fock_shell_class_mask, 0U, host_native_streaming_fock_shell_class_mask,          \
+      selected_classes, selected_any, bounded_direct_cursor, bounded_direct_generated_tasks,     \
+      bounded_direct_generated_task_counts, task_offsets, bounded_direct_generated_overflow)
     if (is_unrestricted) {
       VIBEQC_LAUNCH_BOUNDED_GENERATED_FOCK(true, bounded_direct_generated_task_offsets, nullptr,
                                            nullptr);
@@ -11989,7 +10258,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     }
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
-    prepare_bounded_generated_retry_kernel<<<1, 1, 0, resources.stream_>>>(
+    launch_prepare_bounded_generated_retry_kernel(
+        1, 1, 0, resources.stream_,
         static_cast<std::uint32_t>(plan.bounded_generated_task_capacity),
         bounded_direct_generated_task_offsets, bounded_direct_generated_task_counts,
         bounded_direct_generated_task_heads, bounded_direct_generated_overflow,
@@ -12043,8 +10313,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
 #undef VIBEQC_LAUNCH_BOUNDED_GENERATED_FOCK
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
-    normalize_bounded_generated_task_counts_kernel<<<
-        blocks_for(detail::kDirectQuartetShellClassCount), threads, 0, resources.stream_>>>(
+    launch_normalize_bounded_generated_task_counts_kernel(
+        blocks_for(detail::kDirectQuartetShellClassCount), threads, 0, resources.stream_,
         bounded_direct_generated_retry_task_offsets, bounded_direct_generated_task_counts,
         bounded_direct_generated_task_heads, bounded_direct_generated_overflow, false);
     error = cudaPeekAtLastError();
@@ -12084,10 +10354,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         cudaError_t compact_error =
             cudaMemsetAsync(generic_order5_tile_count, 0, sizeof(std::uint32_t), resources.stream_);
         if (compact_error != cudaSuccess) return compact_error;
-        compact_generic_order5_tiles_kernel<<<
+        launch_compact_generic_order5_tiles_kernel(
             blocks_for(plan.shell_quartet_tile_capacities[kGenericOrderFiveAngularOrder]), threads,
-            0, resources.stream_>>>(
-            device_batch, active_shell_quartet_tile_counts + kGenericOrderFiveAngularOrder,
+            0, resources.stream_, device_batch,
+            active_shell_quartet_tile_counts + kGenericOrderFiveAngularOrder,
             active_shell_quartet_tiles +
                 plan.shell_quartet_tile_offsets[kGenericOrderFiveAngularOrder],
             0U, generated_fock_shell_class_mask, generic_order5_tile_count, generic_order5_tiles);
@@ -12319,10 +10589,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           }
         }
         if (bounded_direct_streaming) {
-          reduce_bounded_shell_pair_block_bounds_kernel<<<
+          launch_reduce_bounded_shell_pair_block_bounds_kernel(
               static_cast<unsigned>(total_shell_pair_blocks), threads, threads * sizeof(double),
-              resources.stream_>>>(device_batch, bounded_direct_shell_pair_order, shell_pair_bounds,
-                                   bounded_direct_shell_pair_block_bounds);
+              resources.stream_, device_batch, bounded_direct_shell_pair_order, shell_pair_bounds,
+              bounded_direct_shell_pair_block_bounds);
         }
       } else {
         build_schwarz_bounds_packed_kernel<<<blocks_for(direct_pair_elements), threads, 0,
@@ -13097,9 +11367,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       }
     }
     if (shell_class_profiling && quartet_direct && total_shell_quartet_tiles != 0) {
-      profile_active_shell_quartet_tiles_kernel<<<blocks_for(total_shell_quartet_tiles), threads, 0,
-                                                  resources.stream_>>>(
-          device_batch, total_shell_quartet_tiles, active_shell_quartet_tile_offsets,
+      launch_profile_active_shell_quartet_tiles_kernel(
+          blocks_for(total_shell_quartet_tiles), threads, 0, resources.stream_, device_batch,
+          total_shell_quartet_tiles, active_shell_quartet_tile_offsets,
           active_shell_quartet_tile_counts, active_shell_quartet_tiles, shell_class_profile);
     }
   }
@@ -13260,14 +11530,14 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     if (error != cudaSuccess) return error;
 #define VIBEQC_LAUNCH_BOUNDED_GENERATED_FORCE(unrestricted_value, purpose_value, task_offsets,     \
                                               selected_classes, selected_any)                      \
-  compact_bounded_generated_tasks_kernel<unrestricted_value, purpose_value, true>                  \
-      <<<plan.persistent_quartet_worker_blocks, kBoundedDirectThreads, 0, resources.stream_>>>(    \
-          device_batch, options.screening_tolerance, shell_pair_bounds, shell_pair_density_bounds, \
-          bounded_direct_shell_pair_order, bounded_direct_shell_pair_block_bounds,                 \
-          bounded_direct_system_density_bounds, active, nullptr,                                   \
-          bounded_force_legacy_queue_shell_class_mask, 0U, selected_classes, selected_any,         \
-          bounded_direct_cursor, bounded_direct_generated_tasks,                                   \
-          bounded_direct_generated_task_counts, task_offsets, bounded_direct_generated_overflow)
+  launch_compact_bounded_generated_tasks_kernel(                                                   \
+      unrestricted_value, purpose_value, plan.persistent_quartet_worker_blocks,                    \
+      kBoundedDirectThreads, 0, resources.stream_, device_batch, options.screening_tolerance,      \
+      shell_pair_bounds, shell_pair_density_bounds, bounded_direct_shell_pair_order,               \
+      bounded_direct_shell_pair_block_bounds, bounded_direct_system_density_bounds, active,        \
+      nullptr, bounded_force_legacy_queue_shell_class_mask, 0U, selected_classes, selected_any,    \
+      bounded_direct_cursor, bounded_direct_generated_tasks, bounded_direct_generated_task_counts, \
+      task_offsets, bounded_direct_generated_overflow)
     if (is_unrestricted) {
       if (purpose == DirectScreeningPurpose::Force) {
         VIBEQC_LAUNCH_BOUNDED_GENERATED_FORCE(true, DirectScreeningPurpose::Force,
@@ -13289,7 +11559,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     }
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
-    prepare_bounded_generated_retry_kernel<<<1, 1, 0, resources.stream_>>>(
+    launch_prepare_bounded_generated_retry_kernel(
+        1, 1, 0, resources.stream_,
         static_cast<std::uint32_t>(plan.bounded_generated_task_capacity),
         bounded_direct_generated_task_offsets, bounded_direct_generated_task_counts,
         bounded_direct_generated_task_heads, bounded_direct_generated_overflow,
@@ -13341,9 +11612,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           continue;
         }
         if (shell_class_profiling) {
-          profile_bounded_generated_tasks_kernel<<<plan.persistent_quartet_worker_blocks, threads,
-                                                   0, resources.stream_>>>(
-              device_batch, bounded_direct_generated_tasks, task_offsets + shell_class,
+          launch_profile_bounded_generated_tasks_kernel(
+              plan.persistent_quartet_worker_blocks, threads, 0, resources.stream_, device_batch,
+              bounded_direct_generated_tasks, task_offsets + shell_class,
               bounded_direct_generated_task_counts + shell_class, shell_class_profile);
           cudaError_t profile_error = cudaPeekAtLastError();
           if (profile_error != cudaSuccess) return profile_error;
@@ -13397,8 +11668,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
 #undef VIBEQC_LAUNCH_BOUNDED_GENERATED_FORCE
     error = cudaPeekAtLastError();
     if (error != cudaSuccess) return error;
-    normalize_bounded_generated_task_counts_kernel<<<
-        blocks_for(detail::kDirectQuartetShellClassCount), threads, 0, resources.stream_>>>(
+    launch_normalize_bounded_generated_task_counts_kernel(
+        blocks_for(detail::kDirectQuartetShellClassCount), threads, 0, resources.stream_,
         bounded_direct_generated_retry_task_offsets, bounded_direct_generated_task_counts,
         bounded_direct_generated_task_heads, bounded_direct_generated_overflow, false);
     error = cudaPeekAtLastError();
@@ -13461,15 +11732,15 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         const auto compact_page = [&](std::uint32_t* signature_counts,
                                       const std::uint32_t* signature_offsets,
                                       bool force_execution) -> cudaError_t {
-#define VIBEQC_COMPACT_EXACT_OVERFLOW_FORCE(unrestricted_value, purpose_value)                   \
-  compact_bounded_exact_class_force_wave_kernel<unrestricted_value, purpose_value>               \
-      <<<plan.persistent_quartet_worker_blocks, kBoundedDirectThreads, 0, resources.stream_>>>(  \
-          device_batch, bounded_stream_topology, shell_class, high_pair_class, low_pair_class,   \
-          options.screening_tolerance, page_begin, page_capacity, page_range.bra_begin,          \
-          page_range.bra_end, high_pair_class == low_pair_class, bounded_direct_generated_tasks, \
-          bounded_direct_generated_task_counts + shell_class,                                    \
-          bounded_direct_generated_task_heads + shell_class, bounded_direct_generated_overflow,  \
-          force_execution, signature_counts, signature_offsets)
+#define VIBEQC_COMPACT_EXACT_OVERFLOW_FORCE(unrestricted_value, purpose_value)                    \
+  launch_compact_bounded_exact_class_force_wave_kernel(                                           \
+      unrestricted_value, purpose_value, plan.persistent_quartet_worker_blocks,                   \
+      kBoundedDirectThreads, 0, resources.stream_, device_batch, bounded_stream_topology,         \
+      shell_class, high_pair_class, low_pair_class, options.screening_tolerance, page_begin,      \
+      page_capacity, page_range.bra_begin, page_range.bra_end, high_pair_class == low_pair_class, \
+      bounded_direct_generated_tasks, bounded_direct_generated_task_counts + shell_class,         \
+      bounded_direct_generated_task_heads + shell_class, bounded_direct_generated_overflow,       \
+      force_execution, signature_counts, signature_offsets)
           if (is_unrestricted) {
             if (purpose == DirectScreeningPurpose::Force) {
               VIBEQC_COMPACT_EXACT_OVERFLOW_FORCE(true, DirectScreeningPurpose::Force);
@@ -13490,16 +11761,15 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
           // primitive-uniform batches across all lockstep force workers.
           error = compact_page(bounded_force_signature_counts, nullptr, true);
           if (error == cudaSuccess) {
-            scan_bounded_force_signature_counts_kernel<<<kBoundedForceSignatureScanBlockCount,
-                                                         kBoundedForceSignatureScanThreads, 0,
-                                                         resources.stream_>>>(
-                bounded_force_signature_counts, bounded_force_signature_offsets,
+            launch_scan_bounded_force_signature_counts_kernel(
+                kBoundedForceSignatureScanBlockCount, kBoundedForceSignatureScanThreads, 0,
+                resources.stream_, bounded_force_signature_counts, bounded_force_signature_offsets,
                 bounded_force_signature_block_offsets);
             error = cudaPeekAtLastError();
           }
           if (error == cudaSuccess) {
-            prefix_bounded_force_signature_blocks_kernel<<<1, kBoundedForceSignatureScanThreads, 0,
-                                                           resources.stream_>>>(
+            launch_prefix_bounded_force_signature_blocks_kernel(
+                1, kBoundedForceSignatureScanThreads, 0, resources.stream_,
                 bounded_force_signature_offsets, bounded_force_signature_block_offsets,
                 bounded_direct_generated_task_counts + shell_class);
             error = cudaPeekAtLastError();
@@ -13521,9 +11791,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
         }
         if (error != cudaSuccess) return error;
         if (shell_class_profiling) {
-          profile_bounded_generated_tasks_kernel<<<plan.persistent_quartet_worker_blocks, threads,
-                                                   0, resources.stream_>>>(
-              device_batch, bounded_direct_generated_tasks,
+          launch_profile_bounded_generated_tasks_kernel(
+              plan.persistent_quartet_worker_blocks, threads, 0, resources.stream_, device_batch,
+              bounded_direct_generated_tasks,
               bounded_direct_generated_retry_task_offsets + shell_class,
               bounded_direct_generated_task_counts + shell_class, shell_class_profile);
           error = cudaPeekAtLastError();
@@ -13752,10 +12022,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     cuda_error =
         cudaMemsetAsync(generic_order5_tile_count, 0, sizeof(std::uint32_t), resources.stream_);
     if (cuda_error == cudaSuccess) {
-      compact_generic_order5_tiles_kernel<<<
+      launch_compact_generic_order5_tiles_kernel(
           blocks_for(plan.shell_quartet_tile_capacities[kGenericOrderFiveAngularOrder]), threads, 0,
-          resources.stream_>>>(
-          device_batch, active_shell_quartet_tile_counts + kGenericOrderFiveAngularOrder,
+          resources.stream_, device_batch,
+          active_shell_quartet_tile_counts + kGenericOrderFiveAngularOrder,
           active_shell_quartet_tiles +
               plan.shell_quartet_tile_offsets[kGenericOrderFiveAngularOrder],
           generated_shell_class_mask, nullptr, generic_order5_tile_count, generic_order5_tiles);

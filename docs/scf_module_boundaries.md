@@ -26,7 +26,7 @@ and `cuda_ownership_current.json`, under #231.
 | `rhf.cpp`: stationary forces | `analytic_forces`, `analytic_uhf_forces`, DF/CUDA gradient adapters and final force assembly | Provider-based stationary assembly is extracted to `gradient/hf_gradient.*`, taking the provider's explicit positive derivative rather than owning a plan. Legacy CUDA/DF gradient adapters and finalization remain; their provider, overlap/Pulay, one-electron and nuclear terms must remain distinct. |
 | `rhf.cpp`: compatibility entry points | Public RHF/UHF CPU/CUDA wrappers and CPU-build CUDA stubs | Keep existing method/ABI signatures, failure behavior and per-item ordering. |
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Move by the existing #231 scientific ownership regions; do not copy formulas or turn the independent oracle into generated production arithmetic. |
-| `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host bounded class partitioning, stream ordering and partial-page ranges are extracted to `cuda/queue_plan.*`, with queue diagnostics in `cuda/queue_profile.cpp`. Device compaction and queue consumers remain pending. |
+| `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host partitioning and page ranges use `cuda/queue_plan.*`. Device validation, density bounds, compaction, generated/resident tasks, bounded pages, scans and diagnostics now have separate `cuda/direct_*` owners. Fused native bounded consumers and host launch sequencing remain pending. |
 | `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution lives in `cuda/eigensolver.cpp` / `eigensolver_kernels.cu`. Shared matrix, density, DIIS, convergence and state kernels now have separate `cuda/scf_*_kernels.*` owners; public/direct basis transforms use `basis_transform_kernels.*`. Scientific integral/Fock kernels and host bucket control remain pending. |
 | `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Packed/POD contracts and host topology/arena planning already have separate owners. DF source/export uses `cuda/df_source*` / `df_integral_export*`. Stream/graph/arena lifetime now lives in `cuda/resources.*`, with borrowed matrix-library execution in `matrix_library.*`. Graph construction and bucket dispatch remain pending. |
 | Former `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Extracted to `cuda/df_plan*`, `df_setup_internal.hpp`, `df_runtime.*` and `df_metric_kernels.*`. The public handle remains opaque; source transfer and retained metric factors keep their single owner. |
@@ -438,3 +438,80 @@ each rebuild only the edited C++ object plus source-identity metadata, then
 relink dependents. The observed rebuilds take 1.585 and 1.589 seconds,
 respectively, and compile no CUDA kernel object. Both probes restore and rebuild
 the exact validated source. Full production acceptance remains under #240.
+
+
+## Direct device queues and screening
+
+Nine CUDA owners now separate tile validation, density-bound reduction, tile
+compaction, generated exact-class tasks, resident-bra tasks, bounded pages,
+bounded generated tasks, scans/retries and diagnostic counters. Five shared
+headers contain only indexing, task encoding, physical screening, page-tail
+bounds and profiling helpers; the largest is 199 lines. Queue implementations
+consume borrowed packed metadata and cannot import host bucket resources or
+integral recurrence implementations.
+
+The exact-parent audit against `fda0f69` preserves 53 function/type definitions,
+26 launch wrappers, the unclassified-slot sentinel, and the entire remaining
+CUDA implementation after explicit launch-interface substitutions. It checks
+macro-spliced launch sites as well as ordinary calls. RHF/UHF and Fock/force
+specializations retain their original bodies and launch geometry. The bounded
+generated wrapper exposes only the materializing specializations already used
+by the driver; per-class overflow and exact-page recovery remain unchanged.
+
+The physical density/Schwarz gates, conservative page tails and mixed-precision
+contribution cutoff remain classified as scientific code in the #231 ledger.
+Queue bookkeeping and diagnostic counts remain runtime code. This move does
+not retire a screening formula or duplicate an integral evaluator.
+
+`cuda_rhf.cu` decreases from 14,902 to 13,172 lines. The largest new CUDA
+implementation is 241 lines. Host bucket/graph construction, host generated
+launch sequencing and the direct scientific/force kernels remain under #240;
+fused native bounded consumers still enumerate and drain their own work.
+
+The following ccache-disabled compiler samples use NVCC 12.9 sm_120 development
+fast-compile mode, a warm filesystem cache and separate parent/candidate
+worktrees with different absolute paths on a shared machine. They measure
+individual compiler invocations, not production cold builds, device linking,
+resource acceptance or molecular runtime.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 36.337 | 8,428,512 |
+| extracted_cuda_rhf | 33.013 | 8,041,040 |
+| direct_tile_validation | 2.683 | 151,032 |
+| direct_density_bounds | 2.713 | 174,536 |
+| direct_tile_compaction | 2.831 | 325,744 |
+| direct_generated_tasks | 2.670 | 143,560 |
+| direct_resident_tasks | 2.669 | 121,144 |
+| direct_bounded_pages | 2.878 | 366,888 |
+| direct_bounded_tasks | 2.872 | 390,904 |
+| direct_queue_scan | 5.236 | 322,976 |
+| direct_queue_diagnostics | 2.667 | 150,408 |
+
+Aggregate compiler work changes from 36.337 to 60.233
+seconds; aggregate object bytes change from 8,428,512 to
+10,188,232. The reduced scope of an implementation edit
+comes with additional aggregate compiler work in this development sample.
+
+Validation passed four native GPU tests and 137 Python GPU tests with no skips,
+including the 14 allocation-budget cases. Six exact-parent comparisons cover
+fixed, resident and paged RHF/UHF execution with ragged batches of three,
+STO-3G, descriptor validation, cold/warm state and explicit changed geometry.
+All 96 energy/force comparisons pass their existing tolerances; the largest
+absolute difference across the compared arrays is `3.55e-14`.
+Both GPU gates ran through Slurm on the RTX 5090. These correctness comparisons
+do not establish production runtime acceptance for the remaining #240 work.
+
+The combined source/structure suite passed 350 checks with 48 opt-in compiler
+probes skipped. Its one stale page-screening source-location assertion was
+updated for the extracted owner and passes in a focused rerun. The additional
+ownership/publication checks, refreshed source snapshot, hooks and complete
+body/launch audit pass.
+
+Implementation-only comment edits to `direct_queue_scan.cu` and
+`direct_bounded_pages.cu` each trigger only their own CUDA object and the
+source-identity C++ object, followed by relinks. The ordinary cache-enabled
+Ninja rebuilds take 1.751 and 1.606 seconds. Neither rebuild invokes the
+compiler for `cuda_rhf.cu` or an unrelated CUDA owner. Both probes restore and
+rebuild the exact source; the dependency scope is distinct from the uncached
+compiler-work samples above.

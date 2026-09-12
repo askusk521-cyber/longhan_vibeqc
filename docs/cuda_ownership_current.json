@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 9254,
+  "all_handwritten_scientific_lines": 9156,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -666,6 +666,172 @@
       "subsystem": "df_values"
     },
     {
+      "bytes": 10698,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 44,
+        "scientific": 116
+      },
+      "path": "src/scf/cuda/direct_bounded_pages.cu",
+      "physical_lines": 188,
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [
+        {
+          "code_lines": 44,
+          "first_line": 144,
+          "last_line": 188,
+          "reason": "Host forwarding preserves the resolved template policy and launch geometry.",
+          "role": "runtime",
+          "start": "void launch_compact_bounded_exact_class_force_wave_kernel",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "sha256": "f43c6e956df1baafd3c77bce3c28abdc8a8167112803c1107b3d69e4b3ce5103",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 1055,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 17,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_bounded_pages.hpp",
+      "physical_lines": 24,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "437b251b821007585845fcde89003c194d6f1c5028c939e268aa24a7c78b3843",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 9186,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 45,
+        "scientific": 107
+      },
+      "path": "src/scf/cuda/direct_bounded_tasks.cu",
+      "physical_lines": 167,
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [
+        {
+          "code_lines": 45,
+          "first_line": 122,
+          "last_line": 167,
+          "reason": "Host forwarding preserves the resolved template policy and launch geometry.",
+          "role": "runtime",
+          "start": "void launch_compact_bounded_generated_tasks_kernel",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "sha256": "3d686876239a1623f0c927f633ff74a47759dd78dd8744b51edfb5ad4f6ad5ee",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 1292,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 18,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_bounded_tasks.hpp",
+      "physical_lines": 28,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "bf636cb6a74d91a4ff1eec68bb3878f1afa265553a189e7496eacd9b730d0bc0",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 11098,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 29,
+        "scientific": 156
+      },
+      "path": "src/scf/cuda/direct_density_bounds.cu",
+      "physical_lines": 222,
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [
+        {
+          "code_lines": 29,
+          "first_line": 191,
+          "last_line": 222,
+          "reason": "Host forwarding preserves the resolved template policy and launch geometry.",
+          "role": "runtime",
+          "start": "void launch_reduce_shell_pair_density_bounds_kernel",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "sha256": "f7daab3257521e05fc14f82d181bfe75a0aec46a79223420743feb0e8cea2526",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 1594,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 22,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_density_bounds.hpp",
+      "physical_lines": 33,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "518d3276243e19412e3b6de13332f5a7117201bc1dbb1ceb43df557ec3ecae1c",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 10963,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 165,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_generated_tasks.cu",
+      "physical_lines": 198,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "84b11ad0473a0be08400b74097c2b16f21a01fdf31645e08fbd5a1e4b6694c20",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 2922,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 36,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_generated_tasks.hpp",
+      "physical_lines": 49,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "5f11492ed06d39c97af3364d6f725366be9cad9bc62f0b896b5ed78d8a1097a3",
+      "subsystem": "direct_integrals"
+    },
+    {
       "bytes": 26375,
       "code_lines": {
         "fallback": 0,
@@ -681,6 +847,271 @@
       "role": "scientific",
       "sha256": "845ba9198cef66a5cc5b2acc5d68494935957173b122c403a85137bfd7b9ca4b",
       "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 4467,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 0,
+        "scientific": 59
+      },
+      "path": "src/scf/cuda/direct_page_screening.cuh",
+      "physical_lines": 84,
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [],
+      "role": "scientific",
+      "sha256": "519e74368d0a9b97c2498967aa490bf617fa14f49ec8292ced0548e74e5c5a3a",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 8625,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 127,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_queue_diagnostics.cu",
+      "physical_lines": 156,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "e3d649f9fa28fe0553440d24c056fd4648faa6fb78649731672cfa8905873503",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 2577,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 31,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_queue_diagnostics.hpp",
+      "physical_lines": 46,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "648c8bc68ce3e81a3e28a7db62a40f480b28a064b94ceea34febf580e780485f",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 7229,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 132,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_queue_index.cuh",
+      "physical_lines": 152,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "14e6439f4e2c60499aba6960501479ee843fa812c13e5fee09857245c8f55339",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 2247,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 39,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_queue_profile.cuh",
+      "physical_lines": 46,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "49410de9b8dea85782207619d0a82fa97622feebc4400290af9e148b096bee2a",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 8146,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 136,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_queue_scan.cu",
+      "physical_lines": 160,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "3981fe07d9cd744f422a2924795296a7b179259e1d4f058c6bb72d5e0ea6985e",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 1987,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 26,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_queue_scan.hpp",
+      "physical_lines": 39,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "cfe36ee9e0f2014ab06139b5a16bbfe8a1cac0bd869b4ed9194d0d1901a71d36",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 9772,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 140,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_resident_tasks.cu",
+      "physical_lines": 175,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "03e4dee2990b949b2de233cbabcf8df5a31b6d4d038d2ee4a3d6b9a603ee2e6a",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 2494,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 32,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_resident_tasks.hpp",
+      "physical_lines": 45,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "f382293b0c058253030deb24eb3f07934643d69cbb9d3e1aa921fc2581312ae2",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 5233,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 0,
+        "scientific": 82
+      },
+      "path": "src/scf/cuda/direct_screening.cuh",
+      "physical_lines": 98,
+      "reason": "Retained physical density/Schwarz screening or conservative class tails, including queue consumers of those bounds; structural extraction does not retire these semantics.",
+      "regions": [],
+      "role": "scientific",
+      "sha256": "89ceeaa8253a0b1a611ab937aafa9502721cd4365b95e1f7a596d5108725c941",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 10795,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 163,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_task_encoding.cuh",
+      "physical_lines": 199,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "06f5f16ce217feaf97baa3a3ba1b543695082b3273283053aecd295207c6a4a5",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 13718,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 193,
+        "scientific": 10
+      },
+      "path": "src/scf/cuda/direct_tile_compaction.cu",
+      "physical_lines": 241,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [
+        {
+          "code_lines": 10,
+          "first_line": 35,
+          "last_line": 45,
+          "reason": "Per-item FP32 contribution cutoff tied to the physical Fock error budget.",
+          "role": "scientific",
+          "start": "__device__ __forceinline__ double mixed_fock_item_cutoff",
+          "stop": "template <bool Unrestricted, DirectScreeningPurpose Purpose>"
+        }
+      ],
+      "role": "runtime",
+      "sha256": "627e875f2764d51f23830640afcf966ea59d0a6b9080506d4ed00d11aeed4453",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 2119,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 31,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_tile_compaction.hpp",
+      "physical_lines": 42,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "eac4a8854aa2d0f30dd771311b45de9078495d4e1d302eed65f989b941ee12a6",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 10628,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 176,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_tile_validation.cu",
+      "physical_lines": 190,
+      "reason": "Borrowed direct task metadata, indexing, queue scans/materialization or diagnostic counters; no integral recurrence.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "bece1babaaad5f403a3550bb468733a3b46ce43558b15951fce4a9d5b8840ec6",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 976,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 15,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_tile_validation.hpp",
+      "physical_lines": 22,
+      "reason": "Borrowed queue launch ABI; no allocations, synchronization or scientific arithmetic.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "7dcdd1db9483b2f6d5a292c624c859d9fc52c8b30e7fae327e10c9332435293d",
+      "subsystem": "direct_integrals"
     },
     {
       "bytes": 1628,
@@ -1215,76 +1646,67 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 794091,
+      "bytes": 699644,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 6395,
-        "scientific": 6995
+        "runtime": 5571,
+        "scientific": 6367
       },
       "path": "src/scf/cuda_rhf.cu",
-      "physical_lines": 14902,
+      "physical_lines": 13172,
       "reason": "Remaining device recurrences, physical screening bounds and method contractions are conservatively scientific; explicit regions separate generic runtime.",
       "regions": [
         {
-          "code_lines": 609,
+          "code_lines": 362,
           "first_line": 1,
-          "last_line": 695,
+          "last_line": 427,
           "reason": "Includes, task metadata, scalar arithmetic/AD, stable special functions and generic geometry/packing helpers.",
           "role": "runtime",
           "start": "#include <cublas_v2.h>",
           "stop": "__device__ Scalar primitive_overlap("
         },
         {
-          "code_lines": 66,
-          "first_line": 757,
-          "last_line": 838,
+          "code_lines": 38,
+          "first_line": 489,
+          "last_line": 536,
           "reason": "Angular/task indexing and public-layout helpers.",
           "role": "runtime",
           "start": "__device__ unsigned angular_axis(",
           "stop": "__device__ void boys_values("
         },
         {
-          "code_lines": 13,
-          "first_line": 5691,
-          "last_line": 5706,
-          "reason": "Direct class timing instrumentation retained after common SCF kernel extraction.",
-          "role": "runtime",
-          "start": "__global__ void start_bounded_fock_class_timer_kernel",
-          "stop": "__global__ void build_fock_kernel"
-        },
-        {
           "code_lines": 9,
-          "first_line": 5793,
-          "last_line": 5812,
+          "first_line": 5474,
+          "last_line": 5493,
           "reason": "Generic atomic maximum implementation.",
           "role": "runtime",
           "start": "__device__ void atomic_max_double",
           "stop": "__global__ void build_schwarz_and_shell_pair_bounds_packed_kernel"
         },
         {
-          "code_lines": 547,
-          "first_line": 6145,
-          "last_line": 6810,
-          "reason": "Task compaction, signature/class indexing, prefix scans, materialization and queue profiling.",
-          "role": "runtime",
-          "start": "__global__ void compact_active_shell_quartet_tiles_kernel",
-          "stop": "__global__ void build_fock_direct_packed_kernel"
-        },
-        {
           "code_lines": 64,
-          "first_line": 6952,
-          "last_line": 7019,
+          "first_line": 5738,
+          "last_line": 5805,
           "reason": "Generic tuple permutations and duplicate suppression.",
           "role": "runtime",
           "start": "__device__ void eri_symmetry_permutation",
           "stop": "__device__ __forceinline__ void accumulate_direct_fock_integral"
         },
         {
+          "code_lines": 51,
+          "first_line": 5545,
+          "last_line": 5596,
+          "reason": "Host sequencing of resident-bra grouping, scans and materialization; device kernels have separate owners.",
+          "role": "runtime",
+          "start": "cudaError_t prepare_ppps_resident_tasks(",
+          "stop": "__global__ void build_fock_direct_packed_kernel"
+        },
+        {
           "code_lines": 18,
-          "first_line": 7249,
-          "last_line": 7268,
+          "first_line": 6035,
+          "last_line": 6054,
           "reason": "Component-index mapping.",
           "role": "runtime",
           "start": "__device__ __forceinline__ unsigned order2_component_index",
@@ -1292,35 +1714,26 @@
         },
         {
           "code_lines": 104,
-          "first_line": 7397,
-          "last_line": 7513,
+          "first_line": 6183,
+          "last_line": 6299,
           "reason": "Queue/launch wrappers around separately owned scientific contractions.",
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
           "stop": "__global__ void nuclear_force_kernel"
         },
         {
-          "code_lines": 42,
-          "first_line": 9066,
-          "last_line": 9112,
-          "reason": "Generic prefix scans for force signatures.",
-          "role": "runtime",
-          "start": "__global__ void scan_bounded_force_signature_counts_kernel",
-          "stop": "__device__ __forceinline__ bool bounded_generated_class_enabled"
-        },
-        {
           "code_lines": 164,
-          "first_line": 9540,
-          "last_line": 9739,
+          "first_line": 7808,
+          "last_line": 8007,
           "reason": "Persistent force task wrappers; primitive/equation contractions are separate above.",
           "role": "runtime",
           "start": "__global__ void two_electron_force_quartet_kernel",
           "stop": "cudaError_t prepare_generated_shell_tasks("
         },
         {
-          "code_lines": 4759,
-          "first_line": 9740,
-          "last_line": 14902,
+          "code_lines": 4761,
+          "first_line": 8008,
+          "last_line": 13172,
           "reason": "Host resource planning, library/state/graph execution and ABI dispatch; numerical device equations are classified above.",
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
@@ -1328,7 +1741,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "9aa9b31a7c35794e205831c069d6ee56b76b125f1824a0f35aeb633ebeb9f9bd",
+      "sha256": "08655c99398af4ffcee46101862d8b5aa4dd0eb60091f31592d9ae3376723038",
       "subsystem": "direct_integrals"
     },
     {
@@ -1508,8 +1921,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 122,
-    "runtime": 12178,
-    "scientific": 9132
+    "runtime": 12971,
+    "scientific": 9034
   },
   "migration_ledger": {
     "ao_grid": {
@@ -1668,8 +2081,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 6395,
-      "scientific": 7095
+      "runtime": 7188,
+      "scientific": 6997
     },
     "low_rank": {
       "fallback": 0,
