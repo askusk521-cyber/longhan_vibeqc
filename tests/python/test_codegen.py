@@ -223,10 +223,6 @@ RTX5090_DPSS_SCALAR_RYS3_RESOURCE_LIMITS = {
 }
 
 
-@pytest.mark.parametrize(
-    ("maximum_order", "series_threshold"),
-    ((0, 1.0e-8), (1, 0.25), (2, 0.75), (3, 1.25), (4, 2.0)),
-)
 def _direct_cuda_source():
     """Read direct dispatch with its extracted constant and metadata contracts."""
     root = REPOSITORY_ROOT / "src/scf"
@@ -241,6 +237,10 @@ def _direct_cuda_source():
     )
 
 
+@pytest.mark.parametrize(
+    ("maximum_order", "series_threshold"),
+    ((0, 1.0e-8), (1, 0.25), (2, 0.75), (3, 1.25), (4, 2.0)),
+)
 def test_generated_low_order_boys_thresholds_preserve_upward_recurrence(
     maximum_order: int, series_threshold: float
 ):
