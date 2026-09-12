@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 9156,
+  "all_handwritten_scientific_lines": 8786,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -832,21 +832,65 @@
       "subsystem": "direct_integrals"
     },
     {
-      "bytes": 26375,
+      "bytes": 8076,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 0,
-        "scientific": 468
+        "runtime": 27,
+        "scientific": 98
       },
-      "path": "src/scf/cuda/direct_jk.cuh",
-      "physical_lines": 500,
-      "reason": "Direct J/K consumer contractions and bounded bridge; counted conservatively with local runtime checks.",
-      "regions": [],
+      "path": "src/scf/cuda/direct_jk_kernels.cuh",
+      "physical_lines": 151,
+      "reason": "Retained direct public-AO J/K and fixed-density derivative contractions; recurrence definitions retain their existing owner.",
+      "regions": [
+        {
+          "code_lines": 27,
+          "first_line": 121,
+          "last_line": 151,
+          "reason": "Host launch forwarding; no scientific arithmetic.",
+          "role": "runtime",
+          "start": "namespace cuda_execution {",
+          "stop": null
+        }
+      ],
       "role": "scientific",
-      "sha256": "845ba9198cef66a5cc5b2acc5d68494935957173b122c403a85137bfd7b9ca4b",
+      "sha256": "34178e5110cb2cc417f1751baaca87920ecb44d5e726d7d634ab0fd2de75cd78",
       "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 1872,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 23,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_jk_kernels.hpp",
+      "physical_lines": 36,
+      "reason": "Borrowed direct J/K kernel ABI and shared reduction width.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "aa4d17ff1e71134e55fb86329e02d876346c6e72f4d10b9c6d1d3f8bbbb35035",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 967,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 23,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/direct_jk_plan.hpp",
+      "physical_lines": 33,
+      "reason": "Opaque direct J/K provider allocation layout; owns no integral equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "8346534e250e26f40180e9080c34e1c2861bb4c5e8ea4e6ac24401cc3d1ecbe0",
+      "subsystem": "runtime"
     },
     {
       "bytes": 4467,
@@ -1250,6 +1294,23 @@
       "subsystem": "runtime"
     },
     {
+      "bytes": 1082,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 16,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/one_electron_export_kernels.hpp",
+      "physical_lines": 25,
+      "reason": "Borrowed retained-response and nuclear launch ABI; no new operator formula.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "daef7e03764166b4a5a0c7a5ad9c3d51dc060cdb2f398086a7530b279bcc2b0d",
+      "subsystem": "runtime"
+    },
+    {
       "bytes": 5766,
       "code_lines": {
         "fallback": 0,
@@ -1282,23 +1343,6 @@
       "role": "scientific",
       "sha256": "8cb46c1db6dafa0eeab516daef4b84ba29073ec61437d3f3ae744d566c12865d",
       "subsystem": "one_electron_derivatives"
-    },
-    {
-      "bytes": 12676,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 228,
-        "scientific": 0
-      },
-      "path": "src/scf/cuda/one_electron_integrals.cuh",
-      "physical_lines": 239,
-      "reason": "One-electron source setup, metadata staging, launch choice and host publication.",
-      "regions": [],
-      "role": "runtime",
-      "sha256": "37ee40737ebdce9a6400e1937f671e524b1ab9e1aee00075f8110d207abfbab1",
-      "subsystem": "runtime"
     },
     {
       "bytes": 2296,
@@ -1646,22 +1690,22 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 699644,
+      "bytes": 683109,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 5571,
+        "runtime": 5249,
         "scientific": 6367
       },
       "path": "src/scf/cuda_rhf.cu",
-      "physical_lines": 13172,
+      "physical_lines": 12837,
       "reason": "Remaining device recurrences, physical screening bounds and method contractions are conservatively scientific; explicit regions separate generic runtime.",
       "regions": [
         {
-          "code_lines": 362,
+          "code_lines": 346,
           "first_line": 1,
-          "last_line": 427,
+          "last_line": 409,
           "reason": "Includes, task metadata, scalar arithmetic/AD, stable special functions and generic geometry/packing helpers.",
           "role": "runtime",
           "start": "#include <cublas_v2.h>",
@@ -1669,8 +1713,8 @@
         },
         {
           "code_lines": 38,
-          "first_line": 489,
-          "last_line": 536,
+          "first_line": 471,
+          "last_line": 518,
           "reason": "Angular/task indexing and public-layout helpers.",
           "role": "runtime",
           "start": "__device__ unsigned angular_axis(",
@@ -1678,8 +1722,8 @@
         },
         {
           "code_lines": 9,
-          "first_line": 5474,
-          "last_line": 5493,
+          "first_line": 5456,
+          "last_line": 5475,
           "reason": "Generic atomic maximum implementation.",
           "role": "runtime",
           "start": "__device__ void atomic_max_double",
@@ -1687,8 +1731,8 @@
         },
         {
           "code_lines": 64,
-          "first_line": 5738,
-          "last_line": 5805,
+          "first_line": 5720,
+          "last_line": 5787,
           "reason": "Generic tuple permutations and duplicate suppression.",
           "role": "runtime",
           "start": "__device__ void eri_symmetry_permutation",
@@ -1696,8 +1740,8 @@
         },
         {
           "code_lines": 51,
-          "first_line": 5545,
-          "last_line": 5596,
+          "first_line": 5527,
+          "last_line": 5578,
           "reason": "Host sequencing of resident-bra grouping, scans and materialization; device kernels have separate owners.",
           "role": "runtime",
           "start": "cudaError_t prepare_ppps_resident_tasks(",
@@ -1705,8 +1749,8 @@
         },
         {
           "code_lines": 18,
-          "first_line": 6035,
-          "last_line": 6054,
+          "first_line": 6017,
+          "last_line": 6036,
           "reason": "Component-index mapping.",
           "role": "runtime",
           "start": "__device__ __forceinline__ unsigned order2_component_index",
@@ -1714,8 +1758,8 @@
         },
         {
           "code_lines": 104,
-          "first_line": 6183,
-          "last_line": 6299,
+          "first_line": 6165,
+          "last_line": 6281,
           "reason": "Queue/launch wrappers around separately owned scientific contractions.",
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
@@ -1723,17 +1767,17 @@
         },
         {
           "code_lines": 164,
-          "first_line": 7808,
-          "last_line": 8007,
+          "first_line": 7790,
+          "last_line": 7989,
           "reason": "Persistent force task wrappers; primitive/equation contractions are separate above.",
           "role": "runtime",
           "start": "__global__ void two_electron_force_quartet_kernel",
           "stop": "cudaError_t prepare_generated_shell_tasks("
         },
         {
-          "code_lines": 4761,
-          "first_line": 8008,
-          "last_line": 13172,
+          "code_lines": 4455,
+          "first_line": 7990,
+          "last_line": 12837,
           "reason": "Host resource planning, library/state/graph execution and ABI dispatch; numerical device equations are classified above.",
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
@@ -1741,7 +1785,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "08655c99398af4ffcee46101862d8b5aa4dd0eb60091f31592d9ae3376723038",
+      "sha256": "9b209433992a520f712765d1d757e04f82e18e36d5b536d301ad8aaa114c6437",
       "subsystem": "direct_integrals"
     },
     {
@@ -1921,8 +1965,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 122,
-    "runtime": 12971,
-    "scientific": 9034
+    "runtime": 12510,
+    "scientific": 8664
   },
   "migration_ledger": {
     "ao_grid": {
@@ -2031,7 +2075,7 @@
       "status": "retained"
     },
     "scf_tensor": {
-      "current_default": "native RHF/UHF/DF density, J/K, energy and force contractions",
+      "current_default": "native RHF/UHF/DF density, J/K, energy and force contractions; direct J/K host adapters in cuda/direct_jk.cpp remain native after leaving the CUDA-only source census",
       "evidence": [
         "docs/architecture.md"
       ],
@@ -2081,7 +2125,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 7188,
+      "runtime": 6866,
       "scientific": 6997
     },
     "low_rank": {
@@ -2109,15 +2153,15 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 2990,
+      "runtime": 2824,
       "scientific": 0
     },
     "scf_tensor": {
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 1884,
-      "scientific": 782
+      "runtime": 1911,
+      "scientific": 412
     },
     "xc": {
       "fallback": 0,

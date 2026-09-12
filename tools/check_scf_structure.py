@@ -200,6 +200,43 @@ CUDA_ALLOWED["cuda_direct_queues"] = tuple(
     "scf/cuda/packed_basis.",
     "scf/cuda/device_timer.",
 )
+# Provider host APIs own staging and lifetime while borrowing kernel launches.
+# A retained recurrence fragment must not enter a host implementation.
+CUDA_MODULES["cuda_direct_provider_host"] = ("direct_jk", "direct_jk_plan")
+CUDA_ALLOWED["cuda_direct_provider_host"] = (
+    "scf/cuda/direct_jk.",
+    "scf/cuda/direct_jk_plan.",
+    "scf/cuda/direct_jk_kernels.hpp",
+    "scf/cuda/packed_basis.",
+    "scf/cuda/checked_layout.",
+    "scf/cuda/metadata_upload.",
+    "scf/cuda/topology.",
+    "scf/cuda_direct_jk.hpp",
+    "runtime/",
+)
+CUDA_MODULES["cuda_one_electron_export"] = (
+    "one_electron_export",
+    "one_electron_export_batch",
+    "one_electron_view",
+)
+CUDA_ALLOWED["cuda_one_electron_export"] = tuple(
+    "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_one_electron_export"]
+) + (
+    "scf/cuda/one_electron_export_kernels.hpp",
+    "scf/cuda/one_electron_values.cuh",
+    "scf/cuda/packed_basis.",
+    "scf/cuda/rhf_policy.hpp",
+    "scf/cuda/runtime_support.",
+    "scf/cuda/topology.",
+    "scf/cuda_density_fitting_integrals.hpp",
+    "molecule/basis.hpp",
+    "runtime/",
+)
+CUDA_MODULES["cuda_provider_kernel_interfaces"] = (
+    "direct_jk_kernels",
+    "one_electron_export_kernels",
+)
+CUDA_ALLOWED["cuda_provider_kernel_interfaces"] = ("scf/cuda/packed_basis.",)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 

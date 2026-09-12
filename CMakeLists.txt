@@ -311,6 +311,10 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/direct_jk.cpp
+    src/scf/cuda/one_electron_view.cpp
+    src/scf/cuda/one_electron_export.cpp
+    src/scf/cuda/one_electron_export_batch.cpp
     src/scf/cuda/direct_tile_validation.cu
     src/scf/cuda/direct_density_bounds.cu
     src/scf/cuda/direct_tile_compaction.cu

@@ -5,9 +5,9 @@ control and stationary force assembly now have explicit interfaces in
 `src/scf/reference/`, `src/scf/initial_guess/`, `src/scf/solver/` and
 `src/scf/gradient/`.
 They retain the original loop order, occupation factors, Jacobi thresholds,
-overlap rejection threshold, and UHF frontier-rotation policy. This extraction
-does not complete #240: CUDA/DF legacy orchestration, provider planning and
-CUDA gradient/finalization still require the remaining moves below.
+overlap rejection threshold, and UHF frontier-rotation policy. Issue #240
+remains open for direct scientific/force kernels, fused bounded consumers,
+host graph/bucket control and the final production build/runtime gates below.
 
 ## Responsibility inventory
 
@@ -28,7 +28,7 @@ and `cuda_ownership_current.json`, under #231.
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Move by the existing #231 scientific ownership regions; do not copy formulas or turn the independent oracle into generated production arithmetic. |
 | `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host partitioning and page ranges use `cuda/queue_plan.*`. Device validation, density bounds, compaction, generated/resident tasks, bounded pages, scans and diagnostics now have separate `cuda/direct_*` owners. Fused native bounded consumers and host launch sequencing remain pending. |
 | `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution lives in `cuda/eigensolver.cpp` / `eigensolver_kernels.cu`. Shared matrix, density, DIIS, convergence and state kernels now have separate `cuda/scf_*_kernels.*` owners; public/direct basis transforms use `basis_transform_kernels.*`. Scientific integral/Fock kernels and host bucket control remain pending. |
-| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Packed/POD contracts and host topology/arena planning already have separate owners. DF source/export uses `cuda/df_source*` / `df_integral_export*`. Stream/graph/arena lifetime now lives in `cuda/resources.*`, with borrowed matrix-library execution in `matrix_library.*`. Graph construction and bucket dispatch remain pending. |
+| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Packed/POD contracts and host topology/arena planning already have separate owners. DF source/export uses `cuda/df_source*` / `df_integral_export*`. Stream/graph/arena lifetime uses `cuda/resources.*`; matrix-library execution borrows `matrix_library.*`. Direct J/K host ownership uses `direct_jk.cpp` / `direct_jk_plan.hpp`; one-electron host exports use `one_electron_export*.cpp`. Graph construction and bucket dispatch remain pending. |
 | Former `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Extracted to `cuda/df_plan*`, `df_setup_internal.hpp`, `df_runtime.*` and `df_metric_kernels.*`. The public handle remains opaque; source transfer and retained metric factors keep their single owner. |
 | Former `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Extracted to `cuda/df_coulomb.cpp`, `df_exchange.cpp`, `df_jk*`. Resident, host-backed and source-backed execution retain the same provider semantics and memory sub-budget. |
 | Former `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The adapter now lives in `cuda/df_force_response.cpp`. The #205 source-backed response borrows device factors through `df_response_weights.*` / `df_gradient_bridge.*`; the host-value compatibility adapter retains its CPU metric path. |
@@ -515,3 +515,71 @@ Ninja rebuilds take 1.751 and 1.606 seconds. Neither rebuild invokes the
 compiler for `cuda_rhf.cu` or an unrelated CUDA owner. Both probes restore and
 rebuild the exact source; the dependency scope is distinct from the uncached
 compiler-work samples above.
+
+
+## Direct provider host APIs and one-electron export
+
+The direct public-AO provider now owns its lifecycle, bounded metadata/scratch
+allocation, input validation, host uploads/downloads and item/batch APIs in
+`cuda/direct_jk.cpp`, with the opaque plan layout in `direct_jk_plan.hpp`.
+Its destructor preserves device selection, stream drain, allocation release
+and stream destruction in their original order. Download fences still protect
+local output buffers during exceptions; failed uploads retain the outer guard's
+stream fence before caller-owned pageable memory can expire.
+
+The three direct consumer kernels use `direct_jk_kernels.hpp` launch contracts.
+They remain a 151-line fragment of the retained contracted-ERI owner, with no
+recurrence duplication. Host input/specification checks and provider semantics
+remain native after moving out of the CUDA-only inventory; the SCF migration
+ledger records that fact explicitly. No scientific retirement is claimed from
+the change in file extension or the reduced CUDA-source count.
+
+Single-system and homogeneous-batch one-electron exports compile separately in
+`one_electron_export.cpp` and `one_electron_export_batch.cpp`. They preserve
+Cartesian staging, open-shell acceptance, coordinate offsets, optional response
+outputs and release/error routing. The generated value route and retained Dual
+response/nuclear kernels are unchanged. `one_electron_view.*` constructs only
+a borrowed normalized-metadata view; it does not own positions or allocations.
+Host implementations cannot import recurrence fragments or SCF resource owners,
+and consumer interfaces cannot acquire the direct provider plan.
+
+An audit against `bd1c614` checks the entire direct J/K host implementation,
+plan fields and destructor, three unchanged kernel bodies, five launch wrappers,
+five one-electron bodies and the complete remaining CUDA implementation.
+The direct CUDA source decreases from 13,172 to 12,837 lines, and the former
+500-line direct J/K and 239-line one-electron include fragments no longer carry
+host orchestration into that translation unit. The largest new C++ owner is
+393 lines. Direct recurrence/force ownership, graph/bucket control and full
+production acceptance remain open under #240.
+
+These ccache-disabled compiler samples use NVCC 12.9 sm_120 development
+fast-compile mode and GCC 11.4 Release, a warm filesystem cache, and separate
+parent/candidate worktrees with different absolute paths on a shared machine.
+They do not measure production cold builds, device linking or molecular runtime.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 33.066 | 8,041,040 |
+| extracted_cuda_rhf | 31.383 | 7,910,992 |
+| direct_jk | 1.524 | 80,640 |
+| one_electron_view | 0.078 | 1,424 |
+| one_electron_export | 1.582 | 51,248 |
+| one_electron_export_batch | 1.713 | 57,128 |
+
+Aggregate compiler work changes from 33.066 to 36.280
+seconds; aggregate object bytes change from 8,041,040 to
+8,101,432. These figures establish the compilation
+tradeoff of the extraction; full #240 build acceptance remains separate.
+
+Validation passed 396 source/structure/ownership/publication checks, with
+48 optional compiler probes skipped. The formatted CUDA build, hooks and
+complete body/layout/launch audit pass. Four native GPU tests and 138 Python
+GPU tests passed with no skips through Slurm on the RTX 5090, covering direct
+and DF providers, fixed-density response, complete HF derivatives, resource
+budgets, failed-item isolation and checkpoint/geometry replay.
+
+Implementation-only comment edits to `direct_jk.cpp` and
+`one_electron_export_batch.cpp` each rebuild only that C++ owner and the
+source-identity object before relinking. The ordinary cache-enabled Ninja
+rebuilds take 1.610 and 1.597 seconds. Neither probe invokes
+CUDA compilation. Each probe restores and rebuilds the exact validated source.

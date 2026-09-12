@@ -128,3 +128,34 @@ def test_direct_queue_owners_cannot_acquire_plan_or_integral_state(
     (source / dependency).write_text("// Separately owned plan or scientific code\n")
     (source / owner).write_text(f'#include "{dependency}"\n')
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner",
+    ["direct_jk.cpp", "one_electron_export.cpp", "one_electron_export_batch.cpp"],
+)
+@pytest.mark.parametrize(
+    "dependency",
+    ["direct_jk_kernels.cuh", "one_electron_reference.cuh", "resources.hpp"],
+)
+def test_provider_host_owners_cannot_import_recurrences_or_scf_lifetime(
+    tmp_path, owner, dependency
+):
+    """Provider host rebuilds borrow launches instead of device implementations."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / dependency).write_text("// Separate recurrence or SCF owner\n")
+    (source / owner).write_text(f'#include "{dependency}"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner", ["direct_jk_kernels.cuh", "one_electron_export_kernels.hpp"]
+)
+def test_provider_kernel_interfaces_cannot_acquire_plan_state(tmp_path, owner):
+    """A consumer interface must remain usable without host plan allocations."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "direct_jk_plan.hpp").write_text("// Host allocation owner\n")
+    (source / owner).write_text('#include "direct_jk_plan.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1

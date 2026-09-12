@@ -168,13 +168,6 @@
       "subsystem": "df_derivatives"
     },
     {
-      "path": "src/scf/cuda/direct_jk.cuh",
-      "reason": "Direct J/K consumer contractions and bounded bridge; counted conservatively with local runtime checks.",
-      "regions": [],
-      "role": "scientific",
-      "subsystem": "scf_tensor"
-    },
-    {
       "path": "src/scf/cuda/one_electron_derivatives.cu",
       "reason": "Operator-specific derivative contraction/scheduling glue around generated primitives.",
       "regions": [],
@@ -201,13 +194,6 @@
       "regions": [],
       "role": "scientific",
       "subsystem": "one_electron_derivatives"
-    },
-    {
-      "path": "src/scf/cuda/one_electron_integrals.cuh",
-      "reason": "One-electron source setup, metadata staging, launch choice and host publication.",
-      "regions": [],
-      "role": "runtime",
-      "subsystem": "runtime"
     },
     {
       "path": "src/scf/cuda/one_electron_reference.cuh",
@@ -800,6 +786,41 @@
       "regions": [],
       "role": "runtime",
       "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/direct_jk_plan.hpp",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Opaque direct J/K provider allocation layout; owns no integral equations.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/direct_jk_kernels.cuh",
+      "role": "scientific",
+      "subsystem": "scf_tensor",
+      "reason": "Retained direct public-AO J/K and fixed-density derivative contractions; recurrence definitions retain their existing owner.",
+      "regions": [
+        {
+          "start": "namespace cuda_execution {",
+          "stop": null,
+          "role": "runtime",
+          "reason": "Host launch forwarding; no scientific arithmetic."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/direct_jk_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Borrowed direct J/K kernel ABI and shared reduction width.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/one_electron_export_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Borrowed retained-response and nuclear launch ABI; no new operator formula.",
+      "regions": []
     }
   ],
   "generated_families": [
@@ -1004,7 +1025,7 @@
       "status": "retained"
     },
     "scf_tensor": {
-      "current_default": "native RHF/UHF/DF density, J/K, energy and force contractions",
+      "current_default": "native RHF/UHF/DF density, J/K, energy and force contractions; direct J/K host adapters in cuda/direct_jk.cpp remain native after leaving the CUDA-only source census",
       "evidence": [
         "docs/architecture.md"
       ],
