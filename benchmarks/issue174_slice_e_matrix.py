@@ -1,0 +1,844 @@
+"""Measure the #174 slice-E acceptance matrix inside one Slurm allocation.
+
+Slice E asks for an end-to-end error/cost ablation, not an isolated kernel
+speedup. This harness therefore measures *complete solves* under identical
+numerical controls, at several convergence tolerances, for the two public
+precision policies, and reports the actual observable error against a
+separately computed, tighter FP64 reference.
+
+Design constraints taken from the issue:
+
+* Every tolerance is measured for both ``fp64`` and ``auto`` at the *same*
+  density/screening settings, so the precision effect is isolated.
+* Actual error is measured against a stricter FP64 reference, never against a
+  same-tolerance FP64 solve.
+* Five interleaved samples per configuration, with the accuracy-requesting
+  order alternated so one policy does not systematically see a colder state.
+* Cold, same-geometry warm and changed-geometry warm states are separate
+  recorded kinds; a failed or unconverged run is retained in the report rather
+  than dropped.
+* Per-item provenance comes from the public getters, so a run that fell back to
+  FP64 is reported as such instead of being assumed mixed.
+* The large topology case is bounded-streaming and needs an explicit flag: it
+  has no exact device tile arena, which is exactly the domain boundary this
+  slice has to expose rather than hide.
+
+No Python GPU package is required. When ``cupy`` is importable it is used, and
+otherwise a small ctypes facade over ``libcudart``/``libcuda`` supplies the same
+synchronization and device-property surface, so the recorded accelerator fields
+stay real values rather than placeholders.
+
+The harness only *measures*. It selects no policy, promotes nothing, and
+records its own limitations.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import sys
+import time
+import types
+from pathlib import Path
+from statistics import median
+from typing import Any
+
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    # Direct ``python benchmarks/...`` execution otherwise exposes only the
+    # benchmarks directory, not its namespace-package parent.
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
+DEFAULT_TOLERANCES = (1.0e-9, 1.0e-7, 1.0e-6, 1.0e-5)
+DEFAULT_CASES = (
+    "water-tetramer-def2-svp-spherical",
+    "water-octamer-s4-def2-svp-spherical",
+)
+LARGE_CASES = ("water-hexadecamer-2s4-def2-svp-spherical",)
+BOUNDED_STREAMING_CASES = ("water-32mer-4s4-def2-svp-spherical",)
+MODES = ("fp64", "auto")
+
+# CUDA driver attributes used to describe the device without cupy. The numeric
+# values are the stable CUDA_DEVICE_ATTRIBUTE_* enumerators from cuda.h.
+_CU_DEVICE_ATTRIBUTE_CLOCK_RATE = 13
+_CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT = 16
+_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75
+_CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76
+
+
+class _CudaRuntimeFacade:
+    """The ``cupy.cuda.runtime`` subset this harness and its helpers use."""
+
+    def __init__(self) -> None:
+        self._cudart = ctypes.CDLL("libcudart.so")
+        self._driver = ctypes.CDLL("libcuda.so.1")
+        self._bind()
+        self._check(self._driver.cuInit(0), "cuInit")
+
+    def _bind(self) -> None:
+        """Declare pointer and size types before any call is possible."""
+
+        integer = ctypes.POINTER(ctypes.c_int)
+        driver = self._driver
+        driver.cuInit.argtypes = [ctypes.c_uint]
+        driver.cuInit.restype = ctypes.c_int
+        driver.cuDeviceGet.argtypes = [integer, ctypes.c_int]
+        driver.cuDeviceGet.restype = ctypes.c_int
+        driver.cuDeviceGetName.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+        driver.cuDeviceGetName.restype = ctypes.c_int
+        driver.cuDeviceGetAttribute.argtypes = [integer, ctypes.c_int, ctypes.c_int]
+        driver.cuDeviceGetAttribute.restype = ctypes.c_int
+        driver.cuDeviceTotalMem_v2.argtypes = [
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_int,
+        ]
+        driver.cuDeviceTotalMem_v2.restype = ctypes.c_int
+        driver.cuDriverGetVersion.argtypes = [integer]
+        driver.cuDriverGetVersion.restype = ctypes.c_int
+        cudart = self._cudart
+        cudart.cudaGetDevice.argtypes = [integer]
+        cudart.cudaGetDevice.restype = ctypes.c_int
+        cudart.cudaRuntimeGetVersion.argtypes = [integer]
+        cudart.cudaRuntimeGetVersion.restype = ctypes.c_int
+        cudart.cudaDeviceSynchronize.argtypes = []
+        cudart.cudaDeviceSynchronize.restype = ctypes.c_int
+
+    @staticmethod
+    def _check(status: int, name: str) -> None:
+        """Fail loudly instead of reporting placeholder device fields."""
+
+        if status != 0:
+            raise RuntimeError(f"{name} failed with CUDA error {status}")
+
+    def _device_handle(self, device_id: int) -> int:
+        """Resolve one visible device ordinal into a driver handle."""
+
+        handle = ctypes.c_int()
+        self._check(
+            self._driver.cuDeviceGet(ctypes.byref(handle), device_id), "cuDeviceGet"
+        )
+        return handle.value
+
+    def _attribute(self, handle: int, attribute: int) -> int:
+        value = ctypes.c_int()
+        self._check(
+            self._driver.cuDeviceGetAttribute(ctypes.byref(value), attribute, handle),
+            f"cuDeviceGetAttribute({attribute})",
+        )
+        return value.value
+
+    def current_device(self) -> int:
+        """Return the ordinal of the device this process is bound to."""
+
+        device = ctypes.c_int()
+        self._check(self._cudart.cudaGetDevice(ctypes.byref(device)), "cudaGetDevice")
+        return device.value
+
+    def getDeviceProperties(self, device_id: int) -> dict[str, Any]:
+        """Return the fields ``benchmarks._support`` reads from cupy."""
+
+        handle = self._device_handle(device_id)
+        name = ctypes.create_string_buffer(256)
+        self._check(
+            self._driver.cuDeviceGetName(name, len(name), handle), "cuDeviceGetName"
+        )
+        total_memory = ctypes.c_size_t()
+        self._check(
+            self._driver.cuDeviceTotalMem_v2(ctypes.byref(total_memory), handle),
+            "cuDeviceTotalMem",
+        )
+        return {
+            "name": name.value,
+            "major": self._attribute(
+                handle, _CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR
+            ),
+            "minor": self._attribute(
+                handle, _CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR
+            ),
+            "totalGlobalMem": total_memory.value,
+            "multiProcessorCount": self._attribute(
+                handle, _CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
+            ),
+            "clockRate": self._attribute(handle, _CU_DEVICE_ATTRIBUTE_CLOCK_RATE),
+        }
+
+    def driverGetVersion(self) -> int:
+        version = ctypes.c_int()
+        self._check(
+            self._driver.cuDriverGetVersion(ctypes.byref(version)), "cuDriverGetVersion"
+        )
+        return version.value
+
+    def runtimeGetVersion(self) -> int:
+        version = ctypes.c_int()
+        self._check(
+            self._cudart.cudaRuntimeGetVersion(ctypes.byref(version)),
+            "cudaRuntimeGetVersion",
+        )
+        return version.value
+
+    def deviceSynchronize(self) -> None:
+        """Block until all outstanding device work is complete."""
+
+        self._check(self._cudart.cudaDeviceSynchronize(), "cudaDeviceSynchronize")
+
+
+class _CudaFacade:
+    """A ``cupy``-shaped facade so the repository helpers stay reusable."""
+
+    def __init__(self) -> None:
+        runtime = _CudaRuntimeFacade()
+
+        def device() -> types.SimpleNamespace:
+            return types.SimpleNamespace(id=runtime.current_device())
+
+        def synchronize() -> None:
+            runtime.deviceSynchronize()
+
+        self.cuda = types.SimpleNamespace(
+            Device=device,
+            runtime=runtime,
+            Stream=types.SimpleNamespace(
+                null=types.SimpleNamespace(synchronize=synchronize)
+            ),
+        )
+
+
+def _device_backend():
+    """Return ``(module, name)`` for device metadata and synchronization."""
+
+    try:
+        import cupy
+
+        return cupy, "cupy"
+    except ModuleNotFoundError:
+        return _CudaFacade(), "ctypes-cuda-runtime"
+
+
+def _synchronize(backend) -> None:
+    """Block on the default stream of the active device backend."""
+
+    backend.cuda.Stream.null.synchronize()
+
+
+def _displaced_atoms(atoms, displacement_bohr: float):
+    """Move the last nucleus along +x to build a changed-geometry warm start.
+
+    A single deterministic displacement keeps the model identity difference
+    explicit: the geometry hash changes while basis, charge and multiplicity do
+    not, so a warm density carried across this pair exercises the geometry
+    revalidation path instead of a same-geometry replay.
+    """
+    moved = [list(entry) for entry in atoms]
+    element, position = moved[-1]
+    moved[-1] = [element, (position[0] + displacement_bohr, position[1], position[2])]
+    return tuple((entry[0], tuple(entry[1])) for entry in moved)
+
+
+def _calculator(
+    case,
+    arguments,
+    *,
+    precision: str,
+    energy_tolerance: float,
+    density_tolerance: float | None = None,
+    screening_tolerance: float | None = None,
+    max_iterations: int | None = None,
+):
+    """Construct one calculator with the controls fixed for this matrix."""
+
+    from vibeqc import Calculator
+
+    return Calculator(
+        method=case.method,
+        basis=case.vibeqc_basis,
+        basis_representation=case.basis_representation,
+        device="cuda",
+        max_iterations=(
+            arguments.max_iterations if max_iterations is None else max_iterations
+        ),
+        energy_tolerance=energy_tolerance,
+        density_tolerance=(
+            arguments.density_tolerance
+            if density_tolerance is None
+            else density_tolerance
+        ),
+        screening_tolerance=(
+            arguments.screening_tolerance
+            if screening_tolerance is None
+            else screening_tolerance
+        ),
+        precision=precision,
+    )
+
+
+def _force_max_abs(result) -> float | None:
+    """Return the maximum absolute Cartesian force component, if evaluated."""
+
+    if result.forces is None:
+        return None
+    return float(abs(result.forces).max()) if result.forces.size else None
+
+
+def _strict_reference(case, arguments, atoms, properties, backend) -> dict[str, Any]:
+    """Compute the tighter FP64 reference the relaxed runs are compared to."""
+
+    calculator = _calculator(
+        case,
+        arguments,
+        precision="fp64",
+        energy_tolerance=arguments.reference_energy_tolerance,
+        density_tolerance=arguments.reference_density_tolerance,
+        screening_tolerance=arguments.reference_screening_tolerance,
+        max_iterations=arguments.reference_max_iterations,
+    )
+    started = time.perf_counter()
+    result = calculator.singlepoint(
+        atoms,
+        charge=case.charge,
+        multiplicity=case.multiplicity,
+        properties=properties,
+    )
+    _synchronize(backend)
+    wall = time.perf_counter() - started
+    return {
+        "result": result,
+        "model": calculator.resolved_model(
+            atoms, charge=case.charge, multiplicity=case.multiplicity
+        ),
+        "record": {
+            "converged": result.converged,
+            "iterations": result.iterations,
+            "energy": result.energy,
+            "force_max_abs": _force_max_abs(result),
+            "wall_seconds": wall,
+            "precision": result.precision,
+            "controls": {
+                "energy_tolerance": arguments.reference_energy_tolerance,
+                "density_tolerance": arguments.reference_density_tolerance,
+                "screening_tolerance": arguments.reference_screening_tolerance,
+                "max_iterations": arguments.reference_max_iterations,
+            },
+        },
+    }
+
+
+def _accuracy_target(arguments, tolerance: float):
+    """Build the observable requirements for the requested properties."""
+
+    from vibeqc import ObservableTarget, TargetAccuracy
+
+    observables = [ObservableTarget("energy", "absolute", "Eh", absolute=tolerance)]
+    if "forces" in arguments.properties:
+        observables.append(
+            ObservableTarget(
+                "forces", "max_abs", "Eh/bohr", absolute=arguments.force_target
+            )
+        )
+    return TargetAccuracy(tuple(observables))
+
+
+def _evidence(model, values, reference_values, target, converged):
+    """Build the repository's own observable-error evidence record."""
+
+    if target is None or not converged:
+        return None
+    from vibeqc import compare_observables
+
+    return compare_observables(
+        model,
+        model,
+        model,
+        target,
+        values,
+        reference_values,
+        scope="relaxed_target",
+        provenance=(("reference", "independent-strict-fp64-solve"),),
+        converged=converged,
+    ).to_dict()
+
+
+def _error_columns(result, reference) -> dict[str, Any]:
+    """Report raw observable differences next to the typed evidence record."""
+
+    columns: dict[str, Any] = {
+        "energy_absolute_error": None,
+        "force_max_abs_error": None,
+    }
+    if reference is None or not reference["result"].converged:
+        return columns
+    reference_result = reference["result"]
+    columns["energy_absolute_error"] = abs(result.energy - reference_result.energy)
+    if result.forces is not None and reference_result.forces is not None:
+        columns["force_max_abs_error"] = float(
+            abs(result.forces - reference_result.forces).max()
+        )
+    return columns
+
+
+def _tolerance_matrix(case_name, case, atoms_base, atoms_moved, arguments, backend):
+    """Run the tolerance sweep for both policies over one case."""
+
+    references = {
+        label: _strict_reference(
+            case, arguments, atoms, properties=arguments.properties, backend=backend
+        )
+        for label, atoms in (("base", atoms_base), ("moved", atoms_moved))
+    }
+    records: list[dict[str, Any]] = []
+    # A fixed three-step plan per cycle yields a cold start, a same-geometry
+    # warm start and a changed-geometry warm start without inventing extra
+    # states; cycles after the first therefore begin on the moved geometry.
+    plan = (("base", atoms_base), ("base", atoms_base), ("moved", atoms_moved))
+    for tolerance in arguments.tolerances:
+        target = _accuracy_target(arguments, tolerance)
+        calculators = {
+            mode: _calculator(
+                case, arguments, precision=mode, energy_tolerance=tolerance
+            )
+            for mode in arguments.modes
+        }
+        previous_label = {mode: None for mode in arguments.modes}
+        seen_any = {mode: False for mode in arguments.modes}
+        for cycle in range(arguments.repeats):
+            for step, (label, atoms) in enumerate(plan):
+                # Alternate which policy runs first so neither systematically
+                # inherits a colder or warmer state than the other.
+                ordered = (
+                    arguments.modes
+                    if (cycle + step) % 2 == 0
+                    else tuple(reversed(arguments.modes))
+                )
+                for order, mode in enumerate(ordered):
+                    kind = "cold"
+                    if seen_any[mode]:
+                        kind = (
+                            "warm_same_geometry"
+                            if previous_label[mode] == label
+                            else "warm_changed_geometry"
+                        )
+                    seen_any[mode] = True
+                    reference = references[label]
+                    record: dict[str, Any] = {
+                        "case": case_name,
+                        "tolerance": tolerance,
+                        "mode": mode,
+                        "geometry": label,
+                        "kind": kind,
+                        "cycle": cycle,
+                        "step": step,
+                        "order": order,
+                    }
+                    try:
+                        _synchronize(backend)
+                        started = time.perf_counter()
+                        result = calculators[mode].singlepoint(
+                            atoms,
+                            charge=case.charge,
+                            multiplicity=case.multiplicity,
+                            properties=arguments.properties,
+                        )
+                        _synchronize(backend)
+                        record["wall_seconds"] = time.perf_counter() - started
+                        record.update(
+                            {
+                                "converged": result.converged,
+                                "iterations": result.iterations,
+                                "energy": result.energy,
+                                "energy_change": result.energy_change,
+                                "density_rms": result.density_rms,
+                                "force_max_abs": _force_max_abs(result),
+                                "precision": result.precision,
+                                "executed_backend": result.executed_backend,
+                            }
+                        )
+                        record.update(_error_columns(result, reference))
+                        if result.converged and reference["result"].converged:
+                            values = {"energy": result.energy}
+                            reference_values = {"energy": reference["result"].energy}
+                            if result.forces is not None:
+                                values["forces"] = result.forces
+                                reference_values["forces"] = reference["result"].forces
+                            record["accuracy"] = _evidence(
+                                reference["model"],
+                                values,
+                                reference_values,
+                                target,
+                                True,
+                            )
+                    except Exception as error:  # noqa: BLE001 - retained in report
+                        record["failure"] = f"{type(error).__name__}: {error}"
+                    previous_label[mode] = label
+                    records.append(record)
+    return records, references
+
+
+def _batch_matrix(
+    case_name, case, atoms_base, atoms_moved, references, arguments, backend
+):
+    """Measure complete ragged batch solves, including per-item provenance."""
+
+    systems = (atoms_base, atoms_moved, atoms_base, atoms_moved)
+    expected = [
+        (references[label]["result"].energy, references[label]["result"].forces)
+        for label in ("base", "moved", "base", "moved")
+    ]
+    records: list[dict[str, Any]] = []
+    for tolerance in arguments.tolerances:
+        for mode in arguments.modes:
+            for sample in range(arguments.repeats):
+                record: dict[str, Any] = {
+                    "case": case_name,
+                    "tolerance": tolerance,
+                    "mode": mode,
+                    "sample": sample,
+                    "batch_size": len(systems),
+                }
+                try:
+                    calculator = _calculator(
+                        case, arguments, precision=mode, energy_tolerance=tolerance
+                    )
+                    _synchronize(backend)
+                    started = time.perf_counter()
+                    batch = calculator.prepare_batch(
+                        [atoms for atoms in systems],
+                        charges=[case.charge] * len(systems),
+                        multiplicities=[case.multiplicity] * len(systems),
+                        warm_start=True,
+                    )
+                    record["prepare_wall_seconds"] = time.perf_counter() - started
+                    with batch:
+                        _synchronize(backend)
+                        started = time.perf_counter()
+                        cold = batch.execute(strict=False)
+                        record["cold_execute_wall_seconds"] = _synchronized_seconds(
+                            started, backend
+                        )
+                        started = time.perf_counter()
+                        warm = batch.execute(strict=False)
+                        record["warm_execute_wall_seconds"] = _synchronized_seconds(
+                            started, backend
+                        )
+                        record["cold_items"] = _batch_items(cold, expected)
+                        record["warm_items"] = _batch_items(warm, expected)
+                except Exception as error:  # noqa: BLE001 - retained in report
+                    record["failure"] = f"{type(error).__name__}: {error}"
+                records.append(record)
+    return records
+
+
+def _synchronized_seconds(started: float, backend) -> float:
+    """Finish all outstanding device work before reporting a wall time."""
+
+    _synchronize(backend)
+    return time.perf_counter() - started
+
+
+def _batch_items(result, expected) -> list[dict[str, Any]]:
+    """Describe each input-ordered item, keeping failures in their slot."""
+
+    items = []
+    for item in result.items:
+        record: dict[str, Any] = {
+            "index": item.index,
+            "status": item.status_message,
+            "converged": item.converged,
+            "iterations": item.iterations,
+            "density_rms": item.density_rms,
+            "warm_start_used": item.warm_start_used,
+            "warm_start_fallback": item.warm_start_fallback,
+            "restart_origin": item.restart_origin,
+            "fock_builds": item.fock_builds,
+            "precision": item.precision,
+            "energy": item.energy,
+            "energy_absolute_error": None,
+            "force_max_abs": (
+                None if item.forces is None else float(abs(item.forces).max())
+            ),
+            "force_max_abs_error": None,
+        }
+        if item.index < len(expected):
+            reference_energy, reference_forces = expected[item.index]
+            if item.succeeded and reference_energy is not None:
+                record["energy_absolute_error"] = abs(item.energy - reference_energy)
+                if item.forces is not None and reference_forces is not None:
+                    record["force_max_abs_error"] = float(
+                        abs(item.forces - reference_forces).max()
+                    )
+        items.append(record)
+    return items
+
+
+def _summarize(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate the per-configuration cost, error and policy activation."""
+
+    groups: dict[tuple, list[dict[str, Any]]] = {}
+    for record in records:
+        key = (
+            record.get("case"),
+            record.get("tolerance"),
+            record.get("mode"),
+            record.get("kind"),
+        )
+        groups.setdefault(key, []).append(record)
+    summary = []
+    for (case, tolerance, mode, kind), items in sorted(
+        groups.items(), key=lambda entry: str(entry[0])
+    ):
+        walls = [item["wall_seconds"] for item in items if "wall_seconds" in item]
+        energy_errors = [
+            item["energy_absolute_error"]
+            for item in items
+            if item.get("energy_absolute_error") is not None
+        ]
+        force_errors = [
+            item["force_max_abs_error"]
+            for item in items
+            if item.get("force_max_abs_error") is not None
+        ]
+        precision = [item.get("precision") or {} for item in items]
+        summary.append(
+            {
+                "case": case,
+                "tolerance": tolerance,
+                "mode": mode,
+                "kind": kind,
+                "samples": len(items),
+                "failures": sum(1 for item in items if "failure" in item),
+                "unconverged": sum(
+                    1 for item in items if item.get("converged") is False
+                ),
+                "median_wall_seconds": median(walls) if walls else None,
+                "maximum_energy_absolute_error": (
+                    max(energy_errors) if energy_errors else None
+                ),
+                "maximum_force_max_abs_error": (
+                    max(force_errors) if force_errors else None
+                ),
+                "mixed_activated_samples": sum(
+                    1 for item in precision if item.get("effective_bits") == 32
+                ),
+                "fp64_samples": sum(
+                    1 for item in precision if item.get("effective_bits") == 64
+                ),
+                "strict_refinement_samples": sum(
+                    1 for item in precision if item.get("strict_refinement_applied")
+                ),
+                "maximum_refinement_iterations": max(
+                    (item.get("refinement_iterations") or 0 for item in precision),
+                    default=0,
+                ),
+            }
+        )
+    return summary
+
+
+def _summarize_batch(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate batch cost, per-item error and per-item policy activation."""
+
+    summary = []
+    for record in records:
+        if "failure" in record:
+            summary.append(
+                {
+                    "case": record["case"],
+                    "tolerance": record["tolerance"],
+                    "mode": record["mode"],
+                    "failure": record["failure"],
+                }
+            )
+            continue
+        items = list(record["cold_items"]) + list(record["warm_items"])
+        energy_errors = [
+            item["energy_absolute_error"]
+            for item in items
+            if item["energy_absolute_error"] is not None
+        ]
+        summary.append(
+            {
+                "case": record["case"],
+                "tolerance": record["tolerance"],
+                "mode": record["mode"],
+                "sample": record["sample"],
+                "prepare_wall_seconds": record["prepare_wall_seconds"],
+                "cold_execute_wall_seconds": record["cold_execute_wall_seconds"],
+                "warm_execute_wall_seconds": record["warm_execute_wall_seconds"],
+                "mixed_items": sum(
+                    1
+                    for item in items
+                    if (item["precision"] or {}).get("effective_bits") == 32
+                ),
+                "item_count": len(items),
+                "unconverged_items": sum(1 for item in items if not item["converged"]),
+                "maximum_energy_absolute_error": (
+                    max(energy_errors) if energy_errors else None
+                ),
+            }
+        )
+    return summary
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases", default=",".join(DEFAULT_CASES))
+    parser.add_argument("--include-large", action="store_true")
+    parser.add_argument("--include-bounded-streaming", action="store_true")
+    parser.add_argument(
+        "--tolerances",
+        default=",".join(f"{value:.0e}" for value in DEFAULT_TOLERANCES),
+    )
+    parser.add_argument("--modes", default=",".join(MODES))
+    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--max-iterations", type=int, default=100)
+    parser.add_argument("--reference-max-iterations", type=int, default=200)
+    parser.add_argument("--density-tolerance", type=float, default=1.0e-8)
+    parser.add_argument("--screening-tolerance", type=float, default=1.0e-12)
+    parser.add_argument("--reference-energy-tolerance", type=float, default=1.0e-13)
+    parser.add_argument("--reference-density-tolerance", type=float, default=1.0e-11)
+    parser.add_argument("--reference-screening-tolerance", type=float, default=1.0e-14)
+    parser.add_argument("--force-target", type=float, default=1.0e-6)
+    parser.add_argument("--displacement-bohr", type=float, default=0.05)
+    parser.add_argument("--properties", default="energy,forces")
+    parser.add_argument("--skip-batch", action="store_true")
+    parser.add_argument("--output", type=Path)
+    arguments = parser.parse_args()
+    if arguments.repeats < 1 or arguments.max_iterations < 1:
+        parser.error("--repeats and --max-iterations must be positive")
+    if not os.environ.get("SLURM_JOB_ID"):
+        parser.error("this real-GPU benchmark must run inside a Slurm allocation")
+
+    requested = [name.strip() for name in arguments.cases.split(",") if name.strip()]
+    if arguments.include_large:
+        requested.extend(LARGE_CASES)
+    if arguments.include_bounded_streaming:
+        requested.extend(BOUNDED_STREAMING_CASES)
+    arguments.tolerances = [float(value) for value in arguments.tolerances.split(",")]
+    arguments.modes = tuple(
+        mode.strip() for mode in arguments.modes.split(",") if mode.strip()
+    )
+    unsupported = sorted(set(arguments.modes) - set(MODES))
+    if unsupported:
+        parser.error(f"unsupported precision modes: {unsupported}")
+    arguments.properties = tuple(
+        name.strip() for name in arguments.properties.split(",") if name.strip()
+    )
+    if "energy" not in arguments.properties:
+        parser.error("--properties must include energy")
+    if arguments.reference_energy_tolerance >= min(arguments.tolerances):
+        parser.error(
+            "the FP64 reference must be tighter than every swept energy tolerance"
+        )
+
+    # Device handles are opened only after the Slurm guard above, so a login-node
+    # invocation never initializes the driver outside the scheduler.
+    backend, backend_name = _device_backend()
+
+    from benchmarks._cases import benchmark_cases
+    from benchmarks._support import (
+        cuda_accelerator_metadata,
+        environment_metadata,
+        write_result,
+    )
+
+    available = benchmark_cases()
+    unknown = [name for name in requested if name not in available]
+    if unknown:
+        parser.error(f"unknown benchmark cases: {unknown}")
+
+    matrix: list[dict[str, Any]] = []
+    batches: list[dict[str, Any]] = []
+    references: dict[str, Any] = {}
+    for name in requested:
+        case = available[name]
+        atoms_base = case.atoms
+        atoms_moved = _displaced_atoms(atoms_base, arguments.displacement_bohr)
+        records, case_references = _tolerance_matrix(
+            name, case, atoms_base, atoms_moved, arguments, backend
+        )
+        matrix.extend(records)
+        references[name] = {
+            label: {
+                "model": payload["model"].to_dict(),
+                "record": payload["record"],
+            }
+            for label, payload in case_references.items()
+        }
+        if not arguments.skip_batch:
+            batches.extend(
+                _batch_matrix(
+                    name,
+                    case,
+                    atoms_base,
+                    atoms_moved,
+                    case_references,
+                    arguments,
+                    backend,
+                )
+            )
+
+    payload = {
+        "schema_version": 1,
+        "benchmark": "issue174_slice_e_matrix",
+        "controls": {
+            "cases": requested,
+            "tolerances": arguments.tolerances,
+            "modes": list(arguments.modes),
+            "repeats": arguments.repeats,
+            "max_iterations": arguments.max_iterations,
+            "density_tolerance": arguments.density_tolerance,
+            "screening_tolerance": arguments.screening_tolerance,
+            "force_target": arguments.force_target,
+            "properties": list(arguments.properties),
+            "displacement_bohr": arguments.displacement_bohr,
+        },
+        "references": references,
+        "matrix": matrix,
+        "summary": _summarize(matrix),
+        "batch": {"records": batches, "summary": _summarize_batch(batches)},
+        "environment": {
+            "device_api": backend_name,
+            **environment_metadata(
+                distributions={"numpy": ("numpy",), "cupy": ("cupy-cuda12x", "cupy")},
+                accelerator=cuda_accelerator_metadata(backend),
+            ),
+        },
+        "limitations": [
+            (
+                "The matrix only measures the existing policy: a cold item and "
+                "any item without a validated warm state stays FP64, so a zero "
+                "mixed activation count is a policy result, not a kernel result."
+            ),
+            (
+                "Bounded-streaming topologies have no exact device tile census "
+                "and are refused by the budget-aware policy; the 768-AO case is "
+                "included only to expose that boundary."
+            ),
+            (
+                "density_rms and energy_change are the recorded convergence "
+                "residuals. The independent physical-residual and fixed-density "
+                "operator audits live in tools.vibeqc_numerics.audit and are not "
+                "re-run here."
+            ),
+            (
+                "The single-solve endpoint reports no warm-state flags; the batch "
+                "section carries warm_start_used/warm_start_fallback per item."
+            ),
+            (
+                "Reported wall time is synchronized host time around the public "
+                "call, including preparation, finalization and any strict "
+                "refinement."
+            ),
+        ],
+    }
+    encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if arguments.output is None:
+        print(encoded, end="")
+    else:
+        destination = write_result(arguments.output, payload)
+        print(f"JSON result: {destination}")
+
+
+if __name__ == "__main__":
+    main()
