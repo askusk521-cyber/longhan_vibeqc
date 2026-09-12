@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["metric_density_response_mo", "build_rhf_nuclear_rhs"]
+__all__ = ["build_rhf_nuclear_rhs", "metric_density_response_mo"]
 
 
 def _finite_matrix(values, *, name: str, nmo: int) -> np.ndarray:
@@ -26,7 +26,9 @@ def _finite_matrix(values, *, name: str, nmo: int) -> np.ndarray:
 def _orbital_energies(values, *, nmo: int) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
     if array.shape != (nmo,):
-        raise ValueError(f"orbital_energies must have shape ({nmo},), got {array.shape}")
+        raise ValueError(
+            f"orbital_energies must have shape ({nmo},), got {array.shape}"
+        )
     if not np.isfinite(array).all():
         raise ValueError("orbital_energies must be finite")
     return array

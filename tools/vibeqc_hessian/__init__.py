@@ -19,7 +19,6 @@ conventions are documented in ``docs/hessian.md``.
 """
 
 from .assembly import assemble_frozen_skeleton, validate_hessian_component
-from .response import build_rhf_nuclear_rhs, metric_density_response_mo
 from .numerical import (
     forces_to_gradient,
     hessian_difference,
@@ -27,16 +26,17 @@ from .numerical import (
     hessian_translation_error,
     numerical_hessian,
 )
+from .response import build_rhf_nuclear_rhs, metric_density_response_mo
 from .weights import two_electron_energy, two_electron_weight, weight_energy
 
 __all__ = [
     "assemble_frozen_skeleton",
     "build_rhf_nuclear_rhs",
-    "metric_density_response_mo",
     "forces_to_gradient",
     "hessian_difference",
     "hessian_symmetry_error",
     "hessian_translation_error",
+    "metric_density_response_mo",
     "numerical_hessian",
     "two_electron_energy",
     "two_electron_weight",

@@ -23,8 +23,9 @@ def test_nuclear_rhs_includes_metric_fock_and_overlap_energy_gap_term():
     overlap = np.array([[0.0, 0.7, 0.8], [0.9, 0.0, 0.2], [0.3, 0.4, 0.0]])
     metric = np.array([[0.0, 0.01, 0.02], [0.03, 0.0, 0.04], [0.05, 0.06, 0.0]])
     rhs = build_rhf_nuclear_rhs(frozen, overlap, metric, energies, nocc=1)
-    expected = np.array([[0.3 + 0.03 - 0.5 * (0.2 - 0.7) * 0.7,
-                          0.5 + 0.05 - 0.5 * (0.8 - 0.7) * 0.8]])
+    expected = np.array(
+        [[0.3 + 0.03 - 0.5 * (0.2 - 0.7) * 0.7, 0.5 + 0.05 - 0.5 * (0.8 - 0.7) * 0.8]]
+    )
     np.testing.assert_allclose(rhs, expected, rtol=0, atol=1e-15)
     assert rhs.shape == (1, 2)
 
