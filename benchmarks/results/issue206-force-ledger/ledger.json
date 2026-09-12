@@ -1,0 +1,56 @@
+{
+  "execution": {
+    "cuda_visible_devices": "0",
+    "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+    "python": "/home/lhshen/miniconda3/envs/dftgpu/bin/python",
+    "repeats": 1,
+    "slurm_job_id": "1103",
+    "warning": "fresh single-system calculations; the difference diagnoses force cost and is not a warm-solve speed claim"
+  },
+  "records": [
+    {
+      "case": "water-tetramer-def2-svp-spherical",
+      "energy_only": {
+        "converged": true,
+        "energy_hartree": -304.77295498590104,
+        "has_forces": false,
+        "iterations": 34,
+        "seconds": 0.6324524749070406
+      },
+      "energy_plus_force": {
+        "converged": true,
+        "energy_hartree": -304.77295498590104,
+        "has_forces": true,
+        "iterations": 34,
+        "seconds": 5.278077412396669
+      },
+      "force_increment_seconds": 4.645624937489629,
+      "repeat": 0
+    },
+    {
+      "case": "water-octamer-s4-def2-svp-spherical",
+      "energy_only": {
+        "converged": true,
+        "energy_hartree": -609.5876620703825,
+        "has_forces": false,
+        "iterations": 39,
+        "seconds": 5.345643684267998
+      },
+      "energy_plus_force": {
+        "converged": true,
+        "energy_hartree": -609.5876620703825,
+        "has_forces": true,
+        "iterations": 39,
+        "seconds": 25.806910349056125
+      },
+      "force_increment_seconds": 20.461266664788127,
+      "repeat": 0
+    }
+  ],
+  "schema": "vibeqc.issue206.df_force_ledger",
+  "source": {
+    "git_head": "b69ec53b3f1a83fcf886efd52195991111214698",
+    "repository": "/home/lhshen/vibeqc-issue206-force-probe"
+  },
+  "version": 1
+}
