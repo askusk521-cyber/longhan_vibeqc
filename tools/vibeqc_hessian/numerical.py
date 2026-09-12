@@ -64,6 +64,8 @@ def _as_hessian(values, *, name: str):
         raise ValueError(
             f"{name} must be square in its atom indices, got {array.shape}"
         )
+    if not array.size or not np.isfinite(array).all():
+        raise ValueError(f"{name} must be nonempty and finite")
     return array
 
 
@@ -140,7 +142,9 @@ def _gradient_at(gradient, coordinates, policy: str, expected_shape):
         )
     if not np.isfinite(values).all():
         raise ValueError("gradient callback returned a non-finite value")
-    return values
+    # A callback may return a view of a reusable native work buffer. Snapshot
+    # it before the next evaluation can overwrite the plus-displacement result.
+    return values.copy()
 
 
 def numerical_hessian(
@@ -167,7 +171,7 @@ def numerical_hessian(
         raise ValueError("at least three distinct positive finite step sizes required")
 
     xyz = np.asarray(coordinates, dtype=np.float64)
-    if xyz.ndim != 2 or xyz.shape[1] != 3:
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or xyz.shape[0] == 0:
         raise ValueError(f"coordinates must have shape (natom, 3), got {xyz.shape}")
     if not np.isfinite(xyz).all():
         raise ValueError("coordinates must be finite")

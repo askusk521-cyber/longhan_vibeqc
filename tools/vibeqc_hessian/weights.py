@@ -38,9 +38,9 @@ def two_electron_weight(density):
     """Return ``W_μνλσ = ½ P_μν P_λσ − ¼ P_μλ P_νσ``.
 
     This is the weight the #178 ``weighted_hessian`` consumer expects for the
-    frozen-density two-electron skeleton, and the same folding the
-    first-derivative contraction uses for the two-electron part of the
-    Fock-derivative right-hand side.
+    frozen-density two-electron energy skeleton. A Fock-derivative right-hand
+    side instead contracts one density with a free AO pair; this scalar energy
+    weight must not be substituted for that matrix-valued contraction.
 
     The result is indexed ``W[μ, ν, λ, σ]`` against the chemist-notation
     integral ``(μν|λσ)``.

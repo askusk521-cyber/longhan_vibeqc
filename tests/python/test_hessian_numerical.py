@@ -704,3 +704,33 @@ def test_numerical_hessian_records_an_independent_settings_copy():
     assert report["settings"]["charge"] == 0
     assert report["settings"]["tolerances"] == [1.0e-12, 1.0e-10]
     assert settings["tolerances"] == (1.0e-12, 1.0e-10)
+
+
+def test_numerical_hessian_snapshots_reused_gradient_storage():
+    """A native evaluator's reusable output buffer must not erase differences."""
+    xyz = H2["coordinates"]
+    buffer = np.empty_like(xyz)
+    # The coupled quadratic has a known nonzero, translation-invariant Hessian.
+    coupling = np.diag([2.0, 3.0, 5.0])
+
+    def gradient(coordinates, policy):
+        buffer[0] = coupling @ (coordinates[0] - coordinates[1])
+        buffer[1] = -buffer[0]
+        return buffer
+
+    expected = np.einsum("ab,cd->acbd", [[1, -1], [-1, 1]], coupling)
+    report = numerical_hessian(gradient, xyz, settings={})
+    for sample in report["samples"]:
+        np.testing.assert_allclose(sample["hessian"], expected, atol=1e-11)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_hessian_helpers_reject_non_finite_measurements(value):
+    """Invalid input cannot become a numeric comparison or invariance verdict."""
+    values = np.zeros((2, 3, 2, 3))
+    values[0, 0, 0, 0] = value
+    for helper in (hessian_symmetry_error, hessian_translation_error):
+        with pytest.raises(ValueError, match="finite"):
+            helper(values)
+    with pytest.raises(ValueError, match="finite"):
+        hessian_difference(np.zeros_like(values), values)

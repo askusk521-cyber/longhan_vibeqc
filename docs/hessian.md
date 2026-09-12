@@ -114,7 +114,7 @@ rather than only asserted here.
 | 2 | One-electron skeleton | `Tr[P ∂²h/∂R∂R']` | #178 `build_one_electron_second_ir`, families `overlap`/`kinetic`/`nuclear_attraction`, `weighted_hessian`, provider weight = `P` |
 | 3 | Overlap (Pulay) skeleton | `-Tr[W ∂²S/∂R∂R']` | same provider, `weighted_hessian`, provider weight = `-W` (negated **energy-weighted density**) |
 | 4 | Two-electron skeleton | `Σ_{μνλσ} W2_μνλσ ∂²(μν|λσ)/∂R∂R'` with `W2_μνλσ = ½ P_μν P_λσ - ¼ P_μλ P_νσ` (no further factor; see the derivation above) | #178 `build_eri_second_ir`, `weighted_hessian`, provider weight = `W2` |
-| 5 | Fock-derivative RHS | `b_ai = (∂F/∂R)_ai` at frozen P, occ-virt block, MO basis | caller: one-electron part from #141 raw `∂h/∂R`; two-electron part from #144 weighted ERI first derivative |
+| 5 | Nuclear-perturbation RHS | `b[i,a]` includes the frozen-P Fock derivative, overlap metric connection, and its induced density/Fock response (defined below) | caller: #141 raw `∂h/∂R` and `∂S/∂R`, #144 weighted ERI first derivatives, and the shared J/K backend |
 | 6 | Orbital response | solve `A u = -b` | #179 `RHFResponseOperator` + `solve_many` |
 | 7 | Relaxation contribution | `u` combined with first derivatives of h, S, and the ERIs | caller |
 
@@ -128,6 +128,30 @@ to its callers.
 terms 5–7 are accumulated and reported separately, so a missing contribution
 shows up as an isolated component error instead of a plausible-looking total.
 
+### The moving AO metric in the nuclear RHS
+
+Nuclear displacements change the AO overlap. The frozen-density derivative
+`Cᵀ [h^R + G^R(P)] C` alone is therefore not the CPHF right-hand side.
+One explicit convention compatible with #179 is the symmetric metric gauge:
+write `C^R = C[-½ S_R + X]`, where `S_R = Cᵀ (∂S/∂R) C`,
+`X[a,i] = x[i,a]`, and `X[i,a] = -x[i,a]`. With the MO occupation matrix
+`D = diag(2_occ, 0_virt)`, the known metric density response and RHS are
+
+```text
+P_metric^R = -½ C (S_R D + D S_R) Cᵀ
+b[i,a] = { Cᵀ [h^R + G^R(P) + G(P_metric^R)] C }_ai
+         - ½ (ε_a + ε_i) (S_R)_ai
+A x = -b
+```
+
+Here `G^R(P)` differentiates the integrals at fixed AO density, whereas
+`G(P_metric^R)` applies the ordinary J/K map to the known density connection.
+The response operator supplies only the remaining rotation-induced density
+response. The relaxation assembly must also retain the known metric terms;
+neither the overlap second derivative in term 3 nor the rotation solution alone
+replaces them. A2 must check this complete RHS and metric contribution against
+displaced references before claiming an analytic Hessian.
+
 ## Conventions to pin down, and how
 
 Three layers meet here with independently chosen conventions, which is the
@@ -135,9 +159,9 @@ highest-risk part of this work:
 
 - **#178** carries `output_sign` on the consumer and `sign` / `prefactor` on the
   weight descriptor. The output name alone never changes a sign.
-- **#179** implements `A x = -(∂g/∂t)` for the rotation generator, so a caller
-  solving for an external perturbation λ supplies `b = -(∂g_ov/∂λ)` restricted
-  to the nonredundant occ-virt block.
+- **#179** stores vectors in occupied-major/virtual-minor order `x[i,a]`.
+  The linear solver receives `-b` for the `A x = -b` convention above; the
+  sign is applied once at the caller boundary.
 - **W** above is the energy-weighted density in the same doubled-occupation
   convention as `P = 2 C_occ C_occᵀ`.
 
