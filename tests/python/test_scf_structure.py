@@ -58,3 +58,26 @@ def test_documented_forbidden_example_is_not_an_include(tmp_path):
         '// #include "scf/rhf.hpp"\n#include <vector>\n'
     )
     assert not audit_scf_structure(tmp_path)["errors"]
+
+
+@pytest.mark.parametrize(
+    "name, owner",
+    [("arena.cpp", "cuda_planning"), ("eigensolver.cpp", "cuda_eigensolver")],
+)
+@pytest.mark.parametrize("include", ['"scf/rhf.hpp"', '"../rhf.hpp"', "<scf/rhf.hpp>"])
+def test_cuda_runtime_cannot_depend_on_method_driver(tmp_path, name, owner, include):
+    source = tmp_path / "src/scf"
+    (source / "cuda").mkdir(parents=True)
+    (source / "rhf.hpp").write_text("// Method-owned state\n")
+    (source / "cuda" / name).write_text(f"#include {include}\n")
+    errors = audit_scf_structure(tmp_path)["errors"]
+    assert len(errors) == 1
+    assert f"forbidden {owner} dependency on scf/rhf.hpp" in errors[0]
+
+
+def test_eigensolver_cannot_acquire_direct_queue_policy(tmp_path):
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "direct_constants.hpp").write_text("// Direct queue policy\n")
+    (source / "eigensolver.cpp").write_text('#include "direct_constants.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
