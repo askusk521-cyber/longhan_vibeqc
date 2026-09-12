@@ -341,13 +341,20 @@ def _accuracy_target(arguments, tolerance: float):
 
 
 def _evidence(model, values, reference_values, target, converged):
-    """Build the repository's own observable-error evidence record."""
+    """Build the repository's own observable-error verdict for one run.
+
+    The full assessment document repeats the model identity, its hashes and the
+    provenance strings in every record, which pushes the artifact past the
+    repository's 1 MiB review guard without adding information: the raw error
+    columns carry the magnitudes and the request is recorded once per tolerance.
+    Only the verdict and its per-observable outcomes are kept here.
+    """
 
     if target is None or not converged:
         return None
     from vibeqc import compare_observables
 
-    return compare_observables(
+    assessment = compare_observables(
         model,
         model,
         model,
@@ -357,7 +364,8 @@ def _evidence(model, values, reference_values, target, converged):
         scope="relaxed_target",
         provenance=(("reference", "independent-strict-fp64-solve"),),
         converged=converged,
-    ).to_dict()
+    )
+    return {"status": assessment.status, "outcomes": list(assessment.outcomes)}
 
 
 def _error_columns(result, reference) -> dict[str, Any]:
@@ -792,6 +800,10 @@ def main() -> None:
             "force_target": arguments.force_target,
             "properties": list(arguments.properties),
             "displacement_bohr": arguments.displacement_bohr,
+        },
+        "targets": {
+            f"{tolerance:.0e}": _accuracy_target(arguments, tolerance).to_dict()
+            for tolerance in arguments.tolerances
         },
         "references": references,
         "matrix": matrix,
