@@ -1,9 +1,25 @@
-// Included inside cuda_rhf.cu's implementation namespace after its staging helpers.
-// Keep single-system DF one-electron setup beside its value/response controls;
-// this also bounds the size of the main CUDA translation unit's source file.
-#ifndef VIBEQC_SCF_CUDA_ONE_ELECTRON_INTEGRALS_CUH
-#define VIBEQC_SCF_CUDA_ONE_ELECTRON_INTEGRALS_CUH
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <limits>
+#include <new>
+#include <utility>
+#include <vector>
 
+#include "molecule/basis.hpp"
+#include "runtime/resource_cuda.cuh"
+#include "scf/cuda/one_electron_export_kernels.hpp"
+#include "scf/cuda/one_electron_view.hpp"
+#include "scf/cuda/rhf_policy.hpp"
+#include "scf/cuda/runtime_support.hpp"
+#include "scf/cuda/topology.hpp"
+#include "scf/cuda_density_fitting_integrals.hpp"
+
+namespace vibeqc::scf {
+namespace {
+using namespace cuda_execution;
+
+/** Stage explicit host tensors while retaining coordinate/spin and failure semantics. */
 vibeqc_status build_cuda_one_electron_integrals_impl(int device_id, const core::System& system,
                                                      integrals::IntegralData& output,
                                                      std::string& detail, bool include_derivatives,
@@ -185,7 +201,8 @@ vibeqc_status build_cuda_one_electron_integrals_impl(int device_id, const core::
     release();
     return cuda_status(cuda_error);
   }
-  build_cuda_nuclear_repulsion_kernel<false><<<1, 1, 0, stream>>>(device_batch, -1, device_nuclear);
+  launch_build_cuda_nuclear_repulsion_kernel(false, 1, 1, 0, stream, device_batch, -1,
+                                             device_nuclear);
   cuda_error = cudaGetLastError();
   if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
   if (cuda_error == cudaSuccess) {
@@ -204,12 +221,13 @@ vibeqc_status build_cuda_one_electron_integrals_impl(int device_id, const core::
                                    cuda_error == cudaSuccess && coordinate < output.ncoord;
        ++coordinate) {
     if (include_derivatives)
-      build_cuda_one_electron_derivatives_kernel<<<pair_blocks, threads, 0, stream>>>(
-          device_batch, device_pair_first, device_pair_second, pair_count,
-          static_cast<std::int64_t>(coordinate), device_overlap, device_hcore);
+      launch_build_cuda_one_electron_derivatives_kernel(
+          pair_blocks, threads, 0, stream, device_batch, device_pair_first, device_pair_second,
+          pair_count, static_cast<std::int64_t>(coordinate), device_overlap, device_hcore);
     if (include_nuclear_derivatives)
-      build_cuda_nuclear_repulsion_kernel<true><<<1, 1, 0, stream>>>(
-          device_batch, static_cast<std::int64_t>(coordinate), device_nuclear);
+      launch_build_cuda_nuclear_repulsion_kernel(true, 1, 1, 0, stream, device_batch,
+                                                 static_cast<std::int64_t>(coordinate),
+                                                 device_nuclear);
     cuda_error = cudaGetLastError();
     if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(stream);
     if (cuda_error == cudaSuccess && include_derivatives) {
@@ -236,4 +254,14 @@ vibeqc_status build_cuda_one_electron_integrals_impl(int device_id, const core::
   return VIBEQC_STATUS_SUCCESS;
 }
 
-#endif
+}  // namespace
+
+vibeqc_status build_cuda_one_electron_integrals(int device_id, const core::System& system,
+                                                integrals::IntegralData& output,
+                                                std::string& detail, bool include_derivatives,
+                                                bool include_nuclear_derivatives) {
+  return build_cuda_one_electron_integrals_impl(device_id, system, output, detail,
+                                                include_derivatives, include_nuclear_derivatives);
+}
+
+}  // namespace vibeqc::scf
