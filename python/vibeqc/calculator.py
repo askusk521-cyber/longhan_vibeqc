@@ -623,6 +623,14 @@ class Calculator:
                 "auxiliary": identity(self._auxiliary_basis),
                 "representation": self._basis_representation,
                 "method": self._method,
+                **(
+                    {
+                        "correlation_memory_budget_bytes": self._correlation_memory_budget_bytes,
+                        "mp2_denominator_threshold": self._mp2_denominator_threshold,
+                    }
+                    if self._method == _native.METHOD_MP2
+                    else {}
+                ),
                 "density_fitting": self._density_fitting_mode,
                 "df_threshold": self._density_fitting_relative_threshold,
                 "screening": self._screening_tolerance,
@@ -682,6 +690,10 @@ class Calculator:
         actual auxiliary basis remain mathematical choices. This method only
         resolves compact basis metadata; it performs no integral/SCF work.
         """
+        if self._method == _native.METHOD_MP2:
+            raise NotImplementedError(
+                "MP2 accuracy model resolution is not implemented"
+            )
         atoms = tuple(Atom.from_value(atom) for atom in atoms)
         self._preflight_hf_basis(atoms)
         metadata = self.basis_metadata(atoms, charge=charge, multiplicity=multiplicity)
@@ -1090,9 +1102,11 @@ class Calculator:
 
                     check_resource_status(self._library, status, resource_diagnostics)
             except (RuntimeError, MemoryError) as error:
-                detail = self._library.vibeqc_context_get_last_detail(context)
-                if detail:
-                    error.args = (f"{error}: {detail.decode('utf-8')}",)
+                # The ordinary checker already attaches the context detail.
+                if resource_diagnostics is not None:
+                    detail = self._library.vibeqc_context_get_last_detail(context)
+                    if detail:
+                        error.args = (f"{error}: {detail.decode('utf-8')}",)
                 raise
             forces = (
                 np.ctypeslib.as_array(force_storage).copy().reshape(-1, 3)

@@ -87,6 +87,23 @@ def test_public_mp2_rejects_unimplemented_controls():
     calculator = Calculator(method="mp2")
     with pytest.raises(NotImplementedError, match="resource planning"):
         calculator.estimate_resources([[("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]])
+    with pytest.raises(NotImplementedError, match="accuracy model resolution"):
+        calculator.resolved_model([("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))])
+
+
+def test_public_mp2_identity_includes_correlation_controls():
+    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
+    # Metadata must distinguish changed execution controls even before native
+    # work begins, just as it does for the SCF tolerance and precision policy.
+    identities = {
+        Calculator(method="mp2", **options).basis_metadata(atoms)["model_identity"]
+        for options in (
+            {},
+            {"correlation_memory_budget_bytes": 128 << 20},
+            {"mp2_denominator_threshold": 1e-8},
+        )
+    }
+    assert len(identities) == 3
 
 
 def test_public_unsupported_budget_scf_and_neighbors(device):
