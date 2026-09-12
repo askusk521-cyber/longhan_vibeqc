@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "molecule/basis.hpp"
+#include "runtime/resource_usage.hpp"
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 
@@ -240,6 +241,19 @@ const integrals::IntegralData& PreparedFockPlan::one_electron() const noexcept {
 }
 const DensityFittingScfData* PreparedFockPlan::cpu_fitted_data() const noexcept {
   return impl_->cpu_view && impl_->fitted ? &*impl_->fitted : nullptr;
+}
+std::size_t PreparedFockPlan::cpu_observation_capacity() const noexcept {
+  const auto* fitted = cpu_fitted_data();
+  const auto& data = fitted ? fitted->one_electron : one_electron();
+  const auto orbital = runtime::vector_capacities(
+      data.overlap, data.hcore, data.eri, data.overlap_derivative, data.hcore_derivative,
+      data.eri_derivative, data.nuclear_repulsion_derivative);
+  return fitted ? runtime::add_capacity(orbital, runtime::vector_capacities(
+                                                     fitted->raw.metric, fitted->raw.three_center,
+                                                     fitted->raw.metric_derivative,
+                                                     fitted->raw.three_center_derivative,
+                                                     fitted->three_center.values))
+                : orbital;
 }
 const FockPreparationDiagnostic& PreparedFockPlan::diagnostic() const noexcept {
   return impl_->diagnostic;
