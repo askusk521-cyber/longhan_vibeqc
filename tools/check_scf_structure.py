@@ -64,6 +64,7 @@ CUDA_ALLOWED = {
         "scf/cuda/arena.",
         "scf/cuda/checked_layout.",
         "scf/cuda/direct_constants.",
+        "scf/cuda/integral_limits.",
         "scf/cuda/scf_constants.",
         "scf/cuda/direct_metadata.",
         "scf/cuda/packed_basis.",
@@ -237,6 +238,52 @@ CUDA_MODULES["cuda_provider_kernel_interfaces"] = (
     "one_electron_export_kernels",
 )
 CUDA_ALLOWED["cuda_provider_kernel_interfaces"] = ("scf/cuda/packed_basis.",)
+# Retained numerical primitives have no queue policy or host plan dependency.
+# One-electron consumers share only these bounded scientific building blocks.
+CUDA_MODULES["cuda_integral_numerics"] = (
+    "integral_limits",
+    "scalar_math",
+    "gaussian_geometry",
+    "cartesian_angular",
+    "boys_table",
+    "hermite_recurrence",
+    "coulomb_auxiliary",
+)
+CUDA_ALLOWED["cuda_integral_numerics"] = tuple(
+    "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_integral_numerics"]
+) + ("scf/cuda/packed_basis.", "molecule/basis.hpp")
+CUDA_MODULES["cuda_one_electron_native"] = (
+    "one_electron_reference",
+    "one_electron_force_reference",
+    "one_electron_force_workspace",
+    "one_electron_native_overlap",
+    "one_electron_native_attraction",
+    "one_electron_native_attraction_gradient",
+    "one_electron_native_contraction",
+    "one_electron_native_force",
+)
+CUDA_ALLOWED["cuda_one_electron_native"] = (
+    tuple("scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_one_electron_native"])
+    + tuple("scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_integral_numerics"])
+    + (
+        "scf/cuda/one_electron_export_kernels.hpp",
+        "scf/cuda/packed_basis.",
+        "scf/cuda/matrix_index.",
+    )
+)
+CUDA_MODULES["cuda_nuclear_kernels"] = ("nuclear_kernels",)
+CUDA_ALLOWED["cuda_nuclear_kernels"] = (
+    "scf/cuda/nuclear_kernels.",
+    "scf/cuda/one_electron_export_kernels.hpp",
+    "scf/cuda/gaussian_geometry.",
+    "scf/cuda/packed_basis.",
+)
+CUDA_MODULES["cuda_direct_pair_cache"] = ("direct_pair_cache",)
+CUDA_ALLOWED["cuda_direct_pair_cache"] = (
+    "scf/cuda/direct_pair_cache.",
+    "scf/cuda/gaussian_geometry.",
+    "scf/cuda/packed_basis.",
+)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 

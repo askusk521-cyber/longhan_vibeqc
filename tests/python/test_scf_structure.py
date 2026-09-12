@@ -117,7 +117,7 @@ def test_matrix_library_cannot_acquire_bucket_resource_owner(tmp_path):
 )
 @pytest.mark.parametrize(
     "dependency",
-    ["resources.hpp", "one_electron_reference.cuh", "df_plan_internal.hpp"],
+    ["resources.hpp", "one_electron_native_overlap.cuh", "df_plan_internal.hpp"],
 )
 def test_direct_queue_owners_cannot_acquire_plan_or_integral_state(
     tmp_path, owner, dependency
@@ -136,7 +136,7 @@ def test_direct_queue_owners_cannot_acquire_plan_or_integral_state(
 )
 @pytest.mark.parametrize(
     "dependency",
-    ["direct_jk_kernels.cuh", "one_electron_reference.cuh", "resources.hpp"],
+    ["direct_jk_kernels.cuh", "one_electron_native_force.cuh", "resources.hpp"],
 )
 def test_provider_host_owners_cannot_import_recurrences_or_scf_lifetime(
     tmp_path, owner, dependency
@@ -158,4 +158,40 @@ def test_provider_kernel_interfaces_cannot_acquire_plan_state(tmp_path, owner):
     source.mkdir(parents=True)
     (source / "direct_jk_plan.hpp").write_text("// Host allocation owner\n")
     (source / owner).write_text('#include "direct_jk_plan.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        "scalar_math.cuh",
+        "hermite_recurrence.cuh",
+        "one_electron_reference.cu",
+        "one_electron_native_force.cuh",
+        "nuclear_kernels.cu",
+        "direct_pair_cache.cu",
+    ],
+)
+@pytest.mark.parametrize(
+    "dependency", ["direct_constants.hpp", "direct_jk_plan.hpp", "resources.hpp"]
+)
+def test_retained_numerics_cannot_acquire_queue_policy_or_plan_state(
+    tmp_path, owner, dependency
+):
+    """Scientific implementations remain independent of scheduling and lifetime."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / dependency).write_text("// Queue policy or host ownership\n")
+    (source / owner).write_text(f'#include "{dependency}"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+def test_shared_numerics_cannot_import_operator_contractions(tmp_path):
+    """Adding a consumer must not make the shared recurrence depend on it."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "one_electron_native_force.cuh").write_text("// Force contraction\n")
+    (source / "coulomb_auxiliary.cuh").write_text(
+        '#include "one_electron_native_force.cuh"\n'
+    )
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1

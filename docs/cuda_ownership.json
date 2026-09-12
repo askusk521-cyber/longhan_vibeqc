@@ -182,8 +182,8 @@
       "subsystem": "runtime"
     },
     {
-      "path": "src/scf/cuda/one_electron_force_reference.cuh",
-      "reason": "Retained independently gated scalar/cooperative force schedules; values retirement does not supersede force policy.",
+      "path": "src/scf/cuda/one_electron_force_reference.cu",
+      "reason": "Retained independently gated scalar/cooperative force schedules; values retirement does not supersede force policy. Now separately compiled with the same gating and launch geometry; this is extraction, not scientific retirement.",
       "regions": [],
       "role": "performance_exception",
       "subsystem": "one_electron_derivatives"
@@ -196,8 +196,8 @@
       "subsystem": "one_electron_derivatives"
     },
     {
-      "path": "src/scf/cuda/one_electron_reference.cuh",
-      "reason": "Only the separately gated Dual first-coordinate response kernel remains; the double value kernel and dispatch were removed.",
+      "path": "src/scf/cuda/one_electron_reference.cu",
+      "reason": "Only the separately gated Dual first-coordinate response kernel remains; the double value kernel and dispatch were removed. Now separately compiled with the same gating and launch geometry; this is extraction, not scientific retirement.",
       "regions": [],
       "role": "performance_exception",
       "subsystem": "one_electron_derivatives"
@@ -249,16 +249,10 @@
       "reason": "Remaining device recurrences, physical screening bounds and method contractions are conservatively scientific; explicit regions separate generic runtime.",
       "regions": [
         {
-          "reason": "Includes, task metadata, scalar arithmetic/AD, stable special functions and generic geometry/packing helpers.",
+          "reason": "Includes, host policy imports and generic ERI tensor indexing; scalar/AD and geometry now have narrow shared owners.",
           "role": "runtime",
           "start": "#include <cublas_v2.h>",
-          "stop": "__device__ Scalar primitive_overlap("
-        },
-        {
-          "reason": "Angular/task indexing and public-layout helpers.",
-          "role": "runtime",
-          "start": "__device__ unsigned angular_axis(",
-          "stop": "__device__ void boys_values("
+          "stop": "__device__ Scalar primitive_eri("
         },
         {
           "reason": "Generic atomic maximum implementation.",
@@ -288,7 +282,7 @@
           "reason": "Queue/launch wrappers around separately owned scientific contractions.",
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
-          "stop": "__global__ void nuclear_force_kernel"
+          "stop": "__global__ void two_electron_force_kernel"
         },
         {
           "reason": "Persistent force task wrappers; primitive/equation contractions are separate above.",
@@ -821,6 +815,132 @@
       "subsystem": "runtime",
       "reason": "Borrowed retained-response and nuclear launch ABI; no new operator formula.",
       "regions": []
+    },
+    {
+      "path": "src/scf/cuda/scalar_math.cuh",
+      "reason": "Unchanged generic scalar/AD, precision traits, elementary math and order-zero Boys helper extracted from the previously classified runtime region.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/scf/cuda/gaussian_geometry.cuh",
+      "reason": "Unchanged coordinate seeds, distances and Gaussian product geometry extracted from the existing runtime region.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/scf/cuda/cartesian_angular.cuh",
+      "reason": "Unchanged angular indexing and packed/public AO mappings; preserve the original conservative classification of the angular record.",
+      "regions": [
+        {
+          "start": "struct Angular {",
+          "stop": "__device__ inline unsigned angular_axis(",
+          "role": "scientific",
+          "reason": "Retain the original conservative scientific classification of the Cartesian powers record."
+        }
+      ],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/scf/cuda/boys_table.cuh",
+      "reason": "Shared retained numerical recurrence and workspace, formerly in cuda_rhf.cu. Extraction preserves the existing scientific classification; no formula is retired.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/hermite_recurrence.cuh",
+      "reason": "Shared retained numerical recurrence and workspace, formerly in cuda_rhf.cu. Extraction preserves the existing scientific classification; no formula is retired.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/coulomb_auxiliary.cuh",
+      "reason": "Shared retained numerical recurrence and workspace, formerly in cuda_rhf.cu. Extraction preserves the existing scientific classification; no formula is retired.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_native_overlap.cuh",
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_native_attraction.cuh",
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_native_attraction_gradient.cuh",
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_native_contraction.cuh",
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_native_force.cuh",
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_force_workspace.hpp",
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/nuclear_kernels.cu",
+      "reason": "Existing nuclear repulsion and force equations, including Dual coordinate response; preserved as native scientific arithmetic.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/direct_pair_cache.cu",
+      "reason": "Existing exponent, normalization and Gaussian product geometry cached per primitive pair. Conservatively retains its scientific classification after extraction.",
+      "regions": [],
+      "role": "scientific",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "path": "src/scf/cuda/one_electron_force_reference.hpp",
+      "reason": "Borrowed packed metadata and narrow host launch ABI; no allocation, graph state or numerical formulas.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/scf/cuda/nuclear_kernels.hpp",
+      "reason": "Borrowed packed metadata and narrow host launch ABI; no allocation, graph state or numerical formulas.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/scf/cuda/direct_pair_cache.hpp",
+      "reason": "Borrowed packed metadata and narrow host launch ABI; no allocation, graph state or numerical formulas.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
     }
   ],
   "generated_families": [
@@ -995,7 +1115,7 @@
         "benchmarks/results/one-electron-derivatives-rtx5090/sdf18-thread.json"
       ],
       "generated_capability": "generated fixed-density S/T/V first derivatives and public spherical weights",
-      "missing_capability": "Generated response needs schedules that remove measured complete-endpoint regressions: resident DF warm replay 4.586/5.429 ms and Direct sdf18 changed geometry 36.667/39.352 ms (native/generated, archived revisions). These measurements justify retention, not a completed derivative migration.",
+      "missing_capability": "Generated response needs schedules that remove measured complete-endpoint regressions: resident DF warm replay 4.586/5.429 ms and Direct sdf18 changed geometry 36.667/39.352 ms (native/generated, archived revisions). These measurements justify retention, not a completed derivative migration. Retained kernels now compile in one_electron_reference.cu and one_electron_force_reference.cu with bounded shared numerical headers; this decomposition does not change promotion or retirement status.",
       "owner": "one_electron_derivatives",
       "retirement_condition": "retire only after derivative/force gates, independently of values promotion",
       "status": "performance_exception"
