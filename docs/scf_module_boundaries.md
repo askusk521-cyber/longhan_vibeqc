@@ -28,7 +28,7 @@ and `cuda_ownership_current.json`, under #231.
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Move by the existing #231 scientific ownership regions; do not copy formulas or turn the independent oracle into generated production arithmetic. |
 | `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host bounded class partitioning, stream ordering and partial-page ranges are extracted to `cuda/queue_plan.*`, with queue diagnostics in `cuda/queue_profile.cpp`. Device compaction and queue consumers remain pending. |
 | `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution is extracted to `cuda/eigensolver.cpp` and `cuda/eigensolver_kernels.cu`, with a borrowed handle/workspace view and narrow launch wrappers. Matrix/update kernels remain pending; scheduling choices do not select a different physical operator. |
-| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. Resource ownership, source integration, graph construction and bucket dispatch remain pending. |
+| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. DF source setup/replay and explicit tensor export are now extracted to `cuda/df_source*` and `cuda/df_integral_export*`; resource ownership, graph construction and bucket dispatch remain pending. |
 | `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Remaining DF plan/metric module; preserve resident versus source-backed/host-backed distinctions. |
 | `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Remaining DF execution module using the same provider semantics and explicit memory sub-budget. |
 | `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The #205 source-backed response uses device weights through `cuda/df_response_weights.*` and `cuda/df_gradient_bridge.*`; the explicitly documented host-value compatibility adapter remains separate. DF solver and library-planning ownership still need decomposition. |
@@ -190,3 +190,64 @@ device queue execution, graph/bucket control, source-backed DF integration,
 and `cuda_density_fitting.cu` decomposition are still required for full #240
 acceptance. The lower CUDA ownership line count from moving host code into
 C++ is a structural move, not retirement of scientific arithmetic.
+
+## DF source and tensor-export ownership
+
+The source boundary now separates `df_source_setup.cpp` (validation, transforms,
+metadata and current metric setup), `df_source.cpp` (bounded replay and public
+source diagnostics), and explicit Cartesian tensor export in
+`df_integral_export.cpp` / `df_integral_export_batch.cpp`. Their three kernel
+launch wrappers and generated-policy basis/public-layout contractions live in
+`df_source_kernels.cu`. Shared allocation registration is in
+`metadata_upload.hpp`, because both direct J/K and DF already used that helper.
+This avoids making a direct provider depend on private DF source state.
+
+The mathematical DF policy, metric/raw/public layouts, primitive contraction,
+coordinate mapping, partial tiles, export budget calculation, allocation
+failure cleanup, and diagnostic strings remain unchanged. An audit against
+`4b2083a` verifies 29 function bodies and all value/response specialization
+arguments in three launch wrappers. The device record layout and public opaque
+handle remain unchanged; only the owning translation units move. No generated
+or handwritten scientific formula is copied into a second maintained file.
+
+`cuda_rhf.cu` decreases from 17,658 to 16,018 lines for this move. The largest
+new implementation is 437 lines. The CUDA scientific ownership ledger counts
+existing bounded layout contractions in their new owner and distinguishes
+host launch wrappers; reduced counted CUDA host lines do not constitute
+scientific-code retirement.
+
+The following development compiler-work sample uses ccache-disabled NVCC 12.9
+sm_120 fast-compile mode and GCC 11.4 Release. The baseline is the exact
+`4b2083a` source copied to a separate evidence path and compiled against
+unchanged parent headers, so absolute compiler source paths differ. These
+single-invocation samples are not production cold-build or runtime evidence.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 41.761 | 9,896,208 |
+| extracted_cuda_rhf | 37.381 | 8,652,736 |
+| df_source_setup | 1.672 | 71,448 |
+| df_source | 0.943 | 29,584 |
+| df_integral_export | 1.423 | 52,328 |
+| df_integral_export_batch | 1.526 | 59,216 |
+| df_source_kernels | 4.376 | 2,225,240 |
+
+Aggregate compiler work rises from 41.761 to 47.320 seconds;
+object bytes rise from 9,896,208 to 11,090,552.
+Scientific direct kernels, GPU queue execution, graph/bucket control, and
+`cuda_density_fitting.cu` planning/SCF ownership remain under the full #240
+acceptance criteria.
+
+This extraction passed 36 CPU structure/ownership/source checks, three native
+GPU DF/provider/composition tests, and 34 Python GPU endpoint/resource checks
+without skips. The allocated RTX 5090 runs cover values, complete forces,
+Cartesian/spherical RHF/UHF, geometry replay, rank crossings, failed neighbors,
+and positive device budgets. Actual implementation-only edits to source setup
+and batched tensor export each rebuilt only their C++ owner and source identity,
+then relinked; neither edit recompiled a CUDA kernel. The exact source was
+restored and rebuilt after each probe.
+
+After integration with the device force-response implementation and current
+upstream, the combined source extraction passed 75 CPU structure/ownership
+checks, three native GPU tests, and 38 opt-in Python GPU endpoint/resource
+tests with no skips. The 29-function and three-wrapper audit still passes.
