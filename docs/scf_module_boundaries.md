@@ -674,7 +674,7 @@ owner is 386 lines. Existing J/K and weighted-ERI fragments now compile as
 `direct_jk_kernels.cu` and `weighted_eri_kernels.cu`.
 
 `cuda_rhf.cu` becomes the ordinary C++ file `cuda_rhf.cpp`, decreasing from
-11,384 to 4,791 lines. It contains no device/kernel declarations or CUDA launch
+11,384 to 4,792 lines. It contains no device/kernel declarations or CUDA launch
 syntax. Its graph/bucket responsibilities still exceed the structural target
 and remain separate follow-up work. Numerical headers reject host plans and
 queue policy; consumer owners reject host resource lifetime; the C++ driver
@@ -716,8 +716,10 @@ passed in Slurm 9281; the latter covers 3,349 records, 141 output tiles and four
 budget/route runs, with libcint values and finite differences. An experimental
 device-linked build passed the same native/Python and weighted gates in Slurm
 9286. Its preceding run used incomplete opt-ins (121 passes and 18 skips) and
-is not used as the complete GPU gate. The final ten-owner CMake arrangement
-and complete Release libraries remain under validation at this source commit.
+is not used as the complete GPU gate. The final ten-owner CMake development build passes four native suites, all
+139 Python cases and the weighted validator in Slurm 9292. Slurm 9293 also
+passes 96 endpoint comparisons with PTX-only images for every moved direct
+owner; unchanged owners in that probe retain development images.
 
 Exact-parent prepared endpoints compare six fixed/resident/paged RHF/UHF
 scenarios, each containing a ragged three-system batch, cold execution, changed
@@ -765,3 +767,60 @@ check. The hybrid library sizes are 111,937,968 bytes for the parent,
 135,211,096 bytes for standalone extraction and 118,255,072 bytes for the
 bounded link. Complete Release acceptance remains separate from these
 partially optimized library measurements.
+
+### Complete Release validation
+
+Fresh parent (`671baef`) and extracted (`59c3e9f`) builds use GCC 11.4,
+NVCC 12.9.1, `-O3`, `compute_120` plus `sm_120`, fast-compile mode disabled,
+compiler cache disabled, two CUDA jobs and four total Ninja jobs. Both build
+trees start empty. The builds run concurrently on a shared host with a warm
+filesystem cache. The parent finishes in 2,143.872 seconds; extraction finishes
+in 1,509.839 seconds. These single samples describe this build configuration.
+The extraction was uncommitted when configure began and was committed unchanged
+during the build; the evidence records source commit `59c3e9f` separately from
+the configure-time HEAD. The subsequent `<cstdlib>` portability fix (`e7d8414`)
+rebuilds the host/identity objects before runtime checks.
+
+Complete Release library sizes are 116,304,304 bytes for the parent and
+122,613,128 bytes for extraction, an increase of 5.4%. Slurm 9296 passes four
+native suites, 139 Python GPU cases and the weighted validator (3,349 records,
+141 tiles, four budget/route runs). Slurm 9298 compares six fixed/resident/paged
+RHF/UHF scenarios: each has a ragged three-system batch, cold execution,
+changed geometry and five warm repeats per geometry. All 288 energy/force
+comparisons pass; maximum absolute error is `5.3512749786932545e-14`. Four
+additional cases pass per library: actual RHF/UHF mixed precision and strict
+FP64 refinement, independent d/f PySCF references, and final-Fock reuse.
+Both libraries also pass 37 response cases with the required explicit opt-in
+in Slurm 9299; those cases were skipped in the preceding 9298 run.
+
+| Endpoint | Parent warm median (ms) | Extracted warm median (ms) |
+| --- | ---: | ---: |
+| RHF fixed | 19.241 | 19.161 |
+| RHF resident | 19.167 | 18.897 |
+| RHF paged | 19.771 | 19.419 |
+| UHF fixed | 18.073 | 18.594 |
+| UHF resident | 18.191 | 18.150 |
+| UHF paged | 18.175 | 18.036 |
+
+Changed-geometry warm medians also differ by less than one millisecond. These
+short endpoint samples show no material runtime overhead in the exercised
+scenarios; they do not establish a general performance improvement. Input
+geometries, all comparison records, individual timing samples, library hashes,
+build commands and scope limits are retained in
+[`validation.json`](../benchmarks/results/scf-direct-native-rtx5090/validation.json).
+
+Actual implementation comment edits were rebuilt in the same Release tree with
+compiler cache disabled. Each edit was then restored byte-for-byte and rebuilt:
+
+| Edited implementation | Rebuild seconds | Compiled objects and device link |
+| --- | ---: | --- |
+| `cuda_rhf.cpp` | 6.975 | C++ driver and source identity; no CUDA compile or device link |
+| `direct_schwarz_kernels.cu` | 90.759 | Its CUDA object and source identity; direct archive device link |
+| `direct_angular_force.cu` | 206.855 | Its CUDA object and source identity; no device link |
+
+All timings include the shared library and dependent executable relinks.
+[`incremental.json`](../benchmarks/results/scf-direct-native-rtx5090/incremental.json)
+retains the complete touched-object and relink lists. No unrelated CUDA source
+is recompiled. The angular-force exclusion therefore preserves its standalone
+compiler contract during both cold and incremental builds. Full #240 remains
+open for the host graph/bucket decomposition and its final combined inventory.
