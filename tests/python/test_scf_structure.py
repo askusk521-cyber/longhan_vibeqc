@@ -58,3 +58,104 @@ def test_documented_forbidden_example_is_not_an_include(tmp_path):
         '// #include "scf/rhf.hpp"\n#include <vector>\n'
     )
     assert not audit_scf_structure(tmp_path)["errors"]
+
+
+@pytest.mark.parametrize(
+    "name, owner",
+    [
+        ("arena.cpp", "cuda_planning"),
+        ("eigensolver.cpp", "cuda_eigensolver"),
+        ("df_source_setup.cpp", "cuda_df_source"),
+        ("df_plan_setup.cpp", "cuda_df_runtime"),
+        ("df_rhf_scf.cpp", "cuda_df_runtime"),
+        ("resources.cpp", "cuda_resources"),
+        ("matrix_library.cpp", "cuda_matrix_library"),
+    ],
+)
+@pytest.mark.parametrize("include", ['"scf/rhf.hpp"', '"../rhf.hpp"', "<scf/rhf.hpp>"])
+def test_cuda_runtime_cannot_depend_on_method_driver(tmp_path, name, owner, include):
+    source = tmp_path / "src/scf"
+    (source / "cuda").mkdir(parents=True)
+    (source / "rhf.hpp").write_text("// Method-owned state\n")
+    (source / "cuda" / name).write_text(f"#include {include}\n")
+    errors = audit_scf_structure(tmp_path)["errors"]
+    assert len(errors) == 1
+    assert f"forbidden {owner} dependency on scf/rhf.hpp" in errors[0]
+
+
+def test_eigensolver_cannot_acquire_direct_queue_policy(tmp_path):
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "direct_constants.hpp").write_text("// Direct queue policy\n")
+    (source / "eigensolver.cpp").write_text('#include "direct_constants.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner", ["df_jk_kernels.cu", "df_scf_kernels.cu", "scf_density_kernels.cu"]
+)
+def test_df_kernels_cannot_acquire_host_plan_state(tmp_path, owner):
+    """Kernel changes must remain independent of resource and graph lifetimes."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "df_plan_internal.hpp").write_text("// Plan-owned allocations\n")
+    (source / owner).write_text('#include "df_plan_internal.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+def test_matrix_library_cannot_acquire_bucket_resource_owner(tmp_path):
+    """Matrix consumers borrow handles without depending on allocation lifetime."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "resources.hpp").write_text("// Stream/graph/arena owner\n")
+    (source / "matrix_library.cpp").write_text('#include "resources.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner", ["direct_bounded_tasks.cu", "direct_queue_scan.cu", "direct_screening.cuh"]
+)
+@pytest.mark.parametrize(
+    "dependency",
+    ["resources.hpp", "one_electron_reference.cuh", "df_plan_internal.hpp"],
+)
+def test_direct_queue_owners_cannot_acquire_plan_or_integral_state(
+    tmp_path, owner, dependency
+):
+    """Queue rebuilds stay independent of host ownership and integral recurrences."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / dependency).write_text("// Separately owned plan or scientific code\n")
+    (source / owner).write_text(f'#include "{dependency}"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner",
+    ["direct_jk.cpp", "one_electron_export.cpp", "one_electron_export_batch.cpp"],
+)
+@pytest.mark.parametrize(
+    "dependency",
+    ["direct_jk_kernels.cuh", "one_electron_reference.cuh", "resources.hpp"],
+)
+def test_provider_host_owners_cannot_import_recurrences_or_scf_lifetime(
+    tmp_path, owner, dependency
+):
+    """Provider host rebuilds borrow launches instead of device implementations."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / dependency).write_text("// Separate recurrence or SCF owner\n")
+    (source / owner).write_text(f'#include "{dependency}"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize(
+    "owner", ["direct_jk_kernels.cuh", "one_electron_export_kernels.hpp"]
+)
+def test_provider_kernel_interfaces_cannot_acquire_plan_state(tmp_path, owner):
+    """A consumer interface must remain usable without host plan allocations."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "direct_jk_plan.hpp").write_text("// Host allocation owner\n")
+    (source / owner).write_text('#include "direct_jk_plan.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1

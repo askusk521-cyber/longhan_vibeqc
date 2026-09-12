@@ -254,7 +254,8 @@ if(VIBEQC_ENABLE_CUDA)
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py" ${VIBEQC_DF_GENERATOR_INPUTS}
     VERBATIM)
   target_sources(vibeqc PRIVATE "${VIBEQC_DF_DERIVATIVE_HEADER}" "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}" "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}"
-                 src/scf/cuda/df_derivatives.cu src/scf/cuda/df_gradient_bridge.cu)
+                 src/scf/cuda/df_derivatives.cu src/scf/cuda/df_gradient_bridge.cu
+                 src/scf/cuda/df_response_weights.cu)
 
   # One-electron lowering is compiled in its own TU, keeping the generic HF
   # fallback independent of generated scalar-family source size.
@@ -336,9 +337,55 @@ if(VIBEQC_ENABLE_CUDA)
     "${VIBEQC_GRID_SOURCE}"
     src/posthf/df_bridge.cu
     src/runtime/cuda_runtime.cu
-    src/scf/cuda_density_fitting.cu
+    src/scf/cuda/df_coulomb.cpp
+    src/scf/cuda/df_exchange.cpp
+    src/scf/cuda/df_force_response.cpp
+    src/scf/cuda/df_jk.cpp
+    src/scf/cuda/df_jk_kernels.cu
+    src/scf/cuda/df_metric_kernels.cu
+    src/scf/cuda/df_plan.cpp
+    src/scf/cuda/df_plan_lifetime.cpp
+    src/scf/cuda/df_plan_setup.cpp
+    src/scf/cuda/df_rhf_scf.cpp
+    src/scf/cuda/df_runtime.cpp
+    src/scf/cuda/df_scf_kernels.cu
+    src/scf/cuda/df_scf_library.cpp
+    src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/direct_jk.cpp
+    src/scf/cuda/one_electron_view.cpp
+    src/scf/cuda/one_electron_export.cpp
+    src/scf/cuda/one_electron_export_batch.cpp
+    src/scf/cuda/direct_tile_validation.cu
+    src/scf/cuda/direct_density_bounds.cu
+    src/scf/cuda/direct_tile_compaction.cu
+    src/scf/cuda/direct_generated_tasks.cu
+    src/scf/cuda/direct_resident_tasks.cu
+    src/scf/cuda/direct_bounded_pages.cu
+    src/scf/cuda/direct_bounded_tasks.cu
+    src/scf/cuda/direct_queue_scan.cu
+    src/scf/cuda/direct_queue_diagnostics.cu
+    src/scf/cuda/resources.cpp
+    src/scf/cuda/matrix_library.cpp
+    src/scf/cuda/runtime_support.cpp
+    src/scf/cuda/scf_state_kernels.cu
+    src/scf/cuda/scf_matrix_kernels.cu
+    src/scf/cuda/scf_density_kernels.cu
+    src/scf/cuda/scf_diis_kernels.cu
+    src/scf/cuda/scf_convergence_kernels.cu
+    src/scf/cuda/basis_transform_kernels.cu
+    src/scf/cuda/df_source_setup.cpp
+    src/scf/cuda/df_source.cpp
+    src/scf/cuda/df_source_kernels.cu
+    src/scf/cuda/df_integral_export.cpp
+    src/scf/cuda/df_integral_export_batch.cpp
+    src/scf/cuda/arena.cpp
+    src/scf/cuda/topology.cpp
+    src/scf/cuda/queue_plan.cpp
+    src/scf/cuda/queue_profile.cpp
+    src/scf/cuda/eigensolver.cpp
+    src/scf/cuda/eigensolver_kernels.cu
     src/scf/cuda_hf_entry.cpp
   )
   set_property(TARGET vibeqc PROPERTY JOB_POOL_COMPILE vibeqc_cuda_compile)

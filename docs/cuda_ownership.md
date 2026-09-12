@@ -42,6 +42,15 @@ remain visible in the per-file/region breakdown and the capability ledger.
 Classification requires review; keywords do not decide whether arithmetic is
 scientific. An existing region is not permission to add a second formula.
 
+The #240 DF runtime extraction moves the existing cuBLAS J/K composition and
+generated-force adapter from `cuda_density_fitting.cu` to `cuda/df_coulomb.cpp`,
+`df_exchange.cpp` and `df_force_response.cpp`. These native equations remain
+maintained scientific code even though ordinary C++ implementations fall outside
+this CUDA-source line counter. Their lower counted total is an ownership move,
+not scientific retirement. The scalar/reduction equations retained in
+`df_jk_kernels.cu` and `df_scf_kernels.cu` keep their scientific classification;
+generic metric preparation and launch wrappers retain runtime classification.
+
 Generated CMake output is measured only from an explicitly supplied build and
 reported separately with hashes and byte counts. It never enters maintained
 CUDA totals. JIT families are catalogued but their cache files are not blindly

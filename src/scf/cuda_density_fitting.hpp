@@ -34,8 +34,10 @@ CudaDensityFittingSourceDiagnostic cuda_density_fitting_integral_source_diagnost
 
 /** Contract generated DF derivatives using resident raw values or this plan's source.
  * Positive gradients contain only the DF two-electron response. The owning
- * stream is shared with value regeneration; weights and metric reverse work
- * use explicitly bounded host staging. No failure authorizes an oracle retry.
+ * stream is shared with value regeneration. Source plans retain their metric
+ * eigensystem and perform the complete bounded response on device. Host-value
+ * compatibility plans report their host staging. No failure authorizes an
+ * oracle retry; unresolved rank crossings fail transactionally.
  */
 vibeqc_status execute_cuda_density_fitting_generated_force_response(
     CudaDensityFittingJkPlan* plan, std::size_t system, const core::System& orbital,

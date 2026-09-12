@@ -6,6 +6,7 @@
 #include "molecule/basis.hpp"
 #include "runtime/resource_cuda.cuh"
 #include "scf/cuda/df_derivatives.cuh"
+#include "scf/cuda/df_response_weights.cuh"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_df_gradient.hpp"
 
@@ -185,6 +186,7 @@ vibeqc_status execute_cuda_df_gradient(int device, const core::System& orbital,
         check(cudaMemcpyAsync(weights, source.data() + begin, count * sizeof(double),
                               cudaMemcpyHostToDevice, arena.stream));
         arena.stats.host_to_device_bytes += count * sizeof(double);
+        arena.stats.response_host_to_device_bytes += count * sizeof(double);
         ++arena.stats.uploads;
         check(launch_df_derivative_tile(o, x, r, kind, {begin, 1, 1, 1}, count, weights, schedule,
                                         output, arena.stream));
@@ -224,7 +226,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
     const std::vector<double>& inverse, std::span<const DensityFittingDensityResponse> terms,
     double relative_threshold, unsigned schedule, std::size_t maximum_bytes,
     std::size_t maximum_auxiliary_tile, std::vector<double>& gradient, std::string& detail,
-    DfGradientResources* resources) {
+    DfGradientResources* resources, const CudaDfMetricView* device_metric) {
   detail.clear();
   if (resources) *resources = {};
   const auto n = molecule::ao_count(orbital), a = molecule::ao_count(auxiliary),
@@ -234,10 +236,29 @@ vibeqc_status execute_cuda_df_hf_gradient(
   if (n > index_limit || a > index_limit || atoms > index_limit / 3 || device < 0 ||
       !stream_handle || schedule > 1 || !maximum_bytes || !n || !a || !atoms || n > maximum / n ||
       a > maximum / a || n * n > maximum / a || atoms > maximum / 3 ||
-      atoms != auxiliary.atoms.size() || (!source && raw_a.size() != n * n * a) ||
-      metric.size() != a * a || inverse.size() != a * a) {
+      atoms != auxiliary.atoms.size() || (source != nullptr) != (device_metric != nullptr) ||
+      (!source && raw_a.size() != n * n * a) ||
+      (device_metric ? (!source || !device_metric->inverse_square_root ||
+                        !device_metric->eigenvectors || !device_metric->eigenvalues)
+                     : (metric.size() != a * a || inverse.size() != a * a)) ||
+      terms.empty() || !std::isfinite(relative_threshold) || relative_threshold <= 0 ||
+      relative_threshold >= 1) {
     detail = "invalid generated DF-HF response dimensions or budget";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+  for (const auto& term : terms) {
+    if (term.density.size() != n * n || !std::isfinite(term.coulomb_coefficient) ||
+        !std::isfinite(term.exchange_coefficient)) {
+      detail = "invalid HF density response term";
+      return VIBEQC_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::size_t i = 0; i < n; ++i)
+      for (std::size_t j = 0; j < n; ++j)
+        if (!std::isfinite(term.density[i * n + j]) ||
+            std::abs(term.density[i * n + j] - term.density[j * n + i]) > 1e-10) {
+          detail = "HF response requires finite symmetric densities";
+          return VIBEQC_STATUS_INVALID_ARGUMENT;
+        }
   }
   for (std::size_t atom = 0; atom < atoms; ++atom)
     if (orbital.atoms[atom].position != auxiliary.atoms[atom].position) {
@@ -270,68 +291,93 @@ vibeqc_status execute_cuda_df_hf_gradient(
     const auto o = arena.upload(host_o), x = arena.upload(host_a);
     const auto* r = arena.upload(positions);
     auto* output = static_cast<double*>(arena.allocate(result.size() * sizeof(double)));
-    auto* device_values =
-        source ? static_cast<double*>(arena.allocate(n * n * sizeof(double))) : nullptr;
     arena.stats.host_bytes += result.capacity() * sizeof(double);
     if (arena.stats.host_bytes >= maximum_bytes) throw std::bad_alloc();
     check(cudaMemsetAsync(output, 0, result.size() * sizeof(double), arena.stream));
-    const auto weight_tile =
-        std::min({std::size_t{65536}, std::max(n * n * a, a * a),
-                  (maximum_bytes - arena.stats.device_bytes) / sizeof(double)});
-    if (!weight_tile) throw std::bad_alloc();
-    auto* weights = static_cast<double*>(arena.allocate(weight_tile * sizeof(double)));
-    arena.stats.weight_tile_elements = weight_tile;
-    const auto weight_stats = contract_density_fitting_response_weights(
-        n, a, metric, inverse, terms, relative_threshold, maximum_bytes - arena.stats.host_bytes,
-        maximum_auxiliary_tile,
-        [&](std::size_t p, std::span<double> values) {
-          bool drained = false;
-          auto drain = [&] {
-            if (!drained) (void)cudaStreamSynchronize(arena.stream);
-          };
-          runtime::ResourceScopeExit drain_before_host_reuse(drain);
-          if (source) {
+    if (device_metric) {
+      // Choose the auxiliary block from the remaining *device* budget, after
+      // basis metadata, coordinates and final output have been charged. Every
+      // response allocation is owned here; launch wrappers allocate nothing.
+      const long double fixed_elements =
+          4.0L * a * a + (3.0L + terms.size()) * n * n + 2.0L * terms.size() * a;
+      const auto available = maximum_bytes - arena.stats.device_bytes;
+      if ((fixed_elements + 2.0L * n * n) * sizeof(double) > available) throw std::bad_alloc();
+      const auto capacity =
+          static_cast<std::size_t>((available / sizeof(double) - fixed_elements) / (2.0L * n * n));
+      const auto tile =
+          std::min({a, capacity, maximum_auxiliary_tile ? maximum_auxiliary_tile : a});
+      auto* densities = static_cast<double*>(arena.allocate(terms.size() * n * n * sizeof(double)));
+      for (std::size_t t = 0; t < terms.size(); ++t) {
+        check(cudaMemcpyAsync(densities + t * n * n, terms[t].density.data(),
+                              n * n * sizeof(double), cudaMemcpyHostToDevice, arena.stream));
+        arena.stats.host_to_device_bytes += n * n * sizeof(double);
+        arena.stats.density_host_to_device_bytes += n * n * sizeof(double);
+        ++arena.stats.uploads;
+      }
+      auto* workspace = static_cast<double*>(arena.allocate(
+          cuda_df_response_workspace_elements(n, a, terms.size(), tile) * sizeof(double)));
+      arena.stats.device_response = true;
+      arena.stats.auxiliary_weight_tile = tile;
+      arena.stats.weight_tile_elements = tile * n * n;
+      check(contract_cuda_df_response_weights(
+          n, a, terms, densities, *device_metric, tile, workspace, arena.stream,
+          [&](std::size_t p, double* values) {
             const auto status = generate_cuda_density_fitting_raw_tile(
-                source, source_index, 0, n * n, p, 1, -1, stream_handle, device_values, detail);
-            if (status != VIBEQC_STATUS_SUCCESS) {
-              if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
-              throw std::runtime_error(detail);
-            }
-            check(cudaMemcpyAsync(values.data(), device_values, values.size_bytes(),
-                                  cudaMemcpyDeviceToHost, arena.stream));
-            check(cudaStreamSynchronize(arena.stream));
-            arena.stats.device_to_host_bytes += values.size_bytes();
-            ++arena.stats.stream_synchronizations;
-          } else {
-            for (std::size_t ij = 0; ij < n * n; ++ij) values[ij] = raw_a[ij * a + p];
-          }
-          drained = true;
-        },
-        [&](unsigned kind, runtime::StridedRange range, std::span<const double> host_weights) {
-          bool drained = false;
-          auto drain = [&] {
-            if (!drained) (void)cudaStreamSynchronize(arena.stream);
-          };
-          runtime::ResourceScopeExit drain_before_host_reuse(drain);
-          for (std::size_t begin = 0; begin < host_weights.size(); begin += weight_tile) {
-            const auto count = std::min(weight_tile, host_weights.size() - begin);
-            check(cudaMemcpyAsync(weights, host_weights.data() + begin, count * sizeof(double),
-                                  cudaMemcpyHostToDevice, arena.stream));
-            arena.stats.host_to_device_bytes += count * sizeof(double);
-            ++arena.stats.uploads;
+                source, source_index, 0, n * n, p, 1, -1, stream_handle, values, detail);
+            if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+            if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
+            ++arena.stats.value_slices;
+            arena.stats.recomputed_value_bytes += n * n * sizeof(double);
+          },
+          [&](unsigned kind, runtime::StridedRange range, std::size_t count,
+              const double* weights) {
             check(launch_df_derivative_tile(o, x, r, kind, range, count, weights, schedule, output,
-                                            arena.stream, begin));
+                                            arena.stream));
             ++arena.stats.tiles;
-          }
-          // The adapter reuses this host span after returning. Drain all its
-          // uploads before that mutation, even on pageable-memory CUDA paths.
-          check(cudaStreamSynchronize(arena.stream));
-          ++arena.stats.stream_synchronizations;
-          drained = true;
-        });
-    arena.stats.host_bytes += weight_stats.host_peak_bytes;
-    arena.stats.value_slices = weight_stats.value_slices;
-    arena.stats.auxiliary_weight_tile = weight_stats.auxiliary_tile;
+            arena.stats.device_response_bytes += count * sizeof(double);
+          }));
+    } else {
+      const auto weight_tile =
+          std::min({std::size_t{65536}, std::max(n * n * a, a * a),
+                    (maximum_bytes - arena.stats.device_bytes) / sizeof(double)});
+      if (!weight_tile) throw std::bad_alloc();
+      auto* weights = static_cast<double*>(arena.allocate(weight_tile * sizeof(double)));
+      arena.stats.weight_tile_elements = weight_tile;
+      const auto weight_stats = contract_density_fitting_response_weights(
+          n, a, metric, inverse, terms, relative_threshold, maximum_bytes - arena.stats.host_bytes,
+          maximum_auxiliary_tile,
+          [&](std::size_t p, std::span<double> values) {
+            // Source-backed execution requires device_metric above. This
+            // compatibility adapter can only read caller-owned host values.
+            for (std::size_t ij = 0; ij < n * n; ++ij) values[ij] = raw_a[ij * a + p];
+          },
+          [&](unsigned kind, runtime::StridedRange range, std::span<const double> host_weights) {
+            bool drained = false;
+            auto drain = [&] {
+              if (!drained) (void)cudaStreamSynchronize(arena.stream);
+            };
+            runtime::ResourceScopeExit drain_before_host_reuse(drain);
+            for (std::size_t begin = 0; begin < host_weights.size(); begin += weight_tile) {
+              const auto count = std::min(weight_tile, host_weights.size() - begin);
+              check(cudaMemcpyAsync(weights, host_weights.data() + begin, count * sizeof(double),
+                                    cudaMemcpyHostToDevice, arena.stream));
+              arena.stats.host_to_device_bytes += count * sizeof(double);
+              arena.stats.response_host_to_device_bytes += count * sizeof(double);
+              ++arena.stats.uploads;
+              check(launch_df_derivative_tile(o, x, r, kind, range, count, weights, schedule,
+                                              output, arena.stream, begin));
+              ++arena.stats.tiles;
+            }
+            // The adapter reuses this host span after returning. Drain all its
+            // uploads before that mutation, even on pageable-memory CUDA paths.
+            check(cudaStreamSynchronize(arena.stream));
+            ++arena.stats.stream_synchronizations;
+            drained = true;
+          });
+      arena.stats.host_bytes += weight_stats.host_peak_bytes;
+      arena.stats.value_slices = weight_stats.value_slices;
+      arena.stats.auxiliary_weight_tile = weight_stats.auxiliary_tile;
+    }
     check(cudaMemcpyAsync(result.data(), output, result.size() * sizeof(double),
                           cudaMemcpyDeviceToHost, arena.stream));
     arena.stats.device_to_host_bytes += result.size() * sizeof(double);

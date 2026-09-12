@@ -223,6 +223,41 @@ RTX5090_DPSS_SCALAR_RYS3_RESOURCE_LIMITS = {
 }
 
 
+def _direct_cuda_source():
+    """Read direct dispatch with its extracted constant and metadata contracts."""
+    root = REPOSITORY_ROOT / "src/scf"
+    return "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in (
+            "cuda/direct_constants.hpp",
+            "cuda/scf_constants.hpp",
+            "cuda/scf_state_kernels.cu",
+            "cuda/scf_matrix_kernels.cu",
+            "cuda/scf_density_kernels.cu",
+            "cuda/scf_diis_kernels.cu",
+            "cuda/scf_convergence_kernels.cu",
+            "cuda/basis_transform_kernels.cu",
+            "cuda/launch_geometry.hpp",
+            "cuda/direct_metadata.hpp",
+            "cuda/direct_queue_index.cuh",
+            "cuda/direct_screening.cuh",
+            "cuda/direct_task_encoding.cuh",
+            "cuda/direct_page_screening.cuh",
+            "cuda/direct_queue_profile.cuh",
+            "cuda/direct_tile_validation.cu",
+            "cuda/direct_density_bounds.cu",
+            "cuda/direct_tile_compaction.cu",
+            "cuda/direct_generated_tasks.cu",
+            "cuda/direct_resident_tasks.cu",
+            "cuda/direct_bounded_pages.cu",
+            "cuda/direct_bounded_tasks.cu",
+            "cuda/direct_queue_scan.cu",
+            "cuda/direct_queue_diagnostics.cu",
+            "cuda_rhf.cu",
+        )
+    )
+
+
 @pytest.mark.parametrize(
     ("maximum_order", "series_threshold"),
     ((0, 1.0e-8), (1, 0.25), (2, 0.75), (3, 1.25), (4, 2.0)),
@@ -3001,9 +3036,7 @@ def test_simple_registry_dispatches_profiled_mixed_fock_classes():
 def test_direct_tile_validation_is_opt_in_and_reports_descriptor_context():
     """Keep the large-AO queue validator diagnostic-only and actionable."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     policy = (REPOSITORY_ROOT / "src" / "scf" / "cuda" / "rhf_policy.cpp").read_text(
         encoding="utf-8"
     )
@@ -3020,9 +3053,7 @@ def test_direct_tile_validation_is_opt_in_and_reports_descriptor_context():
 def test_graph_native_eigensolver_override_covers_all_solver_calls():
     """Keep the large-matrix escape hatch off cuSOLVER in every phase."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     override_begin = source.index("if (requested_graph_native_eigensolver_override) {")
     override_end = source.index(
         "    }\n  }\n  const CudaEigensolverFamily", override_begin
@@ -3049,12 +3080,11 @@ def test_graph_native_eigensolver_override_covers_all_solver_calls():
 def test_large_matrix_stream_fallback_matches_gpu4pyscf_solver_contract():
     """Keep Graph-rejected large matrices on the standard Xsyevd provider."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "CudaEigensolverFamily::xsyevd" in source
     assert "cusolverDnXsyevd_bufferSize" in source
-    assert "cusolverDnXsyevd(" in source
+    eigensolver = (REPOSITORY_ROOT / "src/scf/cuda/eigensolver.cpp").read_text()
+    assert "cusolverDnXsyevd(" in eigensolver
     probe_end = source.index(
         "const XsyevBatchedDispatch dispatch =",
         source.index("probe_xsyev_batched_device_launch_graph("),
@@ -3063,15 +3093,13 @@ def test_large_matrix_stream_fallback_matches_gpu4pyscf_solver_contract():
     assert "dispatch.device_launch_graph_provider" in source
     assert "plan.eigensolver_diagnostic.ordinary_family =" in source
     assert "CudaEigensolverFamily::xsyevd" in source
-    assert "Unlike XsyevBatched" in source
+    assert "Unlike XsyevBatched" in eigensolver
 
 
 def test_bounded_force_registry_gaps_use_exact_runtime_fallback():
     """Prevent large-AO force runs from regressing to a hard CUDA error."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     fallback = source.index("const auto launch_bounded_generic_force")
     dispatch = source.index("const auto launch_bounded_force")
     dispatch_boundary = re.search(
@@ -3420,9 +3448,7 @@ def test_multi_profile_objects_compile_and_link_when_nvcc_is_configured(
 def test_runtime_buckets_all_generated_classes_before_dispatch():
     """Prevent production promotion from restoring one scan per exact class."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "classify_generated_shell_tasks_kernel" in source
     assert "prefix_generated_shell_task_counts_kernel" in source
     assert "materialize_generated_shell_tasks_kernel" in source
@@ -3433,9 +3459,7 @@ def test_runtime_buckets_all_generated_classes_before_dispatch():
 def test_one_electron_force_batches_point_charges_in_one_warp_per_ao_pair():
     """Keep nuclear centers device-batched with the scalar path as fallback."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     cooperative_begin = source.index(
         "void contracted_one_electron_force_pair_cooperative("
     )
@@ -3456,9 +3480,7 @@ def test_one_electron_force_batches_point_charges_in_one_warp_per_ao_pair():
 def test_batched_finalization_reuses_each_converged_raw_fock():
     """Reuse requested-accuracy peers and restore shared force metadata."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "template <bool RetainConvergedDensity>" in source
     assert 'std::getenv("VIBEQC_FINAL_FOCK_REBUILD")' in source
     assert "select_final_fock_rebuild_kernel" in source
@@ -3480,9 +3502,7 @@ def test_batched_finalization_reuses_each_converged_raw_fock():
 def test_ppps_queue_buckets_orientation_and_primitive_signature_on_device():
     """Keep Phase-3 bucketing on the compact production queue and A/B-able."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "kPppsSignatureBucketCount" in source
     assert "resident_ppps_signature_bucket" in source
     assert "prefix_ppps_resident_signature_buckets_kernel" in source
@@ -3529,9 +3549,7 @@ def test_bounded_force_signature_mask_tracks_warp_uniform_schedules():
         for selection in selections
         if selection.schedule.kind in lockstep_kinds
     }
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     mask_begin = source.index(
         "constexpr std::uint64_t kBoundedForceSignatureShellClassMask"
     )
@@ -3545,9 +3563,7 @@ def test_bounded_force_signature_mask_tracks_warp_uniform_schedules():
 def test_bounded_dppp_force_uses_nonterminating_paged_screening():
     """Keep DPPP paged without assuming Schwarz-sorted ket segments."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     mask_begin = source.index(
         "const std::uint64_t bounded_force_legacy_queue_shell_class_mask"
     )
@@ -3557,20 +3573,33 @@ def test_bounded_dppp_force_uses_nonterminating_paged_screening():
     mask_source = source[mask_begin:mask_end]
     assert "std::uint64_t{1} << kDpppShellClass" not in mask_source
 
-    order_begin = source.index("bool make_bounded_stream_shell_pair_order")
-    order_end = source.index("struct BoundedGeneratedPageRange", order_begin)
-    assert "std::sort" not in source[order_begin:order_end]
+    queue_source = (REPOSITORY_ROOT / "src/scf/cuda/queue_plan.cpp").read_text()
+    order_begin = queue_source.index("bool make_bounded_stream_shell_pair_order")
+    order_end = queue_source.index(
+        "std::uint64_t bounded_lower_triangle_row", order_begin
+    )
+    assert "std::sort" not in queue_source[order_begin:order_end]
 
-    compact_begin = source.index(
+    # Compaction now has its own owner. Bound each assertion by the next
+    # function in that owner rather than by a comment in a different file.
+    compact_source = (
+        REPOSITORY_ROOT / "src/scf/cuda/direct_bounded_pages.cu"
+    ).read_text()
+    compact_begin = compact_source.index(
         "__global__ void compact_bounded_exact_class_force_wave_kernel"
     )
-    compact_end = source.index("/**\n * Consume one paged exact class", compact_begin)
+    compact_end = compact_source.index(
+        "void launch_compact_bounded_exact_class_force_wave_kernel", compact_begin
+    )
     low_order_begin = source.index(
         "__global__ void contract_bounded_exact_low_order_force_page_kernel"
     )
-    low_order_end = source.index("/** Scan bounded signature chunks", low_order_begin)
+    low_order_end = source.index(
+        "__global__ __launch_bounds__(kBoundedDirectThreads, 1) void bounded_direct_shell_quartet_kernel",
+        low_order_begin,
+    )
     for page_source in (
-        source[compact_begin:compact_end],
+        compact_source[compact_begin:compact_end],
         source[low_order_begin:low_order_end],
     ):
         force_gate = re.search(
@@ -3598,14 +3627,10 @@ def test_bounded_dppp_force_uses_nonterminating_paged_screening():
 def test_bounded_page_range_tracks_end_across_systems():
     """Do not stop a page at the first system that it intersects."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
+    source = (REPOSITORY_ROOT / "src/scf/cuda/queue_plan.cpp").read_text()
     range_begin = source.index("BoundedGeneratedPageRange bounded_generated_page_range")
-    range_end = source.index(
-        "std::vector<RhfBucketItem> execute_hf_cuda_bucket", range_begin
-    )
-    range_source = source[range_begin:range_end]
+    range_source = source[range_begin:]
     assert "bool found_end = false;" in range_source
     assert "found_begin && !found_end && page_end <= system_end" in range_source
     assert "found_end = true;" in range_source
@@ -3615,9 +3640,7 @@ def test_bounded_page_range_tracks_end_across_systems():
 def test_bounded_fock_pages_do_not_duplicate_streaming_consumers():
     """Run full generated pages before overflow-only streaming workers."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     begin = source.index("const auto launch_bounded_paged_generated_fock")
     end = source.index("const auto launch_bounded_generated_fock", begin)
     page_source = source[begin:end]
@@ -3631,9 +3654,7 @@ def test_bounded_fock_pages_do_not_duplicate_streaming_consumers():
 def test_fixed_generated_task_arena_has_a_memory_admission_limit():
     """Route large grid-addressable buckets before a multi-GiB allocation."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "kFixedGeneratedTaskArenaMaximumBytes" in source
     assert "direct_task_layout.exact_tile_count >" in source
     assert "sizeof(GeneratedShellTask)" in source
@@ -3643,9 +3664,7 @@ def test_fixed_generated_task_arena_has_a_memory_admission_limit():
 def test_bounded_force_keeps_fock_only_classes_out_of_force_dispatch():
     """Do not call the force registry for Fock-only ssss/psss entries."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     begin = source.index(
         "const std::uint64_t explicit_generated_force_shell_class_mask"
     )
@@ -3660,9 +3679,7 @@ def test_bounded_force_keeps_fock_only_classes_out_of_force_dispatch():
 def test_bounded_psss_resident_path_is_allocated_and_disjoint_from_page_fallback():
     """Use the validated resident-bra consumer before paging psss force work."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert re.search(
         r"requested_quartet_direct\s*\?\s*host\.psss_resident_tasks\.size\(\)",
         source,
@@ -3675,22 +3692,19 @@ def test_bounded_psss_resident_path_is_allocated_and_disjoint_from_page_fallback
 def test_warm_density_validation_parallelizes_each_system_matrix():
     """Keep fixed-dm0 setup from regressing to one serial N^2 worker."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "constexpr unsigned kWarmDensityThreads = 256" in source
     assert "warm_density_block_sum<kWarmDensityThreads>" in source
     for kernel in ("apply_warm_density_kernel", "apply_uhf_warm_density_kernel"):
-        launch = rf"{kernel}<<<static_cast<unsigned>\(batch_size\),\s*"
+        launch = rf"launch_{kernel}\(\s*static_cast<unsigned>\(batch_size\),\s*"
         assert re.search(launch + r"kWarmDensityThreads", source)
+        assert f"{kernel}<<<grid, block, shared_bytes, stream>>>" in source
 
 
 def test_force_density_product_screening_is_force_only_and_conservative():
     """Keep the force queue optional without weakening the SCF Fock gate."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "enum class DirectScreeningPurpose" in source
     assert "DirectScreeningPurpose::Fock" in source
     assert "DirectScreeningPurpose::Force" in source
@@ -3703,9 +3717,7 @@ def test_force_density_product_screening_is_force_only_and_conservative():
 def test_cached_direct_plan_reuses_immutable_task_layout():
     """Keep quadratic shell-pair topology enumeration out of warm replay."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     layout_begin = source.index("detail::DirectQuartetTaskLayout direct_task_layout")
     layout_end = source.index(
         "// Direct consumers expand each compact logical tile", layout_begin
@@ -3729,9 +3741,7 @@ def test_mixed_precision_is_budgeted_per_item_on_the_prepared_census():
     separate, deliberately unbudgeted override.
     """
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     threshold_begin = source.index(
         "const MixedPrecisionFockPolicy requested_precision_policy"
     )
@@ -3785,9 +3795,7 @@ def test_bounded_streaming_profiles_executed_precision_per_shell_class():
     generator = (
         REPOSITORY_ROOT / "python" / "vibeqc_compiler" / "integral" / "production.py"
     ).read_text(encoding="utf-8")
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     assert "record_fock_precision" in generator
     assert "fp64_work_count, fp32_work_count" in generator
     assert "bounded_fock_fp64_work_counts + shell_class" in source
@@ -3798,9 +3806,7 @@ def test_bounded_streaming_profiles_executed_precision_per_shell_class():
 def test_generated_order2_fock_masks_handwritten_fallback():
     """Prevent generated order-two Fock quartets from being scattered twice."""
 
-    source = (REPOSITORY_ROOT / "src" / "scf" / "cuda_rhf.cu").read_text(
-        encoding="utf-8"
-    )
+    source = _direct_cuda_source()
     task_begin = source.index("contract_fock_direct_order2_task(")
     task_end = source.index(
         "/** Fixed-capacity wrapper retained for high-register angular orders. */",

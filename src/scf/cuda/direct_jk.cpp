@@ -1,140 +1,32 @@
-// Included at scf namespace scope after the shared contracted-ERI evaluator and
-// HostBatch packing helpers. This provider adds consumers, not recurrence formulas.
-#pragma once
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <new>
+#include <stdexcept>
+#include <utility>
 
-struct CudaDirectJkPlan {
-  int device_id{-1};
-  DeviceBatch batch{};
-  cudaStream_t stream{};
-  unsigned derivative_order{};
-  std::size_t matrix_elements{}, coordinates_per_item{}, coordinate_elements{};
-  double screening_tolerance{};
-  double *density{}, *beta{}, *coulomb{}, *alpha_exchange{}, *beta_exchange{}, *bounds{},
-      *derivative{};
-  int* numerical_failure{};
-  std::vector<void*> allocations;
-  std::size_t device_bytes{};
-  CudaDirectJkDiagnostic diagnostic{};
-  ~CudaDirectJkPlan() {
-    if (device_id >= 0) (void)cudaSetDevice(device_id);
-    if (stream) (void)cudaStreamSynchronize(stream);
-    for (void* pointer : allocations) (void)runtime::resource_cuda_free(pointer);
-    if (stream) (void)cudaStreamDestroy(stream);
-  }
-};
+#include "runtime/resource_cuda.cuh"
+#include "runtime/resource_usage.hpp"
+#include "scf/cuda/checked_layout.hpp"
+#include "scf/cuda/direct_jk_kernels.hpp"
+#include "scf/cuda/direct_jk_plan.hpp"
+#include "scf/cuda/metadata_upload.hpp"
+#include "scf/cuda/topology.hpp"
+
+namespace vibeqc::scf {
 
 namespace {
-constexpr unsigned kIndependentJkThreads = 32;
-
-/** Schwarz bounds in public AO order, including sparse spherical expansions. */
-__global__ void independent_jk_bounds_kernel(DeviceBatch batch, double* bounds, int* failure) {
-  const std::size_t n = batch.nbf, matrix = n * n;
-  const std::size_t item = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (item >= static_cast<std::size_t>(batch.batch_size) * matrix) return;
-  const auto system = static_cast<std::int32_t>(item / matrix);
-  const auto i = static_cast<std::int32_t>((item % matrix) / n);
-  const auto j = static_cast<std::int32_t>(item % n);
-  const double value = contracted_eri<double>(batch, system, i, j, i, j, -1);
-  // NaN bounds must never masquerade as screened-out quartets.
-  if (!isfinite(value)) atomicExch(failure, 1);
-  bounds[item] = sqrt(fabs(value));
+using namespace cuda_execution;
 }
 
-/** One output owner reduces all density pairs; no ERI tensor or atomics.
- * Full pair traversal preserves nonsymmetric input orientation. Integral and
- * sparse spherical expansion arithmetic is exactly the existing evaluator.
- */
-__global__ void independent_jk_kernel(DeviceBatch batch, std::size_t system_begin, bool want_j,
-                                      bool want_k, bool unrestricted, double screening,
-                                      const double* bounds, const double* density,
-                                      const double* beta, double* j_out, double* ka_out,
-                                      double* kb_out) {
-  __shared__ double sums[3][kIndependentJkThreads];
-  const std::size_t n = batch.nbf, matrix = n * n;
-  const std::size_t item = system_begin * matrix + blockIdx.x;
-  const auto system = static_cast<std::int32_t>(item / matrix);
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix;
-  const auto i = static_cast<std::int32_t>((item % matrix) / n);
-  const auto j = static_cast<std::int32_t>(item % n);
-  double coulomb = 0.0, alpha_exchange = 0.0, beta_exchange = 0.0;
-  for (std::size_t kl = threadIdx.x; kl < matrix; kl += blockDim.x) {
-    const auto k = static_cast<std::int32_t>(kl / n), l = static_cast<std::int32_t>(kl % n);
-    const double a = density[offset + kl], b = unrestricted ? beta[offset + kl] : 0.0;
-    if (want_j && bounds[item] * bounds[offset + kl] >= screening && a + b != 0.0)
-      coulomb += (a + b) * contracted_eri<double>(batch, system, i, j, k, l, -1);
-    if (want_k && bounds[offset + i * n + k] * bounds[offset + j * n + l] >= screening &&
-        (a != 0.0 || b != 0.0)) {
-      const double value = contracted_eri<double>(batch, system, i, k, j, l, -1);
-      alpha_exchange += a * value;
-      beta_exchange += b * value;
-    }
-  }
-  sums[0][threadIdx.x] = coulomb;
-  sums[1][threadIdx.x] = alpha_exchange;
-  sums[2][threadIdx.x] = beta_exchange;
-  __syncthreads();
-  for (unsigned stride = blockDim.x / 2; stride; stride /= 2) {
-    if (threadIdx.x < stride)
-      for (unsigned term = 0; term < 3; ++term)
-        sums[term][threadIdx.x] += sums[term][threadIdx.x + stride];
-    __syncthreads();
-  }
-  if (threadIdx.x == 0) {
-    if (want_j) j_out[item] = sums[0][0];
-    if (want_k) ka_out[item] = sums[1][0];
-    if (want_k && unrestricted) kb_out[item] = sums[2][0];
-  }
+CudaDirectJkPlan::~CudaDirectJkPlan() {
+  if (device_id >= 0) (void)cudaSetDevice(device_id);
+  if (stream) (void)cudaStreamSynchronize(stream);
+  for (void* pointer : allocations) (void)runtime::resource_cuda_free(pointer);
+  if (stream) (void)cudaStreamDestroy(stream);
 }
 
-/** Differentiate the same screened discrete energy at fixed spin densities.
- * Relabel exchange indices so a single ERI derivative serves J and both K
- * terms. The 1/2 energy factor is separate from signed Fock coefficients.
- */
-__global__ void independent_jk_derivative_kernel(DeviceBatch batch,
-                                                 std::size_t coordinates_per_item,
-                                                 std::size_t system_begin, double cj, double ck,
-                                                 bool unrestricted, double screening,
-                                                 const double* bounds, const double* density,
-                                                 const double* beta, double* out) {
-  __shared__ double sums[kIndependentJkThreads];
-  const std::size_t n = batch.nbf, matrix = n * n, quartets = matrix * matrix;
-  const std::size_t coordinate = system_begin * coordinates_per_item + blockIdx.x;
-  const auto system = static_cast<std::int32_t>(coordinate / coordinates_per_item);
-  const std::size_t offset = static_cast<std::size_t>(system) * matrix;
-  double sum = 0.0;
-  for (std::size_t quartet = threadIdx.x; quartet < quartets; quartet += blockDim.x) {
-    const std::size_t ij = quartet / matrix, kl = quartet % matrix;
-    if (bounds[offset + ij] * bounds[offset + kl] < screening) continue;
-    const auto i = static_cast<std::int32_t>(ij / n), j = static_cast<std::int32_t>(ij % n);
-    const auto k = static_cast<std::int32_t>(kl / n), l = static_cast<std::int32_t>(kl % n);
-    double weight = 0.0;
-    // An absent/zero-weight term must not evaluate a quadratic that can
-    // overflow, even when the requested total-density contribution is finite.
-    if (cj != 0.0) {
-      const double total_ij = density[offset + ij] + (unrestricted ? beta[offset + ij] : 0.0);
-      const double total_kl = density[offset + kl] + (unrestricted ? beta[offset + kl] : 0.0);
-      weight += cj * total_ij * total_kl;
-    }
-    if (ck != 0.0) {
-      const std::size_t ik = i * n + k, jl = j * n + l;
-      const double exchange = density[offset + ik] * density[offset + jl] +
-                              (unrestricted ? beta[offset + ik] * beta[offset + jl] : 0.0);
-      weight += ck * exchange;
-    }
-    weight *= 0.5;
-    if (weight != 0.0)
-      sum += weight *
-             contracted_eri<Dual>(batch, system, i, j, k, l, static_cast<std::int64_t>(coordinate))
-                 .derivative;
-  }
-  sums[threadIdx.x] = sum;
-  __syncthreads();
-  for (unsigned stride = blockDim.x / 2; stride; stride /= 2) {
-    if (threadIdx.x < stride) sums[threadIdx.x] += sums[threadIdx.x + stride];
-    __syncthreads();
-  }
-  if (threadIdx.x == 0) out[coordinate] = sums[0];
-}
+namespace {
 
 struct DirectJkFailure {
   vibeqc_status status;
@@ -353,8 +245,8 @@ vibeqc_status create_cuda_direct_jk_plan(int device_id, const std::vector<core::
     direct_jk_check(cudaMemsetAsync(plan->numerical_failure, 0, sizeof(int), plan->stream));
     const auto blocks =
         static_cast<unsigned>((elements + kIndependentJkThreads - 1) / kIndependentJkThreads);
-    independent_jk_bounds_kernel<<<blocks, kIndependentJkThreads, 0, plan->stream>>>(
-        plan->batch, plan->bounds, plan->numerical_failure);
+    launch_independent_jk_bounds_kernel(blocks, kIndependentJkThreads, 0, plan->stream, plan->batch,
+                                        plan->bounds, plan->numerical_failure);
     direct_jk_check(cudaGetLastError());
     int numerical_failure = 0;
     direct_jk_check(cudaMemcpyAsync(&numerical_failure, plan->numerical_failure, sizeof(int),
@@ -407,11 +299,11 @@ static vibeqc_status execute_cuda_direct_jk_range(
     if (spec.coulomb.present || spec.exchange.present) {
       DirectJkDownloadFence fence{plan->stream};
       direct_jk_upload_density(*plan, density, beta, offset);
-      independent_jk_kernel<<<static_cast<unsigned>(density.size()), kIndependentJkThreads, 0,
-                              plan->stream>>>(
-          plan->batch, begin, spec.coulomb.present, spec.exchange.present, unrestricted,
-          plan->screening_tolerance, plan->bounds, plan->density, plan->beta, plan->coulomb,
-          plan->alpha_exchange, plan->beta_exchange);
+      launch_independent_jk_kernel(static_cast<unsigned>(density.size()), kIndependentJkThreads, 0,
+                                   plan->stream, plan->batch, begin, spec.coulomb.present,
+                                   spec.exchange.present, unrestricted, plan->screening_tolerance,
+                                   plan->bounds, plan->density, plan->beta, plan->coulomb,
+                                   plan->alpha_exchange, plan->beta_exchange);
       direct_jk_check(cudaGetLastError());
       auto download = [&](std::vector<double>& out, const double* input) {
         if (!out.empty())
@@ -447,11 +339,10 @@ static vibeqc_status execute_cuda_direct_energy_derivative_range(
     if (cj != 0.0 || ck != 0.0) {
       DirectJkDownloadFence fence{plan->stream};
       direct_jk_upload_density(*plan, density, beta, offset);
-      independent_jk_derivative_kernel<<<static_cast<unsigned>(result.size()),
-                                         kIndependentJkThreads, 0, plan->stream>>>(
-          plan->batch, plan->coordinates_per_item, begin, cj, ck,
-          spec.spin == FockSpin::Unrestricted, plan->screening_tolerance, plan->bounds,
-          plan->density, plan->beta, plan->derivative);
+      launch_independent_jk_derivative_kernel(
+          static_cast<unsigned>(result.size()), kIndependentJkThreads, 0, plan->stream, plan->batch,
+          plan->coordinates_per_item, begin, cj, ck, spec.spin == FockSpin::Unrestricted,
+          plan->screening_tolerance, plan->bounds, plan->density, plan->beta, plan->derivative);
       direct_jk_check(cudaGetLastError());
       direct_jk_check(
           cudaMemcpyAsync(result.data(), plan->derivative + begin * plan->coordinates_per_item,
@@ -498,3 +389,5 @@ vibeqc_status execute_cuda_direct_energy_derivative_item(CudaDirectJkPlan* plan,
   return execute_cuda_direct_energy_derivative_range(plan, item, 1, spec, density, beta, derivative,
                                                      detail);
 }
+
+}  // namespace vibeqc::scf
