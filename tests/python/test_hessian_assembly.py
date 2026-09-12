@@ -28,7 +28,7 @@ def test_skeleton_keeps_components_and_sums_without_extra_prefactors():
         "two_electron_skeleton",
     }
     assert report["includes_response"] is False
-    for name, value in report["components"].items():
+    for value in report["components"].values():
         value[...] = 0.0
     assert np.any(report["skeleton"] != 0.0)
 
