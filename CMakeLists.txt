@@ -214,6 +214,15 @@ target_compile_definitions(vibeqc PRIVATE VIBEQC_BUILDING_LIBRARY=1)
 target_compile_options(vibeqc PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>)
 
 if(VIBEQC_ENABLE_CUDA)
+  foreach(_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+    if(_arch STREQUAL "native" OR _arch STREQUAL "all" OR _arch STREQUAL "all-major")
+      message(FATAL_ERROR
+        "VIBEQC MP2 AOT generation requires numeric CMAKE_CUDA_ARCHITECTURES; "
+        "special value '${_arch}' is unsupported. Configure with numeric architectures, "
+        "for example 75;90.")
+    endif()
+  endforeach()
+
   # DF values share the mathematical generator even in generic four-center
   # builds. Keep the emitted header out of version control and regenerate it
   # whenever one of its mathematical or lowering dependencies changes.

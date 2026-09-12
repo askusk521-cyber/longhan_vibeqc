@@ -67,12 +67,34 @@ def main():
         parser.error("select --cpu-header and/or --cuda-dir")
 
 
+def _numeric_architectures(value):
+    raw = [item.strip() for item in value.split(";") if item.strip()]
+    special = {"native", "all", "all-major"}
+    unsupported = sorted({item.lower() for item in raw if item.lower() in special})
+    if unsupported:
+        values = ", ".join(unsupported)
+        raise ValueError(
+            "MP2 CUDA generation requires numeric architectures; "
+            f"CMake special value(s) {values} are unsupported. "
+            "Configure with values such as 75;90."
+        )
+    try:
+        result = sorted({int(item.split("-")[0]) for item in raw})
+    except ValueError as exc:
+        raise ValueError(
+            "MP2 CUDA generation requires numeric architectures such as 75;90."
+        ) from exc
+    if not result:
+        raise ValueError("MP2 CUDA generation requires at least one numeric architecture.")
+    return result
+
+
 def cuda_sources(directory, architectures):
     from tools.vibeqc_codegen.cuda_target import cuda_target_info
     from tools.vibeqc_tensor.cuda_emit import emit_cuda
     from tools.vibeqc_tensor.cuda_plan import plan_cuda
 
-    archs = sorted({int(a.split("-")[0]) for a in architectures.split(";")})
+    archs = _numeric_architectures(architectures)
     directory.mkdir(parents=True, exist_ok=True)
     table = [
         '#include "posthf/mp2_cuda_plan.hpp"',
