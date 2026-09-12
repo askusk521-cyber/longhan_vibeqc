@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "molecule/basis.hpp"
+#include "scf/cuda/rhf_policy.hpp"
 #include "scf/fleet.hpp"
 #include "scf/rhf.hpp"
 #include "vibeqc/vibeqc.h"
@@ -312,6 +313,100 @@ void verify_per_item_auto_policy(bool unrestricted) {
   }
   vibeqc::scf::destroy_rhf_cuda_bucket_plan(plan);
 }
+
+/**
+ * A converged mixed item is refined in exact FP64, so the matrix it retains is
+ * target precision and the final energy and forces may consume it directly.
+ *
+ * This pins the invariant that makes the reuse admissible on a real device: an
+ * item that reused its retained target-precision matrix must reproduce the
+ * energy, forces and density of the same run with \p VIBEQC_FINAL_FOCK_REBUILD=0,
+ * which rebuilds the final matrix explicitly. The mixed route and its exact
+ * FP64 refinement are asserted first, so a silent FP64 fallback cannot make the
+ * comparison vacuous.
+ */
+void verify_final_state_reuse(bool unrestricted, bool with_cold_peer = false) {
+  const vibeqc::core::System system = mixed_precision_system(unrestricted);
+  vibeqc::scf::ScfOptions options;
+  options.max_iterations = 100;
+  options.energy_tolerance = 1.0e-10;
+  options.density_tolerance = 1.0e-8;
+  options.screening_tolerance = 1.0e-12;
+  setenv("VIBEQC_AOT_FOCK_SHELL_CLASSES", "dpps", 1);
+  unsetenv("VIBEQC_MIXED_PRECISION_FOCK_THRESHOLD");
+  unsetenv("VIBEQC_FINAL_FOCK_REBUILD");
+  vibeqc::scf::CudaRhfBucketPlan* plan = nullptr;
+  std::vector<vibeqc::core::System> systems{system};
+  if (with_cold_peer) {
+    // A cold peer stays FP64 and may converge before the mixed item's exact
+    // refinement; its retained snapshot must survive the shared bucket work.
+    systems.push_back(system);
+    systems.back().atoms.back().position[0] += 0.05;
+  }
+  const std::vector<const std::vector<double>*> cold_density(systems.size(), nullptr);
+  const auto run_cached = [&](const std::vector<const std::vector<double>*>& dm0) {
+    return unrestricted
+               ? vibeqc::scf::run_uhf_cuda_bucket_cached(&plan, systems, options, dm0, 0, false)
+               : vibeqc::scf::run_rhf_cuda_bucket_cached(&plan, systems, options, dm0, 0, false);
+  };
+
+  options.precision_mode = VIBEQC_PRECISION_FP64;
+  const std::vector<vibeqc::scf::RhfBucketItem> reference = run_cached(cold_density);
+  require(reference.size() == systems.size() && reference[0].status == VIBEQC_STATUS_SUCCESS &&
+              reference[0].scf.converged,
+          "reuse reference did not converge");
+  std::vector<const std::vector<double>*> warm_density(systems.size(), nullptr);
+  warm_density[0] = &reference[0].scf.density;
+
+  options.precision_mode = VIBEQC_PRECISION_AUTO;
+  const std::vector<vibeqc::scf::RhfBucketItem> retained = run_cached(warm_density);
+  require(retained.size() == systems.size() && retained[0].status == VIBEQC_STATUS_SUCCESS &&
+              retained[0].scf.converged,
+          "retained-Fock mixed run did not converge");
+  require(retained[0].scf.initial_density_used,
+          "retained-Fock fixture did not start from the validated warm density");
+  require(retained[0].scf.precision.effective_bits == 32U,
+          "retained-Fock fixture did not select the mixed route");
+  require(retained[0].scf.precision.strict_refinement_applied,
+          "retained-Fock mixed run skipped the exact FP64 target refinement");
+
+  require(retained[0].scf.density_rms <=
+              vibeqc::scf::cuda_policy::converged_fock_reuse_density_rms(options.density_tolerance),
+          "mixed fixture did not qualify for retained-Fock reuse");
+  if (with_cold_peer) {
+    require(
+        retained[1].scf.precision.effective_bits == 64U && !retained[1].scf.initial_density_used,
+        "cold peer did not exercise independent FP64 admission");
+  }
+
+  // Same arithmetic, duplicate finalization restored: the only difference may
+  // be one operator evaluation, because the retained matrix is target precision.
+  setenv("VIBEQC_FINAL_FOCK_REBUILD", "0", 1);
+  const std::vector<vibeqc::scf::RhfBucketItem> rebuilt = run_cached(warm_density);
+  unsetenv("VIBEQC_FINAL_FOCK_REBUILD");
+  require(rebuilt.size() == systems.size() && rebuilt[0].status == VIBEQC_STATUS_SUCCESS &&
+              rebuilt[0].scf.converged,
+          "forced-rebuild mixed run did not converge");
+  require(rebuilt[0].scf.precision.effective_bits == 32U &&
+              rebuilt[0].scf.precision.strict_refinement_applied,
+          "forced-rebuild comparator did not use the same refined mixed route");
+  // The CUDA route reports no operator-evaluation count, so the removal of the
+  // duplicate rebuild is measured by the slice-E cost matrix rather than here.
+  // What this test owns is the invariant that made the removal admissible: the
+  // retained target-precision matrix must reproduce the rebuilt observable.
+  for (std::size_t index = 0; index < systems.size(); ++index) {
+    require(retained[index].status == VIBEQC_STATUS_SUCCESS && retained[index].scf.converged &&
+                rebuilt[index].status == VIBEQC_STATUS_SUCCESS && rebuilt[index].scf.converged,
+            "reuse comparison contains an unconverged peer");
+    require(std::abs(retained[index].scf.energy - rebuilt[index].scf.energy) < 2.0e-9,
+            "reusing the retained target-precision Fock changed the energy");
+    require(maximum_difference(retained[index].scf.forces, rebuilt[index].scf.forces) < 2.0e-7,
+            "reusing the retained target-precision Fock changed the forces");
+    require(maximum_difference(retained[index].scf.density, rebuilt[index].scf.density) < 2.0e-6,
+            "reusing the retained target-precision Fock changed the density");
+  }
+  vibeqc::scf::destroy_rhf_cuda_bucket_plan(plan);
+}
 }  // namespace
 
 int main() {
@@ -327,6 +422,10 @@ int main() {
     verify_public_auto_policy(true);
     verify_per_item_auto_policy(false);
     verify_per_item_auto_policy(true);
+    verify_final_state_reuse(false);
+    verify_final_state_reuse(true);
+    verify_final_state_reuse(false, true);
+    verify_final_state_reuse(true, true);
     std::cout << "validated RHF/UHF mixed direct-Fock, public auto and per-item policies\n";
 #else
     std::cout << "mixed-precision checks skipped: CUDA disabled\n";

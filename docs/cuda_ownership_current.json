@@ -786,16 +786,16 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 852347,
+      "bytes": 852313,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 7227,
+        "runtime": 7226,
         "scientific": 7156
       },
       "path": "src/scf/cuda_rhf.cu",
-      "physical_lines": 16018,
+      "physical_lines": 16017,
       "reason": "Remaining device recurrences, physical screening bounds and method contractions are conservatively scientific; explicit regions separate generic runtime.",
       "regions": [
         {
@@ -934,9 +934,9 @@
           "stop": "cudaError_t prepare_generated_shell_tasks("
         },
         {
-          "code_lines": 4875,
+          "code_lines": 4874,
           "first_line": 10714,
-          "last_line": 16018,
+          "last_line": 16017,
           "reason": "Host resource planning, library/state/graph execution and ABI dispatch; numerical device equations are classified above.",
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
@@ -944,7 +944,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "2c9731ae60dcec1bf4d7cdda52613d318174367a26773e83246dc591e04053c0",
+      "sha256": "f8ca1c1633e43aac056457c2b2ce47f6ff9478fa824f5d4644fe9e0beace21cc",
       "subsystem": "direct_integrals"
     },
     {
@@ -1124,7 +1124,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 122,
-    "runtime": 13405,
+    "runtime": 13404,
     "scientific": 9387
   },
   "migration_ledger": {
@@ -1284,7 +1284,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 7227,
+      "runtime": 7226,
       "scientific": 7256
     },
     "low_rank": {
