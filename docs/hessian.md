@@ -78,12 +78,36 @@ the Hessian `H_{R R'} = ∂²E/∂R∂R'` splits into a **skeleton** part, taken
 the density and the orbital coefficients held fixed, and a **relaxation** part
 carried by the orbital response.
 
+### The two-electron weight, derived rather than inspected
+
+Expanding the two-electron energy once gives
+
+```text
+E_2 = ½ Σ_{μνλσ} P_μν P_λσ (μν|λσ)  −  ¼ Σ_{μνλσ} P_μν P_λσ (μλ|νσ).
+```
+
+Renaming the dummy indices in the exchange sum so that its ``(ac|bd)`` becomes
+``(μν|λσ)`` turns ``P_ab P_cd`` into ``P_μλ P_νσ``, which puts both terms over
+the same integral:
+
+```text
+E_2 = Σ_{μνλσ} [ ½ P_μν P_λσ − ¼ P_μλ P_νσ ] (μν|λσ)  =  Σ_{μνλσ} W_μνλσ (μν|λσ).
+```
+
+**The outer ``½`` is already inside ``W``.** Writing the skeleton as
+``½ Σ W ∂²(μν|λσ)`` on top of this ``W`` would halve both the Coulomb and the
+exchange contribution — the row below therefore carries no further factor. The
+folding is implemented as ``two_electron_weight`` in
+:mod:`tools.vibeqc_hessian.weights` and checked against a direct
+``½ Tr[P G(P)]`` evaluation, so the factor is verified where it is consumed
+rather than only asserted here.
+
 | # | Term | Form | Supplier |
 |---|---|---|---|
 | 1 | Nuclear repulsion | `∂²E_nuc/∂R∂R'` | caller, closed form |
 | 2 | One-electron skeleton | `Tr[P ∂²h/∂R∂R']` | #178 `build_one_electron_second_ir`, families `overlap`/`kinetic`/`nuclear_attraction`, `weighted_hessian`, W = P |
 | 3 | Overlap (Pulay) skeleton | `-Tr[W ∂²S/∂R∂R']` | same provider, W = -W |
-| 4 | Two-electron skeleton | `½ Σ_{μνλσ} W_μνλσ ∂²(μν|λσ)/∂R∂R'` with `W_μνλσ = ½ P_μν P_λσ - ¼ P_μλ P_νσ` | #178 `build_eri_second_ir`, `weighted_hessian` |
+| 4 | Two-electron skeleton | `Σ_{μνλσ} W_μνλσ ∂²(μν|λσ)/∂R∂R'` with `W_μνλσ = ½ P_μν P_λσ - ¼ P_μλ P_νσ` (no further factor; see the derivation above) | #178 `build_eri_second_ir`, `weighted_hessian` |
 | 5 | Fock-derivative RHS | `b_ai = (∂F/∂R)_ai` at frozen P, occ-virt block, MO basis | caller: one-electron part from #141 raw `∂h/∂R`; two-electron part from #144 weighted ERI first derivative |
 | 6 | Orbital response | solve `A u = -b` | #179 `RHFResponseOperator` + `solve_many` |
 | 7 | Relaxation contribution | `u` combined with first derivatives of h, S, and the ERIs | caller |
