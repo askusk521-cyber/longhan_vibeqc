@@ -311,6 +311,9 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/resources.cpp
+    src/scf/cuda/matrix_library.cpp
+    src/scf/cuda/runtime_support.cpp
     src/scf/cuda/scf_state_kernels.cu
     src/scf/cuda/scf_matrix_kernels.cu
     src/scf/cuda/scf_density_kernels.cu

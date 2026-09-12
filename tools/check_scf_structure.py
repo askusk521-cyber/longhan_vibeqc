@@ -159,6 +159,20 @@ CUDA_MODULES["cuda_scf_kernels"] = (
 CUDA_ALLOWED["cuda_scf_kernels"] = tuple(
     "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_scf_kernels"]
 ) + ("scf/cuda/matrix_index.",)
+CUDA_MODULES["cuda_resources"] = ("resources",)
+CUDA_ALLOWED["cuda_resources"] = (
+    "scf/cuda/resources.",
+    "scf/cuda/eigensolver.",
+    "scf/cuda/matrix_library.",
+    "runtime/resource_cuda.cuh",
+)
+CUDA_MODULES["cuda_matrix_library"] = ("matrix_library", "runtime_support")
+CUDA_ALLOWED["cuda_matrix_library"] = (
+    "scf/cuda/matrix_library.",
+    "scf/cuda/runtime_support.",
+    "scf/cuda/scf_matrix_kernels.",
+    "scf/cuda/launch_geometry.",
+)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 

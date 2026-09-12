@@ -68,6 +68,8 @@ def test_documented_forbidden_example_is_not_an_include(tmp_path):
         ("df_source_setup.cpp", "cuda_df_source"),
         ("df_plan_setup.cpp", "cuda_df_runtime"),
         ("df_rhf_scf.cpp", "cuda_df_runtime"),
+        ("resources.cpp", "cuda_resources"),
+        ("matrix_library.cpp", "cuda_matrix_library"),
     ],
 )
 @pytest.mark.parametrize("include", ['"scf/rhf.hpp"', '"../rhf.hpp"', "<scf/rhf.hpp>"])
@@ -98,4 +100,13 @@ def test_df_kernels_cannot_acquire_host_plan_state(tmp_path, owner):
     source.mkdir(parents=True)
     (source / "df_plan_internal.hpp").write_text("// Plan-owned allocations\n")
     (source / owner).write_text('#include "df_plan_internal.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+def test_matrix_library_cannot_acquire_bucket_resource_owner(tmp_path):
+    """Matrix consumers borrow handles without depending on allocation lifetime."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "resources.hpp").write_text("// Stream/graph/arena owner\n")
+    (source / "matrix_library.cpp").write_text('#include "resources.hpp"\n')
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1

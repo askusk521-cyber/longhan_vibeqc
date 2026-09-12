@@ -33,12 +33,15 @@
 #include "scf/cuda/direct_metadata.hpp"
 #include "scf/cuda/eigensolver.hpp"
 #include "scf/cuda/matrix_index.cuh"
+#include "scf/cuda/matrix_library.hpp"
 #include "scf/cuda/metadata_upload.hpp"
 #include "scf/cuda/one_electron_derivatives.cuh"
 #include "scf/cuda/one_electron_values.cuh"
 #include "scf/cuda/packed_basis.hpp"
 #include "scf/cuda/queue_plan.hpp"
+#include "scf/cuda/resources.hpp"
 #include "scf/cuda/rhf_policy.hpp"
+#include "scf/cuda/runtime_support.hpp"
 #include "scf/cuda/scf_convergence_kernels.hpp"
 #include "scf/cuda/scf_density_kernels.hpp"
 #include "scf/cuda/scf_diis_kernels.hpp"
@@ -10178,169 +10181,8 @@ void launch_angular_force_quartets(
   }
 }
 
-vibeqc_status cuda_status(cudaError_t status) {
-  if (status == cudaSuccess) return VIBEQC_STATUS_SUCCESS;
-  return status == cudaErrorMemoryAllocation ? VIBEQC_STATUS_OUT_OF_MEMORY
-                                             : VIBEQC_STATUS_CUDA_ERROR;
-}
-
-vibeqc_status solver_status(cusolverStatus_t status) {
-  if (status == CUSOLVER_STATUS_SUCCESS) return VIBEQC_STATUS_SUCCESS;
-  return status == CUSOLVER_STATUS_ALLOC_FAILED ? VIBEQC_STATUS_OUT_OF_MEMORY
-                                                : VIBEQC_STATUS_CUDA_ERROR;
-}
-
-vibeqc_status blas_status(cublasStatus_t status) {
-  if (status == CUBLAS_STATUS_SUCCESS) return VIBEQC_STATUS_SUCCESS;
-  return status == CUBLAS_STATUS_ALLOC_FAILED ? VIBEQC_STATUS_OUT_OF_MEMORY
-                                              : VIBEQC_STATUS_CUDA_ERROR;
-}
-
 void fill_global_failure(std::vector<RhfBucketItem>& outputs, vibeqc_status status) {
   for (RhfBucketItem& output : outputs) output.status = status;
-}
-
-class CudaResources {
- public:
-  ~CudaResources() {
-    if (device_id_ >= 0) (void)cudaSetDevice(device_id_);
-    if (post_eigensolver_graph_exec_ != nullptr) {
-      (void)cudaGraphExecDestroy(post_eigensolver_graph_exec_);
-    }
-    if (post_eigensolver_graph_ != nullptr) {
-      (void)cudaGraphDestroy(post_eigensolver_graph_);
-    }
-    if (iteration_graph_exec_ != nullptr) {
-      (void)cudaGraphExecDestroy(iteration_graph_exec_);
-    }
-    if (iteration_graph_ != nullptr) (void)cudaGraphDestroy(iteration_graph_);
-    if (jacobi_ != nullptr) (void)cusolverDnDestroySyevjInfo(jacobi_);
-    if (solver_parameters_ != nullptr) {
-      (void)cusolverDnDestroyParams(solver_parameters_);
-    }
-    if (solver_ != nullptr) (void)cusolverDnDestroy(solver_);
-    if (blas_ != nullptr) (void)cublasDestroy(blas_);
-    if (stream_ != nullptr) {
-      // Both allocations come from CUDA's stream-ordered device pool. Queue
-      // their release on the owning bucket stream so destroying one plan does
-      // not impose a device-wide synchronization on unrelated workloads.
-      if (solver_workspace_ != nullptr) {
-        (void)runtime::resource_cuda_free_async(solver_workspace_, stream_);
-      }
-      if (direct_tile_validation_ != nullptr) {
-        (void)runtime::resource_cuda_free_async(direct_tile_validation_, stream_);
-      }
-      if (arena_ != nullptr) (void)runtime::resource_cuda_free_async(arena_, stream_);
-      (void)cudaStreamSynchronize(stream_);
-      (void)cudaStreamDestroy(stream_);
-    }
-    std::free(solver_host_workspace_);
-  }
-
-  /** Borrow library state while retaining ownership in the prepared bucket. */
-  EigensolverResources eigensolver_view() const {
-    return {stream_,
-            solver_,
-            solver_parameters_,
-            jacobi_,
-            solver_workspace_,
-            solver_workspace_bytes_,
-            solver_host_workspace_,
-            solver_host_workspace_bytes_};
-  }
-
-  int device_id_{-1};
-  cudaStream_t stream_{};
-  cublasHandle_t blas_{};
-  cusolverDnHandle_t solver_{};
-  cusolverDnParams_t solver_parameters_{};
-  syevjInfo_t jacobi_{};
-  cudaGraph_t iteration_graph_{};
-  cudaGraphExec_t iteration_graph_exec_{};
-  // cuSOLVER XsyevBatched above 512 AOs executes efficiently on an ordinary
-  // stream but rejects CUDA Graph capture on CUDA 12.9.  Large-matrix SCF
-  // therefore replays a pre-solver Graph, launches the provider normally,
-  // then replays this post-solver Graph under host convergence control.
-  cudaGraph_t post_eigensolver_graph_{};
-  cudaGraphExec_t post_eigensolver_graph_exec_{};
-  void* arena_{};
-  DirectTileValidationRecord* direct_tile_validation_{};
-  void* solver_workspace_{};
-  std::size_t solver_workspace_bytes_{};
-  void* solver_host_workspace_{};
-  std::size_t solver_host_workspace_bytes_{};
-};
-
-vibeqc_status copy_to_device(void* destination, const void* source, std::size_t bytes,
-                             cudaStream_t stream) {
-  if (bytes == 0) return VIBEQC_STATUS_SUCCESS;
-  return cuda_status(cudaMemcpyAsync(destination, source, bytes, cudaMemcpyHostToDevice, stream));
-}
-
-vibeqc_status launch_matrix_product(CudaResources& resources, int batch_size, int nbf,
-                                    const double* left, bool transpose_left, const double* right,
-                                    const std::uint8_t* active, double* output, bool use_cublas) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * static_cast<std::size_t>(nbf);
-  if (!use_cublas) {
-    const std::size_t elements = static_cast<std::size_t>(batch_size) * matrix_size;
-    const unsigned blocks = static_cast<unsigned>((elements + kCaptureSafeKernelThreads - 1) /
-                                                  kCaptureSafeKernelThreads);
-    launch_matrix_product_kernel(blocks, kCaptureSafeKernelThreads, 0, resources.stream_,
-                                 batch_size, nbf, left, transpose_left, right, active, output);
-    return cuda_status(cudaPeekAtLastError());
-  }
-
-  const double alpha = 1.0;
-  const double beta = 0.0;
-  const cublasOperation_t operation = transpose_left ? CUBLAS_OP_T : CUBLAS_OP_N;
-  return blas_status(cublasDgemmStridedBatched(
-      resources.blas_, operation, CUBLAS_OP_N, nbf, nbf, nbf, &alpha, left, nbf,
-      static_cast<long long>(matrix_size), right, nbf, static_cast<long long>(matrix_size), &beta,
-      output, nbf, static_cast<long long>(matrix_size), batch_size));
-}
-
-/**
- * Multiply system-major spin matrices while broadcasting physical operands.
- *
- * A physical matrix repeats for alpha and beta, which is not one constant
- * stride over the interleaved state array. One strided-batched GEMM per spin
- * preserves the existing [system][spin][matrix] storage without pointer lists.
- */
-vibeqc_status launch_spin_matrix_product(CudaResources& resources, int batch_size, int spin_count,
-                                         int nbf, const double* left, bool left_is_spin,
-                                         bool transpose_left, const double* right,
-                                         bool right_is_spin, const std::uint8_t* active,
-                                         double* output, bool use_cublas) {
-  const std::size_t matrix_size = static_cast<std::size_t>(nbf) * static_cast<std::size_t>(nbf);
-  if (!use_cublas) {
-    const std::size_t elements =
-        static_cast<std::size_t>(batch_size) * static_cast<std::size_t>(spin_count) * matrix_size;
-    const unsigned blocks = static_cast<unsigned>((elements + kCaptureSafeKernelThreads - 1) /
-                                                  kCaptureSafeKernelThreads);
-    launch_spin_matrix_product_kernel(blocks, kCaptureSafeKernelThreads, 0, resources.stream_,
-                                      batch_size, spin_count, nbf, left, left_is_spin,
-                                      transpose_left, right, right_is_spin, active, output);
-    return cuda_status(cudaPeekAtLastError());
-  }
-
-  const double alpha = 1.0;
-  const double beta = 0.0;
-  const cublasOperation_t operation = transpose_left ? CUBLAS_OP_T : CUBLAS_OP_N;
-  const long long physical_stride = static_cast<long long>(matrix_size);
-  const long long spin_stride =
-      static_cast<long long>(matrix_size * static_cast<std::size_t>(spin_count));
-  for (int spin = 0; spin < spin_count; ++spin) {
-    const std::size_t spin_offset = static_cast<std::size_t>(spin) * matrix_size;
-    const double* spin_left = left + (left_is_spin ? spin_offset : 0);
-    const double* spin_right = right + (right_is_spin ? spin_offset : 0);
-    const cublasStatus_t status =
-        cublasDgemmStridedBatched(resources.blas_, operation, CUBLAS_OP_N, nbf, nbf, nbf, &alpha,
-                                  spin_left, nbf, left_is_spin ? spin_stride : physical_stride,
-                                  spin_right, nbf, right_is_spin ? spin_stride : physical_stride,
-                                  &beta, output + spin_offset, nbf, spin_stride, batch_size);
-    if (status != CUBLAS_STATUS_SUCCESS) return blas_status(status);
-  }
-  return VIBEQC_STATUS_SUCCESS;
 }
 
 }  // namespace
@@ -11716,9 +11558,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   };
   const auto multiply_matrices = [&](const double* left, bool transpose_left, const double* right,
                                      double* output) {
-    const vibeqc_status product_status =
-        launch_matrix_product(resources, static_cast<int>(batch_size), static_cast<int>(nbf), left,
-                              transpose_left, right, active, output, use_cublas);
+    const vibeqc_status product_status = launch_matrix_product(
+        resources.matrix_view(), static_cast<int>(batch_size), static_cast<int>(nbf), left,
+        transpose_left, right, active, output, use_cublas);
     if (use_cublas && product_status != VIBEQC_STATUS_SUCCESS) {
       plan.retry_without_cublas = true;
     }
@@ -11728,8 +11570,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
                                           bool transpose_left, const double* right,
                                           bool right_is_spin, double* output) {
     const vibeqc_status product_status = launch_spin_matrix_product(
-        resources, static_cast<int>(batch_size), 2, static_cast<int>(nbf), left, left_is_spin,
-        transpose_left, right, right_is_spin, active, output, use_cublas);
+        resources.matrix_view(), static_cast<int>(batch_size), 2, static_cast<int>(nbf), left,
+        left_is_spin, transpose_left, right, right_is_spin, active, output, use_cublas);
     if (use_cublas && product_status != VIBEQC_STATUS_SUCCESS) {
       plan.retry_without_cublas = true;
     }
