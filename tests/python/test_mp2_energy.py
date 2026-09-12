@@ -278,4 +278,11 @@ def test_cuda_source_and_plan_are_not_device_validation():
     assert plan.provider_bytes == 0  # elementwise/reductions need no cuBLAS
     code = emit_cuda(plan)
     assert "tensor_run" in code
+    prefixed = emit_cuda(plan, symbol_prefix="mp2_sm80_t2_")
+    assert "namespace mp2_sm80_t2_generated {" in prefixed
+    assert 'extern "C" int mp2_sm80_t2_tensor_run(' in prefixed
+    assert 'extern "C" int tensor_run(' not in prefixed
+    assert "mp2_sm80_t2_read_" in prefixed
+    with pytest.raises(ValueError, match="symbol_prefix"):
+        emit_cuda(plan, symbol_prefix="mp2-sm80-")
     assert plan.program.logical_hash == p.logical_hash
