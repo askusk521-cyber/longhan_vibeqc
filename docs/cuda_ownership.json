@@ -369,12 +369,6 @@
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
           "stop": null
-        },
-        {
-          "reason": "Packed basis ABI adapter and generated-policy instantiation; no DF recurrence or operator-specific primitive contraction.",
-          "role": "runtime",
-          "start": "/** Borrow the packed integral metadata through the common normalized-basis ABI. */",
-          "stop": "#include \"scf/cuda/weighted_eri.cuh\""
         }
       ],
       "role": "scientific",
@@ -434,6 +428,47 @@
       "role": "runtime",
       "subsystem": "runtime",
       "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_source_internal.hpp",
+      "role": "runtime",
+      "subsystem": "df_values",
+      "reason": "DF source ownership or host-callable generation boundary; scalar policies and bounded public-layout contractions are separately classified.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_source_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "df_values",
+      "reason": "DF source ownership or host-callable generation boundary; scalar policies and bounded public-layout contractions are separately classified.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_source_kernels.cu",
+      "role": "scientific",
+      "subsystem": "df_values",
+      "reason": "Existing generated-policy traversal and bounded raw/public-layout DF value/response contractions, moved from cuda_rhf.cu without copying formulas.",
+      "regions": [
+        {
+          "start": "#include <cuda_runtime.h>",
+          "stop": "__global__ void build_cuda_df_integrals_kernel",
+          "role": "runtime",
+          "reason": "Includes, common basis ABI adapter and generated-policy instantiation; the generated scalar families retain scientific ownership upstream."
+        },
+        {
+          "start": "void launch_build_cuda_df_integrals_kernel",
+          "stop": null,
+          "role": "runtime",
+          "reason": "Host-callable wrappers preserve exact specialization selection, launch geometry, stream and argument forwarding."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/metadata_upload.hpp",
+      "role": "runtime",
+      "subsystem": "runtime",
+      "reason": "Shared checked metadata upload/cleanup and CUDA status mapping used by direct and DF sources; no provider equations.",
       "regions": []
     }
   ],

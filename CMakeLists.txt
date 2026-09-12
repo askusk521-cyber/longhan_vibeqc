@@ -297,6 +297,11 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda_density_fitting.cu
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/df_source_setup.cpp
+    src/scf/cuda/df_source.cpp
+    src/scf/cuda/df_source_kernels.cu
+    src/scf/cuda/df_integral_export.cpp
+    src/scf/cuda/df_integral_export_batch.cpp
     src/scf/cuda/arena.cpp
     src/scf/cuda/topology.cpp
     src/scf/cuda/queue_plan.cpp

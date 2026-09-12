@@ -50,6 +50,15 @@ CUDA_MODULES = {
         "launch_geometry",
     ),
 }
+CUDA_MODULES["cuda_df_source"] = (
+    "df_source",
+    "df_source_setup",
+    "df_source_internal",
+    "df_source_kernels",
+    "metadata_upload",
+    "df_integral_export",
+    "df_integral_export_batch",
+)
 CUDA_ALLOWED = {
     "cuda_planning": (
         "scf/cuda/arena.",
@@ -80,6 +89,24 @@ CUDA_ALLOWED = {
         "scf/cuda_batch.hpp",
     ),
 }
+CUDA_ALLOWED["cuda_df_source"] = (
+    "scf/cuda/df_source.",
+    "scf/cuda/df_source_setup.",
+    "scf/cuda/df_source_internal.",
+    "scf/cuda/metadata_upload.",
+    "scf/cuda/rhf_policy.hpp",
+    "scf/cuda/df_source_kernels.",
+    "scf/cuda/df_integral_export.",
+    "scf/cuda/df_integral_export_batch.",
+    "scf/cuda/packed_basis.",
+    "scf/cuda/topology.",
+    "scf/cuda/checked_layout.",
+    "scf/cuda_density_fitting.hpp",
+    "scf/cuda_density_fitting_integrals.hpp",
+    "molecule/",
+    "runtime/",
+    "core/",
+)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 

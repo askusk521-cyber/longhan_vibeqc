@@ -62,7 +62,11 @@ def test_documented_forbidden_example_is_not_an_include(tmp_path):
 
 @pytest.mark.parametrize(
     "name, owner",
-    [("arena.cpp", "cuda_planning"), ("eigensolver.cpp", "cuda_eigensolver")],
+    [
+        ("arena.cpp", "cuda_planning"),
+        ("eigensolver.cpp", "cuda_eigensolver"),
+        ("df_source_setup.cpp", "cuda_df_source"),
+    ],
 )
 @pytest.mark.parametrize("include", ['"scf/rhf.hpp"', '"../rhf.hpp"', "<scf/rhf.hpp>"])
 def test_cuda_runtime_cannot_depend_on_method_driver(tmp_path, name, owner, include):
