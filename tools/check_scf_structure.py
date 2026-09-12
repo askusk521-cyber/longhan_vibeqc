@@ -173,6 +173,33 @@ CUDA_ALLOWED["cuda_matrix_library"] = (
     "scf/cuda/scf_matrix_kernels.",
     "scf/cuda/launch_geometry.",
 )
+# Device queue owners consume borrowed metadata and screening contracts. They
+# cannot acquire host bucket/graph ownership or integral recurrence code.
+CUDA_MODULES["cuda_direct_queues"] = (
+    "direct_queue_index",
+    "direct_screening",
+    "direct_task_encoding",
+    "direct_page_screening",
+    "direct_queue_profile",
+    "direct_tile_validation",
+    "direct_density_bounds",
+    "direct_tile_compaction",
+    "direct_generated_tasks",
+    "direct_resident_tasks",
+    "direct_bounded_pages",
+    "direct_bounded_tasks",
+    "direct_queue_scan",
+    "direct_queue_diagnostics",
+)
+CUDA_ALLOWED["cuda_direct_queues"] = tuple(
+    "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_direct_queues"]
+) + (
+    "scf/cuda/direct_metadata.",
+    "scf/cuda/direct_constants.",
+    "scf/cuda/matrix_index.",
+    "scf/cuda/packed_basis.",
+    "scf/cuda/device_timer.",
+)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 
