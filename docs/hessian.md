@@ -181,6 +181,36 @@ These are pinned by component-wise finite-difference checks rather than by
 overall numerical agreement, because a wrong sign or factor in one term can
 otherwise cancel against another.
 
+## Nuclear response RHS
+
+The next A2 boundary is ``build_rhf_nuclear_rhs``. It consumes the MO forms
+of the frozen Fock derivative, overlap derivative, and the Fock response to
+the known metric density connection, then returns ``b[i, a]`` in the
+occupied-major/virtual-minor layout required by #179. The metric Fock input is
+mandatory, and the caller passes ``-b.reshape(-1)`` to solve ``A x = -b``.
+``metric_density_response_mo`` exposes the corresponding
+``-1/2 (S_R D + D S_R)`` connection with closed-shell occupations.
+
+This keeps the orbital-response solve and AO integral derivative construction
+outside the helper; omitting either the metric density/Fock term or the
+energy-gap overlap term is rejected by the component tests rather than hidden
+inside a default.
+
+## Frozen skeleton assembly
+
+The A2 assembly boundary is now represented by
+``tools.vibeqc_hessian.assemble_frozen_skeleton``. It accepts the nuclear,
+one-electron, overlap/Pulay, and folded two-electron second-derivative
+components in the canonical ``(atom, xyz, atom, xyz)`` layout, validates that
+they are finite and shape-compatible, and returns each component alongside
+their raw sum. The overlap component must already carry its negative Pulay
+sign, and the two-electron component must already contain the density-folded
+``1/2`` and ``1/4`` factors; the assembler applies no hidden prefactors.
+
+The result reports ``includes_response: false``. Orbital-response RHSs and
+relaxation terms remain a separate implementation boundary for the complete
+analytic Hessian and are not substituted with zero arrays.
+
 ## Numerical oracle
 
 Step 2 supplies a finite-difference-of-analytic-gradient Hessian: central
