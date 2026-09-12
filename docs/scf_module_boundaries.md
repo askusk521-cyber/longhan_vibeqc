@@ -583,3 +583,60 @@ Implementation-only comment edits to `direct_jk.cpp` and
 source-identity object before relinking. The ordinary cache-enabled Ninja
 rebuilds take 1.610 and 1.597 seconds. Neither probe invokes
 CUDA compilation. Each probe restores and rebuilds the exact validated source.
+
+
+## Retained one-electron and numerical CUDA owners (#240 slice)
+
+The native Dual response kernel and scalar/cooperative one-electron force
+kernels now compile in `one_electron_reference.cu` and
+`one_electron_force_reference.cu`. Their former included fragments are removed.
+`nuclear_kernels.cu` owns the existing nuclear energy/response/force equations;
+`direct_pair_cache.cu` owns primitive-pair Gaussian geometry preparation.
+Host callers retain the same launch geometry, stream and dynamic shared memory
+through narrow forwarding interfaces.
+
+Five private headers separate retained overlap/kinetic primitives, attraction,
+attraction gradients, normalized AO contraction, and density-weighted force
+contraction. Shared scalar/AD, Gaussian geometry, Cartesian indexing, Boys,
+Hermite and Coulomb recurrence headers contain only their respective numerical
+building blocks. `integral_limits.hpp` preserves the existing constants without
+queue policy. `one_electron_force_workspace.hpp` preserves the host/device layout
+used to allocate three Hermite axis tables in dynamic shared memory. Ordinary
+`inline` provides shared header linkage; existing forced/no-inline decisions and
+all numerical expressions are retained.
+
+The source audit compares 28 definitions, four complete numerical chunks, both
+old kernel fragments, five new and two existing forwarding wrappers, constants,
+workspace layout and the entire remaining CUDA implementation against parent
+`58314e8`. It permits formatting, header linkage and explicit launch substitutions.
+Dependency guards reject queue policy, host plans and resource ownership in the
+new numerical/kernel owners, and reject operator contractions in shared numerical
+headers. Existing source-location checks follow the moved definitions.
+
+`cuda_rhf.cu` decreases from 12,837 to 11,384 lines. New CUDA implementations are
+47–130 lines and shared/private numerical headers are at most 288 lines. The
+ownership ledger retains each formula's scientific or measured-exception status;
+this decomposition does not promote generated derivatives or retire native
+formulas. The plain limits header is outside the CUDA-only source census.
+
+Development compiler samples (NVCC 12.9, `sm_120`, fast-compile mode, ccache
+explicitly disabled) use individual compiler invocations and warm filesystem
+cache. The parent and candidate use separate worktrees with different absolute
+source paths on the shared machine:
+
+| Unit | Compiler seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 31.465 | 7,910,992 |
+| extracted_cuda_rhf | 29.849 | 7,227,600 |
+| one_electron_reference | 2.611 | 1,309,840 |
+| one_electron_force_reference | 3.037 | 1,761,008 |
+| nuclear_kernels | 1.078 | 169,144 |
+| direct_pair_cache | 0.995 | 83,136 |
+
+Aggregate sampled compilation changes from 31.465 to
+37.570 seconds. Separate owners add compiler setup and instantiated device
+code, while narrowing implementation rebuilds. These are development samples,
+not full cold-build, production resource, device-link or runtime acceptance.
+
+The full issue still requires direct scientific/force ownership, host bucket and
+graph decomposition, and production build/device-link/runtime acceptance.

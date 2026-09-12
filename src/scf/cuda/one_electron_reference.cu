@@ -1,10 +1,9 @@
-// Internal include fragment of cuda_rhf.cu's anonymous namespace.
-// The retained first-derivative exception keeps access
-// to DeviceBatch and the existing contracted S/Hcore evaluator templates.
-// Generated values are the sole production value route; Dual recurrences
-// remain necessary for these separately gated coordinate derivatives.
-#ifndef VIBEQC_SCF_CUDA_ONE_ELECTRON_REFERENCE_CUH
-#define VIBEQC_SCF_CUDA_ONE_ELECTRON_REFERENCE_CUH
+#include <cmath>
+
+#include "scf/cuda/one_electron_export_kernels.hpp"
+#include "scf/cuda/one_electron_native_contraction.cuh"
+
+namespace vibeqc::scf::cuda_execution {
 
 /** Evaluate first-coordinate one-electron response using the retained Dual path. */
 __global__ void build_cuda_one_electron_derivatives_kernel(
@@ -37,4 +36,12 @@ __global__ void build_cuda_one_electron_derivatives_kernel(
   }
 }
 
-#endif
+void launch_build_cuda_one_electron_derivatives_kernel(
+    dim3 grid, dim3 block, std::size_t shared_bytes, cudaStream_t stream, DeviceBatch batch,
+    const std::int32_t* pair_first, const std::int32_t* pair_second, std::size_t pair_count,
+    std::int64_t derivative_coordinate, double* overlap, double* hcore) {
+  build_cuda_one_electron_derivatives_kernel<<<grid, block, shared_bytes, stream>>>(
+      batch, pair_first, pair_second, pair_count, derivative_coordinate, overlap, hcore);
+}
+
+}  // namespace vibeqc::scf::cuda_execution

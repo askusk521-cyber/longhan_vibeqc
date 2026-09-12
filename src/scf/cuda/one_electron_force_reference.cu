@@ -1,5 +1,9 @@
-// Included inside the native CUDA detail namespace after its primitive helpers.
-// Keep the validated handwritten force schedules available for same-binary gates.
+#include <cmath>
+
+#include "scf/cuda/one_electron_force_reference.hpp"
+#include "scf/cuda/one_electron_native_force.cuh"
+
+namespace vibeqc::scf::cuda_execution {
 
 __global__ void one_electron_force_scalar_kernel(DeviceBatch batch, const std::int32_t* pair_first,
                                                  const std::int32_t* pair_second,
@@ -100,3 +104,27 @@ __global__ void one_electron_force_cooperative_kernel(DeviceBatch batch,
   }
 #undef VIBEQC_ONE_ELECTRON_FORCE_COOPERATIVE_CASE
 }
+
+void launch_one_electron_force_scalar_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
+                                             cudaStream_t stream, DeviceBatch batch,
+                                             const std::int32_t* pair_first,
+                                             const std::int32_t* pair_second,
+                                             std::size_t pair_count, const double* density,
+                                             const double* weighted_density,
+                                             const std::uint8_t* active, double* forces) {
+  one_electron_force_scalar_kernel<<<grid, block, shared_bytes, stream>>>(
+      batch, pair_first, pair_second, pair_count, density, weighted_density, active, forces);
+}
+
+void launch_one_electron_force_cooperative_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
+                                                  cudaStream_t stream, DeviceBatch batch,
+                                                  const std::int32_t* pair_first,
+                                                  const std::int32_t* pair_second,
+                                                  std::size_t pair_count, const double* density,
+                                                  const double* weighted_density,
+                                                  const std::uint8_t* active, double* forces) {
+  one_electron_force_cooperative_kernel<<<grid, block, shared_bytes, stream>>>(
+      batch, pair_first, pair_second, pair_count, density, weighted_density, active, forces);
+}
+
+}  // namespace vibeqc::scf::cuda_execution
