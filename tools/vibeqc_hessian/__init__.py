@@ -18,6 +18,7 @@ The term-by-term dependency graph, the provider boundaries and the sign
 conventions are documented in ``docs/hessian.md``.
 """
 
+from .assembly import assemble_frozen_skeleton, validate_hessian_component
 from .numerical import (
     forces_to_gradient,
     hessian_difference,
@@ -28,6 +29,8 @@ from .numerical import (
 from .weights import two_electron_energy, two_electron_weight, weight_energy
 
 __all__ = [
+    "assemble_frozen_skeleton",
+    "validate_hessian_component",
     "forces_to_gradient",
     "hessian_difference",
     "hessian_symmetry_error",

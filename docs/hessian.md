@@ -181,6 +181,21 @@ These are pinned by component-wise finite-difference checks rather than by
 overall numerical agreement, because a wrong sign or factor in one term can
 otherwise cancel against another.
 
+## Frozen skeleton assembly
+
+The A2 assembly boundary is now represented by
+``tools.vibeqc_hessian.assemble_frozen_skeleton``. It accepts the nuclear,
+one-electron, overlap/Pulay, and folded two-electron second-derivative
+components in the canonical ``(atom, xyz, atom, xyz)`` layout, validates that
+they are finite and shape-compatible, and returns each component alongside
+their raw sum. The overlap component must already carry its negative Pulay
+sign, and the two-electron component must already contain the density-folded
+``1/2`` and ``1/4`` factors; the assembler applies no hidden prefactors.
+
+The result reports ``includes_response: false``. Orbital-response RHSs and
+relaxation terms remain a separate implementation boundary for the complete
+analytic Hessian and are not substituted with zero arrays.
+
 ## Numerical oracle
 
 Step 2 supplies a finite-difference-of-analytic-gradient Hessian: central
