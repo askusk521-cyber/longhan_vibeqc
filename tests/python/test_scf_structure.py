@@ -66,6 +66,8 @@ def test_documented_forbidden_example_is_not_an_include(tmp_path):
         ("arena.cpp", "cuda_planning"),
         ("eigensolver.cpp", "cuda_eigensolver"),
         ("df_source_setup.cpp", "cuda_df_source"),
+        ("df_plan_setup.cpp", "cuda_df_runtime"),
+        ("df_rhf_scf.cpp", "cuda_df_runtime"),
     ],
 )
 @pytest.mark.parametrize("include", ['"scf/rhf.hpp"', '"../rhf.hpp"', "<scf/rhf.hpp>"])
@@ -84,4 +86,14 @@ def test_eigensolver_cannot_acquire_direct_queue_policy(tmp_path):
     source.mkdir(parents=True)
     (source / "direct_constants.hpp").write_text("// Direct queue policy\n")
     (source / "eigensolver.cpp").write_text('#include "direct_constants.hpp"\n')
+    assert len(audit_scf_structure(tmp_path)["errors"]) == 1
+
+
+@pytest.mark.parametrize("owner", ["df_jk_kernels.cu", "df_scf_kernels.cu"])
+def test_df_kernels_cannot_acquire_host_plan_state(tmp_path, owner):
+    """Kernel changes must remain independent of resource and graph lifetimes."""
+    source = tmp_path / "src/scf/cuda"
+    source.mkdir(parents=True)
+    (source / "df_plan_internal.hpp").write_text("// Plan-owned allocations\n")
+    (source / owner).write_text('#include "df_plan_internal.hpp"\n')
     assert len(audit_scf_structure(tmp_path)["errors"]) == 1

@@ -29,10 +29,10 @@ and `cuda_ownership_current.json`, under #231.
 | `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host bounded class partitioning, stream ordering and partial-page ranges are extracted to `cuda/queue_plan.*`, with queue diagnostics in `cuda/queue_profile.cpp`. Device compaction and queue consumers remain pending. |
 | `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution is extracted to `cuda/eigensolver.cpp` and `cuda/eigensolver_kernels.cu`, with a borrowed handle/workspace view and narrow launch wrappers. Matrix/update kernels remain pending; scheduling choices do not select a different physical operator. |
 | `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. DF source setup/replay and explicit tensor export are now extracted to `cuda/df_source*` and `cuda/df_integral_export*`; resource ownership, graph construction and bucket dispatch remain pending. |
-| `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Remaining DF plan/metric module; preserve resident versus source-backed/host-backed distinctions. |
-| `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Remaining DF execution module using the same provider semantics and explicit memory sub-budget. |
-| `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The #205 source-backed response uses device weights through `cuda/df_response_weights.*` and `cuda/df_gradient_bridge.*`; the explicitly documented host-value compatibility adapter remains separate. DF solver and library-planning ownership still need decomposition. |
-| `cuda_density_fitting.cu`: iterative replay | `DeviceSolver`, `DeviceIterationGraph`, `PersistentScfState`, eigensolve wrappers, RHF/UHF device SCF loops and graph-tail kernels | Remaining common solver/graph boundary; lifetime ownership and per-system failure isolation precede structural moves. |
+| Former `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Extracted to `cuda/df_plan*`, `df_setup_internal.hpp`, `df_runtime.*` and `df_metric_kernels.*`. The public handle remains opaque; source transfer and retained metric factors keep their single owner. |
+| Former `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Extracted to `cuda/df_coulomb.cpp`, `df_exchange.cpp`, `df_jk*`. Resident, host-backed and source-backed execution retain the same provider semantics and memory sub-budget. |
+| Former `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The adapter now lives in `cuda/df_force_response.cpp`. The #205 source-backed response borrows device factors through `df_response_weights.*` / `df_gradient_bridge.*`; the host-value compatibility adapter retains its CPU metric path. |
+| Former `cuda_density_fitting.cu`: iterative replay | `DeviceSolver`, `DeviceIterationGraph`, `PersistentScfState`, eigensolve wrappers, RHF/UHF device SCF loops and graph-tail kernels | Extracted to `cuda/df_scf_state.hpp`, `df_scf_library.*`, `df_rhf_scf.cpp`, `df_uhf_scf.cpp` and `df_scf_kernels.*`. Host replay/graph control compiles in C++; only equations and the graph-tail kernel require CUDA compilation. |
 
 ## Dependency and size gates
 
@@ -50,10 +50,11 @@ a larger module requires a documented responsibility and build-cost argument.
 This is a review target, not a claim that legacy source units already pass a
 structural-size gate. At the baseline, `rhf.cpp` contains 3,413 lines / 165,000
 bytes, `cuda_rhf.cu` 19,754 lines / 1,048,372 bytes, and
-`cuda_density_fitting.cu` 3,098 lines / 160,928 bytes. The latter two still exceed
-the target and remain explicit unfinished work under #240. Their existing
-kernel/template and runtime coupling explains the staged extraction, not an
-exemption from the issue's final acceptance criteria.
+`cuda_density_fitting.cu` 3,098 lines / 160,928 bytes. The original DF unit is now
+removed; its largest replacement is the 549-line setup transaction. The large
+direct CUDA unit still exceeds the target and remains unfinished work under
+#240. Its kernel/template and runtime coupling explains the staged extraction,
+not an exemption from the issue's final acceptance criteria.
 
 ## Validation and remaining acceptance
 
@@ -251,3 +252,73 @@ After integration with the device force-response implementation and current
 upstream, the combined source extraction passed 75 CPU structure/ownership
 checks, three native GPU tests, and 38 opt-in Python GPU endpoint/resource
 tests with no skips. The 29-function and three-wrapper audit still passes.
+
+## DF plan, J/K and persistent solver ownership
+
+The former 3,076-line `cuda_density_fitting.cu` is removed. Its existing
+implementations now compile under these separate responsibilities:
+
+| Owner | Responsibility |
+| --- | --- |
+| `df_plan.cpp`, `df_plan_setup.cpp`, `df_plan_lifetime.cpp` | Public opaque handle, setup transaction and teardown. |
+| `df_runtime.*`, `df_setup_internal.hpp`, `df_plan_internal.hpp` | Checked sizes/status mapping, temporary setup allocations and sole plan storage layout. |
+| `df_coulomb.cpp`, `df_exchange.cpp`, `df_jk.cpp` | Bounded mathematical J/K and public host/item/device adapters. |
+| `df_force_response.cpp` | Borrow retained device factors for source response, or the existing explicit host-value compatibility path. |
+| `df_scf_state.hpp`, `df_scf_library.*` | Persistent allocations, graph handles and cuBLAS/cuSOLVER workspace integration. |
+| `df_rhf_scf.cpp`, `df_uhf_scf.cpp` | Host replay, graph capture/fallback, convergence and result publication. |
+| `df_metric_kernels.*`, `df_jk_kernels.*`, `df_scf_kernels.*` | Unchanged device equations/reductions and 18 exact launch wrappers. |
+
+The largest new implementation is the 549-line setup transaction. It remains
+one transaction to preserve validation, source transfer, allocation failure
+cleanup, metric factorization, diagnostics and publication order. No kernel
+owner includes host plan state. The new dependency checks reject that edge as
+well as imports of the RHF method driver into shared DF runtime owners.
+
+A source audit against `bd9f3de` checks 54 function bodies, five storage layouts
+and all 18 launch wrappers. Arithmetic order, streams, launch dimensions,
+shared bytes, reduction order, public signatures and the persistent-state
+lifetime are unchanged. Default arguments live only in the shared declaration.
+The host cuBLAS J/K composition remains native scientific code; moving it from
+CUDA to C++ does not retire its mathematics from #231's ownership model.
+
+The compiler-work sample below uses ccache-disabled NVCC 12.9 sm_120 development
+fast-compile mode and GCC 11.4 Release, with a warm filesystem cache on a shared
+machine. The baseline is the exact parent source in its separate DF-source
+worktree; absolute source paths differ. These are individual compiler samples,
+not production cold-build, device-link or molecular runtime measurements.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_density_fitting | 6.381 | 456,488 |
+| df_coulomb | 0.833 | 10,760 |
+| df_exchange | 0.863 | 14,008 |
+| df_force_response | 0.885 | 14,928 |
+| df_jk | 1.017 | 30,848 |
+| df_jk_kernels | 2.411 | 86,984 |
+| df_metric_kernels | 2.337 | 35,024 |
+| df_plan | 0.744 | 6,224 |
+| df_plan_lifetime | 1.096 | 19,608 |
+| df_plan_setup | 1.426 | 54,080 |
+| df_rhf_scf | 1.314 | 39,888 |
+| df_runtime | 1.182 | 32,248 |
+| df_scf_kernels | 2.475 | 164,376 |
+| df_scf_library | 0.978 | 12,200 |
+| df_uhf_scf | 1.361 | 43,368 |
+
+Aggregate compiler work rises from 6.381 to 18.922
+seconds; object bytes rise from 456,488 to 564,544.
+This extraction narrows rebuild ownership; it does not establish a cold-build
+speedup. The direct scientific/queue/graph groups in `cuda_rhf.cu` and the full
+production build/runtime acceptance remain unfinished under #240. Earlier
+sections record the state at each intermediate extraction checkpoint.
+
+Validation of this DF runtime extraction passed 16 native CPU tests,
+83 structure/ownership/source checks, three native GPU tests and 138 Python GPU
+tests with no skips. GPU checks ran through Slurm on the RTX 5090 and cover the
+complete derivative, resource, Fock-composition, checkpoint-replay and native
+CUDA-runtime suites. Hooks and the function/layout/launch audit pass.
+
+Actual implementation-only edits to `df_plan_setup.cpp`, `df_scf_library.cpp`
+and `df_exchange.cpp` each rebuild only that C++ owner plus the source-identity
+object, then relink dependents. They compile no CUDA kernel object. Each probe
+restores and rebuilds the exact validated source before the next edit.

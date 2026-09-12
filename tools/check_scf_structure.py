@@ -107,6 +107,45 @@ CUDA_ALLOWED["cuda_df_source"] = (
     "runtime/",
     "core/",
 )
+# DF plan/provider ownership is separate from direct HF queues and from the
+# generic SCF driver. Kernel owners cannot acquire host plan or solver state.
+CUDA_MODULES["cuda_df_runtime"] = (
+    "df_plan",
+    "df_plan_setup",
+    "df_plan_internal",
+    "df_setup_internal",
+    "df_plan_lifetime",
+    "df_runtime",
+    "df_jk",
+    "df_jk_internal",
+    "df_coulomb",
+    "df_exchange",
+    "df_force_response",
+    "df_scf_state",
+    "df_scf_library",
+    "df_rhf_scf",
+    "df_uhf_scf",
+)
+CUDA_ALLOWED["cuda_df_runtime"] = tuple(
+    "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_df_runtime"]
+) + (
+    "scf/cuda/df_metric_kernels.",
+    "scf/cuda/df_jk_kernels.",
+    "scf/cuda/df_scf_kernels.",
+    "scf/cuda_density_fitting.hpp",
+    "scf/cuda_df_gradient.hpp",
+    "scf/density_fitting.hpp",
+    "molecule/basis.hpp",
+    "runtime/",
+)
+CUDA_MODULES["cuda_df_kernels"] = (
+    "df_metric_kernels",
+    "df_jk_kernels",
+    "df_scf_kernels",
+)
+CUDA_ALLOWED["cuda_df_kernels"] = tuple(
+    "scf/cuda/" + stem + "." for stem in CUDA_MODULES["cuda_df_kernels"]
+)
 SUFFIXES = {".cpp", ".hpp", ".cu", ".cuh"}
 ROOT = Path(__file__).resolve().parents[1]
 

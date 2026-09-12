@@ -101,7 +101,7 @@ conventions, fixed-density derivatives and preflight rejection.
 | `HfPreparedBatch` / `scf::FleetPlan` | Own compatible buckets, geometry and warm state | Separate direct/DF booleans select the whole bucket |
 | `scf/rhf.cpp` | CPU iterations and final energy/force assembly | Direct/DF entry points remain separate; exact entry preflight requires standard complete HF |
 | `scf/cuda_rhf.cu` | Persistent direct-HF queues, generated/fallback kernels and solver state | Fused CUDA consumers require the standard coupled HF coefficients |
-| `scf/cuda_density_fitting.cu` | Prepared metric/three-center data, bounded J/K, response and device SCF | Public execution helpers always request both J and K |
+| `scf/cuda/df_plan*`, `df_jk*`, `df_{coulomb,exchange}.cpp`, `df_*_scf.cpp` | Separate prepared metric ownership, bounded J/K, response and device SCF replay | Existing term selection and provider semantics remain in the public DF adapters |
 | `scf/fock_build.cpp` | Validate capabilities and mathematical/execution identity | Nonstandard CUDA terms and independently fitted terms are rejected |
 
 The public method ABI does not yet expose independent J/K provider choices or

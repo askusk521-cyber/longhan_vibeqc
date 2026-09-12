@@ -295,7 +295,20 @@ if(VIBEQC_ENABLE_CUDA)
     "${VIBEQC_GRID_SOURCE}"
     src/posthf/df_bridge.cu
     src/runtime/cuda_runtime.cu
-    src/scf/cuda_density_fitting.cu
+    src/scf/cuda/df_coulomb.cpp
+    src/scf/cuda/df_exchange.cpp
+    src/scf/cuda/df_force_response.cpp
+    src/scf/cuda/df_jk.cpp
+    src/scf/cuda/df_jk_kernels.cu
+    src/scf/cuda/df_metric_kernels.cu
+    src/scf/cuda/df_plan.cpp
+    src/scf/cuda/df_plan_lifetime.cpp
+    src/scf/cuda/df_plan_setup.cpp
+    src/scf/cuda/df_rhf_scf.cpp
+    src/scf/cuda/df_runtime.cpp
+    src/scf/cuda/df_scf_kernels.cu
+    src/scf/cuda/df_scf_library.cpp
+    src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
     src/scf/cuda/df_source_setup.cpp

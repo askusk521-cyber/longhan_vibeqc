@@ -238,32 +238,6 @@
       "subsystem": "direct_integrals"
     },
     {
-      "path": "src/scf/cuda_density_fitting.cu",
-      "reason": "RI planning, ownership, generic eigensolver/DIIS and library runtime.",
-      "regions": [
-        {
-          "reason": "Streamed RI J/K, density and energy equations.",
-          "role": "scientific",
-          "start": "__global__ void accumulate_streamed_auxiliary_density_kernel",
-          "stop": "__global__ void update_device_convergence_kernel"
-        },
-        {
-          "reason": "Explicit RI J/K equation composition using cuBLAS; conservative region includes staging.",
-          "role": "scientific",
-          "start": "vibeqc_status build_coulomb(",
-          "stop": "vibeqc_status prepare_outputs("
-        },
-        {
-          "reason": "Generated response bridge and shared spectral-factor composition; counted conservatively with its native adapter.",
-          "role": "scientific",
-          "start": "vibeqc_status execute_cuda_density_fitting_generated_force_response(",
-          "stop": "vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl("
-        }
-      ],
-      "role": "runtime",
-      "subsystem": "scf_tensor"
-    },
-    {
       "path": "src/scf/cuda_eigensolver_probe.cu",
       "reason": "Diagnostic generic dense eigensolver experiments, synchronization and library comparisons.",
       "regions": [],
@@ -483,6 +457,76 @@
       "role": "runtime",
       "subsystem": "runtime",
       "reason": "Shared checked metadata upload/cleanup and CUDA status mapping used by direct and DF sources; no provider equations.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_jk_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": [
+        {
+          "start": "__global__ void accumulate_streamed_auxiliary_density_kernel",
+          "stop": "void launch_sum_spin_density_kernel",
+          "role": "scientific",
+          "reason": "Existing streamed RI J/K equations and reductions, preserved in their dedicated owner."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/df_jk_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_metric_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_metric_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_plan_internal.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_runtime.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_scf_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": [
+        {
+          "start": "__global__ void assemble_rhf_fock_kernel",
+          "stop": "__global__ void update_device_convergence_kernel",
+          "role": "scientific",
+          "reason": "Existing RHF/UHF Fock, density and energy equations, preserved independently of host replay control."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/df_scf_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": []
     }
   ],
