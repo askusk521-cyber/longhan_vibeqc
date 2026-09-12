@@ -170,6 +170,7 @@ std::unique_ptr<PreparedCalculation> prepare_mp2_calculation(const Capabilities&
   options.density_tolerance =
       d.density_tolerance > 0 ? std::min(d.density_tolerance, 1e-11) : 1e-11;
   options.screening_tolerance = 0;
+  options.compute_forces = false;
   options.export_physical_reference = true;
   options.reference_memory_budget_bytes = budget;
   if (posthf::rhf_reference_capacity(system, options.diis_history) > budget)

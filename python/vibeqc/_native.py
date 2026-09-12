@@ -553,9 +553,11 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
     library.vibeqc_batch_get_last_inactive_eigensolver_profile.restype = ctypes.c_int
     library.vibeqc_context_get_last_detail.argtypes = [ctypes.c_void_p]
     library.vibeqc_context_get_last_detail.restype = ctypes.c_char_p
-    # Keep the pre-#193 name available to older native callers.
-    library.vibeqc_context_last_error.argtypes = [ctypes.c_void_p]
-    library.vibeqc_context_last_error.restype = ctypes.c_char_p
+    # Keep the pre-#193 name available when an older native library exports it.
+    legacy_last_error = getattr(library, "vibeqc_context_last_error", None)
+    if legacy_last_error is not None:
+        legacy_last_error.argtypes = [ctypes.c_void_p]
+        legacy_last_error.restype = ctypes.c_char_p
     library.vibeqc_batch_get_hf_warm_state.argtypes = [
         ctypes.c_void_p,
         ctypes.c_uint32,

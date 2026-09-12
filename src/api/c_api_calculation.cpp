@@ -19,6 +19,7 @@ vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context, const vibeqc_s
   if (!vibeqc::api::valid_method_descriptor(descriptor)) {
     return VIBEQC_STATUS_ABI_MISMATCH;
   }
+  std::lock_guard<std::recursive_mutex> context_lock(context->mutex);
   try {
     auto candidate = std::make_unique<vibeqc_calculation>();
     candidate->context = context;
@@ -49,6 +50,7 @@ vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculation,
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
 
+  std::lock_guard<std::recursive_mutex> context_lock(calculation->context->mutex);
   // Reset to the conservative FP64 record before the run so a failed or
   // fallback execution can never expose the previous successful mixed run.
   calculation->precision = {};

@@ -729,6 +729,7 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
   // provenance distinguishes "asked fp64" from "asked auto, collapsed to FP64".
   result.precision.requested_mode = options.precision_mode.value_or(VIBEQC_PRECISION_FP64);
   if (options.export_physical_reference && strategy.spec.spin == FockSpin::Restricted) {
+    if (!result.converged) return result;
     if (strategy.spec.coulomb.approximation != FockApproximation::Exact ||
         strategy.spec.exchange.approximation != FockApproximation::Exact ||
         options.screening_tolerance != 0.0)

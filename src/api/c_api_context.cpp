@@ -36,7 +36,13 @@ vibeqc_status vibeqc_context_create(const vibeqc_context_descriptor* descriptor,
 void vibeqc_context_destroy(vibeqc_context* context) { delete context; }
 
 const char* vibeqc_context_get_last_detail(const vibeqc_context* context) {
-  return context ? context->last_detail.c_str() : "invalid context";
+  if (context == nullptr) return "invalid context";
+  thread_local std::string detail;
+  {
+    std::lock_guard<std::recursive_mutex> lock(context->mutex);
+    detail = context->last_detail;
+  }
+  return detail.c_str();
 }
 
 const char* vibeqc_context_last_error(const vibeqc_context* context) {
