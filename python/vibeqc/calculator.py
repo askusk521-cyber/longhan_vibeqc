@@ -1054,7 +1054,7 @@ class Calculator:
             resource_diagnostics = None
             if resource_plan is None:
                 status = self._library.vibeqc_calculation_execute(
-                    calculation, ctypes.byref(result_descriptor), context=context
+                    calculation, ctypes.byref(result_descriptor)
                 )
             else:
                 from .resources import CpuResourceObservation
@@ -1063,7 +1063,7 @@ class Calculator:
                     self._library, cpu_workers=1, ledger=ledger
                 ) as observed:
                     status = self._library.vibeqc_calculation_execute(
-                        calculation, ctypes.byref(result_descriptor), context=context
+                        calculation, ctypes.byref(result_descriptor)
                     )
                 resource_diagnostics = {
                     "plan": resource_plan.to_dict(),
@@ -1072,7 +1072,7 @@ class Calculator:
                 observed.verify(resource_plan)
             try:
                 if resource_diagnostics is None:
-                    _native.check(self._library, status)
+                    _native.check(self._library, status, context=context)
                 else:
                     from .resources_native import check_resource_status
 
