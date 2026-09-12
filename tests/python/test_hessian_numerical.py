@@ -160,14 +160,50 @@ def _calculator_gradient(case):
     return gradient, settings
 
 
+def _pyscf_basis(case, labels):
+    """Translate a case's basis into the form PySCF expects.
+
+    A named basis string passes through unchanged. An explicit VibeQC shell
+    tuple does **not**: each ``Shell`` carries its own ``atom_index``, and
+    PySCF wants the equivalent per-atom mapping. Handing the tuple straight to
+    ``gto.M`` does not establish that ownership -- PySCF ends up subscripting a
+    ``Shell`` and raising -- so the mapping is rebuilt here the same way the
+    repository's ``pyscf_molecule`` reference helper does it.
+    """
+    basis = case.get("basis", "sto-3g")
+    if isinstance(basis, str):
+        return basis, None
+
+    per_atom = {label: [] for label in labels}
+    for shell in basis:
+        per_atom[labels[shell.atom_index]].append(
+            [
+                shell.angular_momentum,
+                *[
+                    (primitive.exponent, primitive.coefficient)
+                    for primitive in shell.primitives
+                ],
+            ]
+        )
+    # PySCF tolerates a missing basis key but rejects an explicit empty list.
+    return (
+        {label: shells for label, shells in per_atom.items() if shells},
+        [shell.angular_momentum for shell in basis],
+    )
+
+
 def _pyscf_hessian(case):
     """Return PySCF's analytic RHF Hessian in the oracle's axis order.
 
-    Two conventions have to be reconciled, and both are silent if they are
-    wrong -- they produce a plausible-looking matrix rather than an error:
+    Three conventions have to be reconciled, and each is quiet if it is wrong
+    -- they produce a plausible-looking matrix, or a crash the default suite
+    never reaches, rather than an obvious failure:
 
-    ``unit="bohr"`` is essential, because VibeQC works in Bohr while PySCF's
+    ``unit="Bohr"`` is essential, because VibeQC works in Bohr while PySCF's
     default input unit is Angstrom.
+
+    An explicit shell tuple needs its per-atom ownership rebuilt, which
+    :func:`_pyscf_basis` does.
 
     PySCF returns the Hessian shaped ``(natom, natom, 3, 3)`` -- atom indices
     first, then the Cartesian axes -- whereas the oracle uses
@@ -177,18 +213,34 @@ def _pyscf_hessian(case):
     """
     gto = pytest.importorskip("pyscf.gto")
     scf = pytest.importorskip("pyscf.scf")
-    atom = [
-        [symbol, [float(value) for value in row]]
-        for symbol, row in zip(case["symbols"], case["coordinates"])
-    ]
+    labels = [f"{symbol}{index}" for index, symbol in enumerate(case["symbols"])]
+    basis, requested_angular = _pyscf_basis(case, labels)
+
     mol = gto.M(
-        atom=atom,
-        basis=case.get("basis", "sto-3g"),
+        atom=[
+            [label, [float(value) for value in row]]
+            for label, row in zip(labels, case["coordinates"], strict=True)
+        ],
+        basis=basis,
         charge=case["charge"],
         spin=case["multiplicity"] - 1,
-        unit="bohr",
+        unit="Bohr",
+        # VibeQC prepares these systems in the Cartesian representation, and
+        # the d/f comparison is specifically about those components.
+        cart=case.get("representation", "cartesian") == "cartesian",
         verbose=0,
     )
+
+    if requested_angular is not None:
+        # A silently reordered basis would make the reference a different
+        # scientific model than the one VibeQC was given, and the comparison
+        # would still look plausible.
+        actual = [int(mol.bas_angular(index)) for index in range(mol.nbas)]
+        if actual != requested_angular:
+            raise ValueError(
+                f"PySCF reordered the requested shells: {actual} != {requested_angular}"
+            )
+
     mean_field = scf.RHF(mol)
     mean_field.conv_tol = 1.0e-12
     mean_field.run()
@@ -314,6 +366,95 @@ def test_hessian_matches_pyscf_analytic_reference(name):
             f"{name} at step {sample['step_bohr']}: max error "
             f"{difference['max_absolute_error']} vs scale {scale}"
         )
+
+
+@pytest.mark.parametrize(
+    "bad_gradient",
+    [
+        pytest.param(lambda xyz, policy: np.zeros(()), id="scalar"),
+        pytest.param(lambda xyz, policy: np.zeros(3), id="bare-xyz"),
+        pytest.param(lambda xyz, policy: np.zeros((1, 3)), id="too-few-atoms"),
+        pytest.param(lambda xyz, policy: np.zeros((3, 3)), id="too-many-atoms"),
+    ],
+)
+def test_numerical_hessian_rejects_broadcastable_gradient_shapes(bad_gradient):
+    """A wrong but broadcastable shape must fail closed.
+
+    The differencing writes into a ``(natom, 3)`` slot, so a scalar or a bare
+    ``(3,)`` array would be silently replicated across every atom and
+    manufactured into a plausible matrix. The oracle is an evidence path, so it
+    rejects the shape rather than reporting the broadcast.
+    """
+
+    with pytest.raises(ValueError, match="gradient callback returned shape"):
+        numerical_hessian(bad_gradient, H2["coordinates"], settings={}, steps=STEPS)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_numerical_hessian_rejects_non_finite_gradients(value):
+    """A non-finite gradient is rejected rather than propagated as data."""
+
+    def bad_gradient(xyz, policy):
+        values = np.zeros_like(xyz)
+        values[0, 0] = value
+        return values
+
+    with pytest.raises(ValueError, match="non-finite"):
+        numerical_hessian(bad_gradient, H2["coordinates"], settings={}, steps=STEPS)
+
+
+def test_pyscf_basis_preserves_per_atom_ownership():
+    """A VibeQC shell tuple must translate into PySCF's per-atom mapping.
+
+    This runs in the default suite even though the d/f Hessian comparison is
+    gated, so the translation the higher-angular-momentum reference depends on
+    is never left unexercised. Passing the tuple through untranslated does not
+    merely give the wrong basis -- PySCF subscripts a ``Shell`` and raises --
+    which is exactly the kind of failure a gated test hides.
+    """
+
+    labels = ["He0", "H1"]
+    basis, requested = _pyscf_basis(HEH_DF, labels)
+
+    assert requested == [0, 2, 3, 0]
+    assert list(basis) == ["He0", "H1"]
+    assert [shell[0] for shell in basis["He0"]] == [0, 2, 3]
+    assert [shell[0] for shell in basis["H1"]] == [0]
+    assert basis["He0"][0][1] == (1.5, 1.0)
+
+    # A named basis needs no translation, and the angular-momentum guard is
+    # only meaningful for an explicitly requested shell set.
+    named, requested_named = _pyscf_basis(H2, ["H0", "H1"])
+    assert named == "sto-3g"
+    assert requested_named is None
+
+
+def test_pyscf_basis_builds_the_requested_angular_momenta():
+    """The translated basis must survive PySCF's own loading unchanged.
+
+    Building the molecule is cheap -- no SCF -- so this guards the basis
+    translation in the default suite while the Hessian comparison that consumes
+    it stays gated.
+    """
+
+    gto = pytest.importorskip("pyscf.gto")
+    labels = ["He0", "H1"]
+    basis, requested = _pyscf_basis(HEH_DF, labels)
+    mol = gto.M(
+        atom=[
+            [label, [float(value) for value in row]]
+            for label, row in zip(labels, HEH_DF["coordinates"], strict=True)
+        ],
+        basis=basis,
+        charge=1,
+        spin=0,
+        unit="Bohr",
+        cart=True,
+        verbose=0,
+    )
+    assert [int(mol.bas_angular(index)) for index in range(mol.nbas)] == requested
+    # Cartesian s + d + f on helium plus s on hydrogen: 1 + 6 + 10 + 1.
+    assert mol.nao == 18
 
 
 def test_numerical_hessian_requires_three_distinct_steps():

@@ -89,14 +89,29 @@ def hessian_difference(actual, reference) -> dict:
     }
 
 
-def _gradient_at(gradient, coordinates, policy: str):
+def _gradient_at(gradient, coordinates, policy: str, expected_shape):
     """Evaluate the gradient under a freshly decoded copy of the frozen policy.
 
     Decoding a new copy per evaluation is what prevents a stateful evaluator
     from adapting its settings between the plus and minus displacements, or
     between step sizes.
+
+    The returned shape is checked rather than assumed. The differencing below
+    writes into a ``(natom, 3)`` slot, so a callback returning a smaller but
+    broadcastable array -- a scalar, or a bare ``(3,)`` -- would be silently
+    replicated across atoms and produce a plausible-looking matrix from
+    meaningless input. Non-finite values are rejected for the same reason: they
+    would propagate into the report as if they were measurements.
     """
-    return np.asarray(gradient(coordinates, json.loads(policy)), dtype=np.float64)
+    values = np.asarray(gradient(coordinates, json.loads(policy)), dtype=np.float64)
+    if values.shape != expected_shape:
+        raise ValueError(
+            f"gradient callback returned shape {values.shape}, "
+            f"expected {expected_shape} (natom, 3)"
+        )
+    if not np.isfinite(values).all():
+        raise ValueError("gradient callback returned a non-finite value")
+    return values
 
 
 def numerical_hessian(
@@ -138,8 +153,8 @@ def numerical_hessian(
             plus[index] += step
             minus[index] -= step
             hessian[index] = (
-                _gradient_at(gradient, plus, policy)
-                - _gradient_at(gradient, minus, policy)
+                _gradient_at(gradient, plus, policy, xyz.shape)
+                - _gradient_at(gradient, minus, policy, xyz.shape)
             ) / (2.0 * step)
             evaluations += 2
         samples.append(
