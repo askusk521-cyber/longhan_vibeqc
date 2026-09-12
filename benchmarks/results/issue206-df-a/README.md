@@ -36,10 +36,18 @@ sbatch run_issue206_df.slurm
 `ISSUE206_PYTHON` defaults to `python3`, `CUDA_HOME` defaults to the site
 CUDA 12.9 path, `ISSUE206_REPEATS` defaults to 5, and
 `ISSUE206_OUTPUT_DIR` defaults to `.artifacts/issue206-df-a` under the
-checkout. The runner derives its repository root from its own location; the
+checkout. Submit from the checkout, or set `ISSUE206_ROOT` to its absolute
+path when submitting from another directory. Slurm executes a spool copy of
+the script, so the runner uses `SLURM_SUBMIT_DIR` instead of that copy's location. The
 archived manifest retains the absolute paths and environment used for job 1097.
 
 The archive contains the exact manifest, four endpoint JSON files, and their
 stdout/stderr logs. The manifest records the Slurm job, CUDA visibility, source
 identity, command lines, and return codes. SHA-256 and member digests are in
 `raw-evidence.manifest.json`.
+
+Verify and restore the original measurements without running GPU work:
+
+```bash
+python -m tools.unpack_evidence benchmarks/results/issue206-df-a --output /tmp/issue206-df-a
+```

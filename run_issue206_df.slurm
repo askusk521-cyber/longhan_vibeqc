@@ -9,8 +9,13 @@
 #SBATCH --error=issue206-df-a-%j.err
 set -euo pipefail
 
-# Resolve the checkout from this script so the runner works from any clone.
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# sbatch copies this script into Slurm's spool directory. Use the submission
+# checkout there; direct bash execution can still use the script's location.
+ROOT="${ISSUE206_ROOT:-${SLURM_SUBMIT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}}"
+if [[ ! -f "${ROOT}/benchmarks/issue206_df_matrix.py" ]]; then
+  echo "Submit from the checkout or set ISSUE206_ROOT to its absolute path." >&2
+  exit 1
+fi
 OUTPUT_DIR="${ISSUE206_OUTPUT_DIR:-${ROOT}/.artifacts/issue206-df-a}"
 CUDA_ROOT="${CUDA_HOME:-/group/software/cuda-12.9.1}"
 PYTHON_BIN="${ISSUE206_PYTHON:-python3}"

@@ -152,7 +152,11 @@ def run_matrix(
     library: Path,
     output_dir: Path,
 ) -> None:
-    """Run each endpoint sequentially and retain stdout, stderr and exit code."""
+    """Retain every attempt, then fail the job if any endpoint failed.
+
+    Publish the command before launching so an interrupted job still identifies
+    its active endpoint. A failed attempt must not claim a previous run's JSON.
+    """
 
     if not os.environ.get("SLURM_JOB_ID"):
         raise SystemExit("--run requires a finite Slurm allocation (SLURM_JOB_ID)")
@@ -164,6 +168,7 @@ def run_matrix(
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(ROOT / "python"), environment.get("PYTHONPATH", "")]
     ).rstrip(os.pathsep)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for entry in payload["matrix"]:
         case = MatrixCase(
@@ -188,25 +193,39 @@ def run_matrix(
             "--output",
             str(result_path),
         ]
-        completed = subprocess.run(
-            command,
-            cwd=ROOT,
-            env=environment,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        log_path.write_text(completed.stdout + "\n--- stderr ---\n" + completed.stderr)
+        entry.update({"status": "running", "command": command, "result": None})
+        _write(manifest_path, payload)
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            returncode = completed.returncode
+            log = completed.stdout + "\n--- stderr ---\n" + completed.stderr
+        except OSError as error:
+            # A missing interpreter is an attempted endpoint too; retain its
+            # failure and finish the other cases before reporting job failure.
+            returncode = None
+            log = str(error) + "\n"
+        passed = returncode == 0 and result_path.is_file()
+        if returncode == 0 and not passed:
+            log += "\nEndpoint exited successfully without a result JSON.\n"
+        log_path.write_text(log)
         entry.update(
             {
-                "status": "passed" if completed.returncode == 0 else "failed",
-                "command": command,
-                "returncode": completed.returncode,
-                "result": str(result_path) if result_path.exists() else None,
+                "status": "passed" if passed else "failed",
+                "returncode": returncode,
+                "result": str(result_path) if passed else None,
                 "log": str(log_path),
             }
         )
         _write(manifest_path, payload)
+    if any(entry["status"] != "passed" for entry in payload["matrix"]):
+        raise SystemExit("DF matrix failed; see endpoint logs in " + str(manifest_path))
 
 
 def main() -> None:
@@ -231,13 +250,17 @@ def main() -> None:
         parser.error("--repeats must be positive")
 
     cases = _matrix(args.case)
-    output_dir = args.output_dir
-    manifest_path = args.manifest or output_dir / "manifest.json"
+    # Children run from ROOT; resolve caller-relative paths before changing cwd.
+    output_dir = args.output_dir.resolve()
+    library = args.library.resolve()
+    manifest_path = (
+        args.manifest.resolve() if args.manifest else output_dir / "manifest.json"
+    )
     payload = manifest_payload(
         cases=cases,
         repeats=args.repeats,
         python=args.python,
-        library=args.library,
+        library=library,
         output_dir=output_dir,
     )
     _write(manifest_path, payload)
@@ -246,7 +269,7 @@ def main() -> None:
             payload,
             manifest_path=manifest_path,
             python=args.python,
-            library=args.library,
+            library=library,
             output_dir=output_dir,
         )
     print(manifest_path)
