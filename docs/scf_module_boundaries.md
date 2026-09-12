@@ -28,7 +28,7 @@ and `cuda_ownership_current.json`, under #231.
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Move by the existing #231 scientific ownership regions; do not copy formulas or turn the independent oracle into generated production arithmetic. |
 | `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host bounded class partitioning, stream ordering and partial-page ranges are extracted to `cuda/queue_plan.*`, with queue diagnostics in `cuda/queue_profile.cpp`. Device compaction and queue consumers remain pending. |
 | `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution lives in `cuda/eigensolver.cpp` / `eigensolver_kernels.cu`. Shared matrix, density, DIIS, convergence and state kernels now have separate `cuda/scf_*_kernels.*` owners; public/direct basis transforms use `basis_transform_kernels.*`. Scientific integral/Fock kernels and host bucket control remain pending. |
-| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. DF source setup/replay and explicit tensor export are now extracted to `cuda/df_source*` and `cuda/df_integral_export*`; resource ownership, graph construction and bucket dispatch remain pending. |
+| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Packed/POD contracts and host topology/arena planning already have separate owners. DF source/export uses `cuda/df_source*` / `df_integral_export*`. Stream/graph/arena lifetime now lives in `cuda/resources.*`, with borrowed matrix-library execution in `matrix_library.*`. Graph construction and bucket dispatch remain pending. |
 | Former `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Extracted to `cuda/df_plan*`, `df_setup_internal.hpp`, `df_runtime.*` and `df_metric_kernels.*`. The public handle remains opaque; source transfer and retained metric factors keep their single owner. |
 | Former `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Extracted to `cuda/df_coulomb.cpp`, `df_exchange.cpp`, `df_jk*`. Resident, host-backed and source-backed execution retain the same provider semantics and memory sub-budget. |
 | Former `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The adapter now lives in `cuda/df_force_response.cpp`. The #205 source-backed response borrows device factors through `df_response_weights.*` / `df_gradient_bridge.*`; the host-value compatibility adapter retains its CPU metric path. |
@@ -382,3 +382,59 @@ Actual DIIS and convergence implementation edits each rebuild their own CUDA
 object plus the source-identity object, then relink. Neither probe compiles
 `cuda_rhf.cu` or an unrelated kernel owner. The exact source was restored and
 rebuilt after both probes.
+
+## CUDA resource lifetime and matrix-library execution
+
+`resources.*` owns the prepared bucket's stream, graphs, library workspaces and
+arena. Its destructor now compiles in ordinary C++, preserving owning-device
+selection, graph destruction, library-handle release, stream-ordered frees,
+stream drain and host-workspace release in their original order. The resource
+field layout is unchanged. Eigensolver and matrix consumers borrow explicit
+views; they do not acquire allocation or graph ownership.
+
+`matrix_library.*` consumes only a stream and cuBLAS handle. It preserves the
+resolved native/cuBLAS route, column-major strides, active masks and spin-aware
+broadcasting. `runtime_support.*` keeps the existing status mappings and
+nonempty host-upload behavior. Dependency gates reject imports of the bucket
+resource owner into matrix-library execution and reject method-driver imports
+into both owners.
+
+The audit against `36b7209` checks eight moved bodies, the resource field and
+special-member layout, the two-handle borrowed matrix view, and the entire
+remaining direct CUDA body after only definition removal and explicit view
+construction. This is an ownership extraction: no equation, fallback decision,
+resource budget, public ABI or iteration order changes. Host graph construction
+and bucket dispatch, device queues and direct scientific kernel decomposition
+remain unfinished under #240.
+
+The direct CUDA implementation decreases from 15,060 to 14,902
+lines; the largest new C++ implementation has 78 lines.
+The following compiler-work samples disable ccache and use NVCC 12.9 sm_120
+development fast-compile mode and GCC 11.4 Release. The exact parent source and
+candidate use separate worktrees with different absolute paths, on a shared
+machine with a warm filesystem cache. These are not production cold-build,
+device-link or molecular runtime measurements.
+
+| Translation unit | Seconds | Object bytes |
+| --- | ---: | ---: |
+| baseline_cuda_rhf | 36.442 | 8,440,448 |
+| extracted_cuda_rhf | 36.396 | 8,428,544 |
+| resources | 1.030 | 12,616 |
+| matrix_library | 0.382 | 4,584 |
+| runtime_support | 0.354 | 1,968 |
+
+Aggregate compiler work changes from 36.442 to 38.163
+seconds; aggregate object bytes change from 8,440,448 to
+8,447,712. This establishes ownership boundaries, not a cold-build speedup.
+
+Validation passed 88 structure/ownership checks, four native GPU tests,
+123 Python GPU tests and 14 allocation-budget GPU tests, with no GPU skips.
+GPU execution used Slurm on the RTX 5090. The body/layout audit and hooks pass.
+The allocation checks cover prepared execution, failure cleanup and repeated
+plan lifetime behavior with the extracted resource destructor.
+
+Actual implementation-only edits to `resources.cpp` and `matrix_library.cpp`
+each rebuild only the edited C++ object plus source-identity metadata, then
+relink dependents. The observed rebuilds take 1.585 and 1.589 seconds,
+respectively, and compile no CUDA kernel object. Both probes restore and rebuild
+the exact validated source. Full production acceptance remains under #240.

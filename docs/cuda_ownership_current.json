@@ -751,6 +751,23 @@
       "subsystem": "runtime"
     },
     {
+      "bytes": 1409,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 20,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/matrix_library.hpp",
+      "physical_lines": 33,
+      "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "69542adb17844dae3e4f31cb8cdda218204b3cb2a6a6e637f78dfea43d0e305e",
+      "subsystem": "runtime"
+    },
+    {
       "bytes": 2180,
       "code_lines": {
         "fallback": 0,
@@ -901,6 +918,40 @@
       "regions": [],
       "role": "runtime",
       "sha256": "9983b060b4ca914ffd423c08eed4e5d28cfbbe4d6f294b848bea438b548cfa5c",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 1763,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 32,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/resources.hpp",
+      "physical_lines": 52,
+      "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "1d7a4b74cc410afe7b99cf9090c2a13386010646215383a3e19e953458487de8",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 688,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 13,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/runtime_support.hpp",
+      "physical_lines": 24,
+      "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "2f79e25f39ee8ad4e9582c891ea33a07b9abd10b962ed37b38214554abeafb3d",
       "subsystem": "runtime"
     },
     {
@@ -1164,22 +1215,22 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 801856,
+      "bytes": 794091,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 6527,
+        "runtime": 6395,
         "scientific": 6995
       },
       "path": "src/scf/cuda_rhf.cu",
-      "physical_lines": 15060,
+      "physical_lines": 14902,
       "reason": "Remaining device recurrences, physical screening bounds and method contractions are conservatively scientific; explicit regions separate generic runtime.",
       "regions": [
         {
-          "code_lines": 606,
+          "code_lines": 609,
           "first_line": 1,
-          "last_line": 692,
+          "last_line": 695,
           "reason": "Includes, task metadata, scalar arithmetic/AD, stable special functions and generic geometry/packing helpers.",
           "role": "runtime",
           "start": "#include <cublas_v2.h>",
@@ -1187,8 +1238,8 @@
         },
         {
           "code_lines": 66,
-          "first_line": 754,
-          "last_line": 835,
+          "first_line": 757,
+          "last_line": 838,
           "reason": "Angular/task indexing and public-layout helpers.",
           "role": "runtime",
           "start": "__device__ unsigned angular_axis(",
@@ -1196,8 +1247,8 @@
         },
         {
           "code_lines": 13,
-          "first_line": 5688,
-          "last_line": 5703,
+          "first_line": 5691,
+          "last_line": 5706,
           "reason": "Direct class timing instrumentation retained after common SCF kernel extraction.",
           "role": "runtime",
           "start": "__global__ void start_bounded_fock_class_timer_kernel",
@@ -1205,8 +1256,8 @@
         },
         {
           "code_lines": 9,
-          "first_line": 5790,
-          "last_line": 5809,
+          "first_line": 5793,
+          "last_line": 5812,
           "reason": "Generic atomic maximum implementation.",
           "role": "runtime",
           "start": "__device__ void atomic_max_double",
@@ -1214,8 +1265,8 @@
         },
         {
           "code_lines": 547,
-          "first_line": 6142,
-          "last_line": 6807,
+          "first_line": 6145,
+          "last_line": 6810,
           "reason": "Task compaction, signature/class indexing, prefix scans, materialization and queue profiling.",
           "role": "runtime",
           "start": "__global__ void compact_active_shell_quartet_tiles_kernel",
@@ -1223,8 +1274,8 @@
         },
         {
           "code_lines": 64,
-          "first_line": 6949,
-          "last_line": 7016,
+          "first_line": 6952,
+          "last_line": 7019,
           "reason": "Generic tuple permutations and duplicate suppression.",
           "role": "runtime",
           "start": "__device__ void eri_symmetry_permutation",
@@ -1232,8 +1283,8 @@
         },
         {
           "code_lines": 18,
-          "first_line": 7246,
-          "last_line": 7265,
+          "first_line": 7249,
+          "last_line": 7268,
           "reason": "Component-index mapping.",
           "role": "runtime",
           "start": "__device__ __forceinline__ unsigned order2_component_index",
@@ -1241,8 +1292,8 @@
         },
         {
           "code_lines": 104,
-          "first_line": 7394,
-          "last_line": 7510,
+          "first_line": 7397,
+          "last_line": 7513,
           "reason": "Queue/launch wrappers around separately owned scientific contractions.",
           "role": "runtime",
           "start": "__global__ void build_fock_direct_quartet_kernel",
@@ -1250,8 +1301,8 @@
         },
         {
           "code_lines": 42,
-          "first_line": 9063,
-          "last_line": 9109,
+          "first_line": 9066,
+          "last_line": 9112,
           "reason": "Generic prefix scans for force signatures.",
           "role": "runtime",
           "start": "__global__ void scan_bounded_force_signature_counts_kernel",
@@ -1259,17 +1310,17 @@
         },
         {
           "code_lines": 164,
-          "first_line": 9537,
-          "last_line": 9736,
+          "first_line": 9540,
+          "last_line": 9739,
           "reason": "Persistent force task wrappers; primitive/equation contractions are separate above.",
           "role": "runtime",
           "start": "__global__ void two_electron_force_quartet_kernel",
           "stop": "cudaError_t prepare_generated_shell_tasks("
         },
         {
-          "code_lines": 4894,
-          "first_line": 9737,
-          "last_line": 15060,
+          "code_lines": 4759,
+          "first_line": 9740,
+          "last_line": 14902,
           "reason": "Host resource planning, library/state/graph execution and ABI dispatch; numerical device equations are classified above.",
           "role": "runtime",
           "start": "cudaError_t prepare_generated_shell_tasks(",
@@ -1277,7 +1328,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "85301a8c54800395ea4f5dfe22853ebbed0428582621ce85fd4b28a0ad47b349",
+      "sha256": "9aa9b31a7c35794e205831c069d6ee56b76b125f1824a0f35aeb633ebeb9f9bd",
       "subsystem": "direct_integrals"
     },
     {
@@ -1457,7 +1508,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 122,
-    "runtime": 12245,
+    "runtime": 12178,
     "scientific": 9132
   },
   "migration_ledger": {
@@ -1617,7 +1668,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 6527,
+      "runtime": 6395,
       "scientific": 7095
     },
     "low_rank": {
@@ -1645,7 +1696,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 2925,
+      "runtime": 2990,
       "scientific": 0
     },
     "scf_tensor": {
