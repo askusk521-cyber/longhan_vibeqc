@@ -20,9 +20,8 @@ void require(bool condition, const char* message) {
 }
 
 void verify_context_detail_storage() {
-  const vibeqc_context_descriptor context_descriptor{sizeof(vibeqc_context_descriptor),
-                                                     VIBEQC_ABI_VERSION, 0,
-                                                     VIBEQC_BACKEND_CPU_REFERENCE};
+  const vibeqc_context_descriptor context_descriptor{
+      sizeof(vibeqc_context_descriptor), VIBEQC_ABI_VERSION, 0, VIBEQC_BACKEND_CPU_REFERENCE};
   vibeqc_context* first = nullptr;
   vibeqc_context* second = nullptr;
   require(vibeqc_context_create(&context_descriptor, &first) == VIBEQC_STATUS_SUCCESS,
@@ -48,8 +47,8 @@ void verify_context_detail_storage() {
   require(vibeqc_system_create(first, &descriptor, &system) == VIBEQC_STATUS_INVALID_ARGUMENT,
           "invalid primitive did not fail");
   const char* first_detail = vibeqc_context_get_last_detail(first);
-  require(first_detail != nullptr && std::string(first_detail).find("positive finite") !=
-                                          std::string::npos,
+  require(first_detail != nullptr &&
+              std::string(first_detail).find("positive finite") != std::string::npos,
           "first context detail was not recorded");
 
   primitive.exponent = 1.0;
@@ -57,8 +56,8 @@ void verify_context_detail_storage() {
   require(vibeqc_system_create(second, &descriptor, &system) == VIBEQC_STATUS_NOT_IMPLEMENTED,
           "unsupported angular momentum did not fail");
   const char* second_detail = vibeqc_context_get_last_detail(second);
-  require(second_detail != nullptr && std::string(second_detail).find("supports s through f") !=
-                                             std::string::npos,
+  require(second_detail != nullptr &&
+              std::string(second_detail).find("supports s through f") != std::string::npos,
           "second context detail was not recorded");
   require(std::string(first_detail).find("positive finite") != std::string::npos,
           "first context detail was overwritten by another context query");

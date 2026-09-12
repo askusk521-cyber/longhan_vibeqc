@@ -738,8 +738,8 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
     const auto occupied = static_cast<std::size_t>(system.electron_count / 2);
     if (occupied == 0 || occupied >= n)
       throw std::invalid_argument("physical RHF reference requires a nonempty virtual space");
-    const auto capacity = posthf::rhf_reference_capacity(
-        system, options.diis_history, strategy.backend == FockBackend::Cpu);
+    const auto capacity = posthf::rhf_reference_capacity(system, options.diis_history,
+                                                         strategy.backend == FockBackend::Cpu);
     if (options.reference_memory_budget_bytes != 0 &&
         capacity > options.reference_memory_budget_bytes)
       throw std::length_error("bounded RHF reference exceeds numeric memory budget");
