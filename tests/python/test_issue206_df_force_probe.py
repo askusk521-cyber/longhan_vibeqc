@@ -15,6 +15,9 @@ def protocol(tmp_path, monkeypatch):
     """Use an identifiable fake binary; sample calls never touch CUDA."""
     library = tmp_path / "libvibeqc.so"
     library.write_bytes(b"protocol-only native library")
+    # main() selects this binary through the process environment. Register it
+    # with monkeypatch so later native tests recover their original library.
+    monkeypatch.setenv("VIBEQC_LIBRARY", str(library))
     output = tmp_path / "ledger.json"
     monkeypatch.setenv("SLURM_JOB_ID", "protocol-test")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
