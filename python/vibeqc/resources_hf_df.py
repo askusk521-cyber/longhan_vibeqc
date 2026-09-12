@@ -128,8 +128,9 @@ def cuda_df_candidates(
                 "default_tile": default_tile,
             }
         )
-        # The generated bridge owns packed AO metadata, two metric copies,
-        # the spectral map, density matrices and bounded auxiliary weights.
+        # Source response owns packed AO metadata, four device metric matrices,
+        # density matrices and bounded auxiliary weights. The compatibility
+        # resident adapter retains its independent host spectral allowance.
         # This LP64 capacity allowance covers vector growth for public s/p/d/f
         # expansions (at most three Cartesian terms) without a CUDA context.
         response_metadata = max(
@@ -147,12 +148,18 @@ def cuda_df_candidates(
         response_spectral = 8 * (12 * aux * aux + 10 * aux + n * n)
         # Three density terms cover UHF; its total-density matrix is included.
         response_fixed = 8 * (3 * aux * aux + 6 * aux + 4 * n * n)
-        rows[-1]["response_minimum"] = response_metadata + max(
-            response_spectral, response_fixed + 16 * n * n
+        rows[-1]["response_minimum"] = response_metadata + 8 * (
+            4 * aux * aux + 9 * n * n + 6 * aux
         )
-        rows[-1]["response_capacity"] = response_metadata + max(
+        rows[-1]["resident_response_capacity"] = response_metadata + max(
             response_spectral, response_fixed + 16 * n * n * aux
         )
+        # Include the caller's UHF total-density staging along with three
+        # uploaded terms. Device tiles are capped by the supplied half-budget.
+        rows[-1]["response_capacity"] = response_metadata + 8 * (
+            4 * aux * aux + (7 + 2 * aux) * n * n + 6 * aux
+        )
+        rows[-1]["response_host_capacity"] = response_metadata + 8 * n * n
     source_budget = requested_budget or max(
         max(
             row["preparation_minimum"],
@@ -210,23 +217,29 @@ def cuda_df_candidates(
             solver = (64 << 20) + 16 * matrix + 128 * aux * aux
             persistent_device = 32 * matrix + 16 * b * aux + solver + 1024 * b
             persistent_device += (
-                4 * tile_bytes + metric + row["source_bytes"]
+                4 * tile_bytes + 2 * metric + 8 * b * aux + row["source_bytes"]
                 if source
                 else tensor + 3 * tile_bytes
             )
-            setup = 3 * metric + 16 * b * aux + solver + 4 * b
+            setup = (
+                (2 * metric + 8 * b * aux if source else 3 * metric + 16 * b * aux)
+                + solver
+                + 4 * b
+            )
             # The promoted force consumer streams bounded weights. It owns no
             # raw coordinate derivative tensors or coordinate-wise CUDA scratch.
-            force = row["response_capacity"]
+            force = (
+                min(row["response_capacity"], sub_budget // 2)
+                if source
+                else row["resident_response_capacity"]
+            )
             generation = row["source_bytes"] + 8 * b * (
                 (d + 1) * 2 * c * c + (0 if source else ac * ac + c * c * ac)
             )
             persistent_host = row["host_metadata"] + 8 * b * (32 * n * n + 16 * d)
             one_electron = 8 * b * ((d + 1) * 2 * n * n + d)
             raw = 8 * b * (aux * aux + n * n * aux)
-            if source:
-                persistent_host += 2 * metric
-            else:
+            if not source:
                 persistent_host += one_electron + raw + tensor
             scf = (
                 8
@@ -251,7 +264,11 @@ def cuda_df_candidates(
                 raise ValueError(
                     "DF sub-budget cannot hold the generated response minimum"
                 )
-            host_temporary += row["response_capacity"]
+            host_temporary += (
+                row["response_host_capacity"]
+                if source
+                else row["resident_response_capacity"]
+            )
             host_resident.append(checked_bytes(persistent_host))
             device_resident.append(checked_bytes(persistent_device))
             host_work.append(checked_bytes(host_temporary))

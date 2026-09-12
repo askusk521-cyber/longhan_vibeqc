@@ -2,8 +2,9 @@
 
 The [generated DF response](df_derivatives.md) contracts independent
 three-center and metric weights on CUDA without complete nuclear-derivative
-tensors. That page documents the RHF/UHF reverse chain, bounded host staging,
-metric rank-crossing diagnostics, and measured endpoint evidence.
+tensors. That page documents the RHF/UHF reverse chain, metric rank-crossing
+diagnostics, and measured endpoint evidence. The positive-budget path uses
+[bounded device response](df_device_replay.md) for both J/K and final forces.
 
 VibeQC provides CPU-reference and CUDA density-fitting execution for RHF and
 UHF.  Single systems and homogeneous prepared-batch buckets share the same
@@ -43,16 +44,16 @@ and failure status.
   on the device, with a host-orchestrated fallback for provider limitations.
   CUDA finalization constructs bounded raw-value response weights and contracts
   the shared generated center derivatives on the persistent plan stream.
-  One-electron/overlap Pulay assembly remains on the host. CUDA response failures
-  propagate; independent CPU response remains the implementation for CPU callers.
+  One-electron/overlap Pulay response uses the separate #141 generated consumer.
+  CUDA response failures propagate; independent CPU response serves CPU callers.
 - A persistent homogeneous CUDA J/K plan performs device-side metric
   eigendecomposition and inverse-square-root construction, cuBLAS three-center
   transforms and RI-J, and auxiliary-tiled two-GEMM RI-K for RHF and UHF. The
   transformed tensor remains resident across repeated density contractions when
-  it fits the selected tile policy. For memory-bounded plans, raw
-  three-center values and the metric inverse are retained on the host and one
-  transformed auxiliary tile is uploaded per contraction, avoiding a full
-  device-resident tensor.
+  it fits the selected tile policy. Positive-budget plans regenerate raw and
+  transformed public-basis tiles on device and retain the metric factors and
+  eigensystem. They do not require a complete transformed tensor. The native
+  compatibility API also supports explicitly host-backed input tensors.
 - A deterministic planner for batch, AO-pair, auxiliary, and occupied-orbital
   tiles. Its positive budget bounds the persistent CUDA plan and bounded
   generation/contraction tiles. A positive DF request is split equally between
@@ -83,22 +84,22 @@ propagate instead of silently selecting CPU integral evaluation.
   Graph executable for fixed-topology, non-streamed replays.  Inputs and
   convergence masks are refreshed in place, while geometry changes invalidate
   only the affected bucket's geometry-dependent plan.  Streamed plans retain
-  bounded AO-pair/auxiliary tiles and use the same persistent workspaces; their
-  host tile transfers intentionally remain outside Graph capture.
+  bounded AO-pair/auxiliary tiles and use persistent workspaces. Source-backed
+  J/K regeneration launches on the owning stream without host tensor transfers.
 - Generated weighted RI-J/K analytic-force response supports RHF and UHF,
-  including metric pseudoinverse and auxiliary response terms. Bounded host
-  weight staging and raw-value transfers remain part of the execution cost.
-  One-electron and overlap-Pulay assembly remains host-side and uses the same
-  variational weighted-density convention as the CPU oracle.
+  including metric pseudoinverse and auxiliary response terms. Positive-budget
+  source plans construct those weights on device and report metadata/density
+  uploads separately from tensor transfers. The #141 one-electron and Pulay
+  consumer retains the CPU oracle's variational weighted-density convention.
 - `benchmarks/real_molecule_gate.py --density-fitting cuda` runs a separate
   DF acceptance matrix for 96-, 192-, and 384-AO workloads.  It records the
   selected DF settings, metric conditioning/effective rank, resident and peak
   allocation diagnostics, and cold setup versus warm contraction timing.  The
   historical direct-SCF matrix remains unchanged when the flag is omitted.
 
-The streamed host-transfer boundary and external GPU4PySCF availability remain
-explicitly visible in benchmark artifacts; no direct-SCF gate is weakened when
-the DF matrix is unavailable on a given machine.
+Host-backed compatibility execution and external GPU4PySCF availability are
+explicit in benchmark artifacts. The direct-SCF gates are independent of DF
+execution placement.
 
 ## Generated raw integral values
 

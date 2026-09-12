@@ -418,8 +418,9 @@ def test_auxiliary_only_atom_hf_energy_derivative(
 @pytest.mark.parametrize(
     "method,representation", [("rhf", "spherical"), ("uhf", "cartesian")]
 )
+@pytest.mark.parametrize("budget", [0, 4 << 20])
 def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
-    monkeypatch, method, representation
+    monkeypatch, method, representation, budget
 ):
     from pyscf import gto, scf
     from test_one_electron_values_cuda import run_case, sdf_case_inputs
@@ -430,6 +431,7 @@ def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
         "representation": representation,
         "fitted": True,
         "count": 3,
+        "df_budget": budget,
     }
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
     actual = run_case(monkeypatch, mapping="thread", **kwargs)
@@ -476,12 +478,18 @@ def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
             np.testing.assert_allclose(right.forces, forces, atol=3e-9, rtol=0)
 
 
-def test_df_generated_failed_item_preserves_successful_neighbor(monkeypatch):
+@pytest.mark.parametrize("budget", [0, 1 << 20])
+def test_df_generated_failed_item_preserves_successful_neighbor(monkeypatch, budget):
     assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
     atoms = [("H", (0, 0, -0.7)), ("H", (0.1, 0, 0.7))]
     other = [("He", (0, 0, -0.7)), ("H", (0.1, 0, 0.7))]
-    calc = Calculator(device="cuda", density_fitting="cuda", max_iterations=3)
+    calc = Calculator(
+        device="cuda",
+        density_fitting="cuda",
+        max_iterations=3,
+        density_fitting_memory_budget_bytes=budget,
+    )
     with calc.prepare_batch([atoms, other], charges=[0, 1]) as batch:
         result = batch.execute()
         assert result.items[0].succeeded and not result.items[1].succeeded
@@ -491,7 +499,8 @@ def test_df_generated_failed_item_preserves_successful_neighbor(monkeypatch):
         )
 
 
-def test_df_rank_crossing_is_reported_without_oracle_retry(monkeypatch):
+@pytest.mark.parametrize("budget", [0, 1 << 20])
+def test_df_rank_crossing_is_reported_without_oracle_retry(monkeypatch, budget):
     assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
     inputs = {
         "atomic_numbers": [1, 1],
@@ -514,6 +523,7 @@ def test_df_rank_crossing_is_reported_without_oracle_retry(monkeypatch):
         auxiliary_basis=basis,
         density_fitting="cuda",
         density_fitting_relative_threshold=threshold,
+        density_fitting_memory_budget_bytes=budget,
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
     )
