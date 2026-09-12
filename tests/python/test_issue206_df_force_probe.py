@@ -1,10 +1,7 @@
 """Hardware-free protocol checks for the #206 force ledger."""
 
 import json
-import os
-import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
