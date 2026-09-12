@@ -142,14 +142,21 @@ bound the uploaded weight tile. Caller weights/system data and opaque CUDA
 storage are outside those counters. Only `3*Natom` doubles return to the
 standalone caller.
 
-HF retains an explicit host boundary: density-derived weights and the metric
-Frechet map execute on the host. Resident raw values are borrowed from the
-existing preparation. A source-backed plan generates requested value slices
-on its owning CUDA stream and downloads them for weight construction. The
-same stream uploads the weights and launches the fused derivative consumer.
-No derivative tensor crosses D2H. Transfer and synchronization counters include
-these value downloads and weight uploads. This is not a fully device-resident
-force workflow, including when the generated one-electron path is selected.
+Positive-budget source plans keep the complete HF density response on device.
+The setup eigensystem and inverse square root remain resident; bounded raw
+value slices, A weights, and the spectral Frechet reverse map are computed on
+the owning stream. Only basis metadata and physical densities are uploaded,
+and only the final `3*Natom` gradient is downloaded. The map includes finite
+discarded metric eigenvalues; unresolved rank crossings fail before response
+allocation. [The device replay ledger](df_device_replay.md) describes its
+lifetimes, allocation floor, transfer counters and validation.
+
+The compatibility resident plan still borrows host raw values and computes
+weights through the independently maintained host adapter. Its transfers are
+reported explicitly. This adapter is not a fallback for a failed source plan.
+Standalone arbitrary external weights also retain their documented upload
+boundary. Primitive values and center derivatives use the same generated
+interfaces in both execution modes.
 
 For a positive DF working-set request, the J/K planner receives half the
 request and the generated response receives half; UHF also charges its total

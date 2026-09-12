@@ -31,7 +31,7 @@ and `cuda_ownership_current.json`, under #231.
 | `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | `cuda/packed_basis.hpp` and `cuda/direct_metadata.hpp` hold borrowed/POD contracts. Host packing and checked arena calculations are extracted to `cuda/topology.*` and `cuda/arena.*`. DF source setup/replay and explicit tensor export are now extracted to `cuda/df_source*` and `cuda/df_integral_export*`; resource ownership, graph construction and bucket dispatch remain pending. |
 | `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Remaining DF plan/metric module; preserve resident versus source-backed/host-backed distinctions. |
 | `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Remaining DF execution module using the same provider semantics and explicit memory sub-budget. |
-| `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | Continue #143/#205 integration through `cuda/df_gradient_bridge.*`; its current host response staging must remain visible until #205 replaces it. |
+| `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The #205 source-backed response uses device weights through `cuda/df_response_weights.*` and `cuda/df_gradient_bridge.*`; the explicitly documented host-value compatibility adapter remains separate. DF solver and library-planning ownership still need decomposition. |
 | `cuda_density_fitting.cu`: iterative replay | `DeviceSolver`, `DeviceIterationGraph`, `PersistentScfState`, eigensolve wrappers, RHF/UHF device SCF loops and graph-tail kernels | Remaining common solver/graph boundary; lifetime ownership and per-system failure isolation precede structural moves. |
 
 ## Dependency and size gates
@@ -246,3 +246,8 @@ and positive device budgets. Actual implementation-only edits to source setup
 and batched tensor export each rebuilt only their C++ owner and source identity,
 then relinked; neither edit recompiled a CUDA kernel. The exact source was
 restored and rebuilt after each probe.
+
+After integration with the device force-response implementation and current
+upstream, the combined source extraction passed 75 CPU structure/ownership
+checks, three native GPU tests, and 38 opt-in Python GPU endpoint/resource
+tests with no skips. The 29-function and three-wrapper audit still passes.
