@@ -179,6 +179,16 @@ def run_matrix(
         stem = f"{case.ao_count}ao-b{case.batch_size}"
         result_path = output_dir / f"{stem}.json"
         log_path = output_dir / f"{stem}.log"
+
+        def result_identity(path=result_path):
+            """Distinguish a new endpoint artifact from an earlier attempt."""
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                return None
+            return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+        previous_result = result_identity()
         command = [
             python,
             str(BENCHMARK),
@@ -211,7 +221,9 @@ def run_matrix(
             # failure and finish the other cases before reporting job failure.
             returncode = None
             log = str(error) + "\n"
-        passed = returncode == 0 and result_path.is_file()
+        current_result = result_identity()
+        fresh_result = current_result is not None and current_result != previous_result
+        passed = returncode == 0 and fresh_result
         if returncode == 0 and not passed:
             log += "\nEndpoint exited successfully without a result JSON.\n"
         log_path.write_text(log)
@@ -219,7 +231,9 @@ def run_matrix(
             {
                 "status": "passed" if passed else "failed",
                 "returncode": returncode,
-                "result": str(result_path) if passed else None,
+                # Numerical gate failures also produce useful endpoint JSON;
+                # retain it when this attempt wrote it, regardless of exit code.
+                "result": str(result_path) if fresh_result else None,
                 "log": str(log_path),
             }
         )

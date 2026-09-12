@@ -11,7 +11,7 @@ import pytest
 from benchmarks import issue206_df_matrix as matrix
 
 
-@pytest.mark.parametrize("failure", ["exit", "launch", "missing_result"])
+@pytest.mark.parametrize("failure", ["exit", "launch", "missing_result", "gate"])
 def test_matrix_retains_failures_and_finishes_remaining_cases(
     tmp_path, monkeypatch, failure
 ):
@@ -19,6 +19,8 @@ def test_matrix_retains_failures_and_finishes_remaining_cases(
     monkeypatch.setenv("SLURM_JOB_ID", "protocol-test")
     monkeypatch.setattr(matrix, "_git", lambda *args: "")
     output = tmp_path / "endpoints"
+    output.mkdir()
+    (output / "96ao-b1.json").write_text('{"previous_attempt": true}')
     manifest = tmp_path / "manifest.json"
     payload = matrix.manifest_payload(
         cases=matrix.MATRIX[:2],
@@ -40,8 +42,9 @@ def test_matrix_retains_failures_and_finishes_remaining_cases(
         if len(calls) == 1:
             if failure == "launch":
                 raise FileNotFoundError("missing interpreter")
-            if failure == "exit":
-                path.write_text('{"stale": true}')
+            if failure in ("exit", "gate"):
+                if failure == "gate":
+                    path.write_text('{"gate": {"passed": false}}')
                 return subprocess.CompletedProcess(command, 2, "", "endpoint failed")
             return subprocess.CompletedProcess(command, 0, "", "")
         path.write_text('{"converged": true}')
@@ -64,7 +67,12 @@ def test_matrix_retains_failures_and_finishes_remaining_cases(
     rows = json.loads(manifest.read_text())["matrix"]
     assert len(calls) == 2
     assert [row["status"] for row in rows] == ["failed", "passed"]
-    assert rows[0]["result"] is None
+    if failure == "gate":
+        assert (
+            json.loads(Path(rows[0]["result"]).read_text())["gate"]["passed"] is False
+        )
+    else:
+        assert rows[0]["result"] is None
     assert Path(rows[0]["log"]).is_file()
     assert Path(rows[1]["result"]).is_file()
 
