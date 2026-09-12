@@ -147,9 +147,12 @@ add_library(vibeqc SHARED
   src/dft/bridge.cpp
   src/integrals/s_integrals.cpp
   src/methods/hf_method.cpp
+  src/methods/mp2_method.cpp
   src/methods/registry.cpp
   src/molecule/basis.cpp
   src/posthf/bridge.cpp
+  src/posthf/mp2_energy.cpp
+  src/posthf/native_provider.cpp
   src/runtime/context.cpp
   src/scf/density_fitting.cpp
   src/scf/df_response_weights.cpp
@@ -176,10 +179,13 @@ add_library(vibeqc SHARED
 file(GLOB_RECURSE _vibeqc_identity_inputs CONFIGURE_DEPENDS
      RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
      "src/*" "include/*" "python/vibeqc_compiler/*.py"
-     "python/vibeqc_compiler/*.json" "python/vibeqc/*.py")
+     "python/vibeqc_compiler/*.json" "python/vibeqc/*.py"
+     "tools/vibeqc_tensor/*.py" "tools/vibeqc_mp2/*.py"
+     "tools/vibeqc_posthf/plan_spec.py")
 list(APPEND _vibeqc_identity_inputs "CMakeLists.txt" "tools/generate_shell_kernels.py"
      "tools/generate_df_kernels.py" "tools/generate_weighted_eri_kernels.py"
-     "tools/generate_one_electron_kernels.py" "tools/generate_grid_kernels.py")
+     "tools/generate_one_electron_kernels.py" "tools/generate_grid_kernels.py"
+     "tools/generate_mp2_native.py")
 list(SORT _vibeqc_identity_inputs)
 set(_vibeqc_identity_text "")
 foreach(_vibeqc_identity_path IN LISTS _vibeqc_identity_inputs)
@@ -290,6 +296,33 @@ if(VIBEQC_ENABLE_CUDA)
             ${VIBEQC_DF_GENERATOR_INPUTS}
     VERBATIM)
   target_include_directories(vibeqc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/dft")
+
+  # MP2 generated tile plans are compiled with unique symbols alongside the
+  # existing grid and DF generated translation units.
+  set(_mp2_generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/mp2")
+  set(_mp2_generated_sources "${_mp2_generated_dir}/mp2_cuda_table.cu")
+  set(_mp2_archs "")
+  foreach(_arch IN LISTS CMAKE_CUDA_ARCHITECTURES)
+    string(REGEX REPLACE "-.*$" "" _numeric_arch "${_arch}")
+    list(APPEND _mp2_archs "${_numeric_arch}")
+  endforeach()
+  list(REMOVE_DUPLICATES _mp2_archs)
+  foreach(_arch IN LISTS _mp2_archs)
+    foreach(_tile 1 2 4 8)
+      list(APPEND _mp2_generated_sources "${_mp2_generated_dir}/mp2_sm${_arch}_t${_tile}_runtime.cu")
+    endforeach()
+  endforeach()
+  file(GLOB _mp2_generator_inputs CONFIGURE_DEPENDS
+       "${CMAKE_CURRENT_SOURCE_DIR}/tools/vibeqc_tensor/*.py"
+       "${CMAKE_CURRENT_SOURCE_DIR}/tools/vibeqc_mp2/*.py"
+       "${CMAKE_CURRENT_SOURCE_DIR}/tools/vibeqc_posthf/*.py")
+  add_custom_command(OUTPUT ${_mp2_generated_sources}
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_mp2_native.py"
+            --cuda-dir "${_mp2_generated_dir}" --architectures "${_mp2_archs}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_mp2_native.py" ${_mp2_generator_inputs}
+    VERBATIM)
+  target_sources(vibeqc PRIVATE ${_mp2_generated_sources} src/posthf/cuda_transform.cu)
+  target_include_directories(vibeqc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tensor")
   target_sources(vibeqc PRIVATE
     "${VIBEQC_GRID_SOURCE}"
     src/posthf/df_bridge.cu

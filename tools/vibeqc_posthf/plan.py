@@ -6,6 +6,7 @@ from math import prod
 from vibeqc_compiler.integral.shell_signature import checked_index
 
 from .sources import CPU_SOURCE_SCRATCH
+from .plan_spec import numeric_capacity
 
 PROVIDER_ALLOWANCE = 96 << 20
 WORKSPACE_BYTES = 4 << 20

@@ -27,6 +27,7 @@ _METHODS = {
     "uhf": _native.METHOD_UHF,
     "wb97m-v": _native.METHOD_WB97M_V,
     "ccsd(t)": _native.METHOD_RCCSD_T,
+    "mp2": _native.METHOD_MP2,
 }
 
 
@@ -70,6 +71,26 @@ class Shell:
 
 
 @dataclass(frozen=True)
+class CorrelationResult:
+    reference_energy: float
+    opposite_spin_energy: float
+    same_spin_energy: float
+    minimum_absolute_denominator: float
+    reference_residual: float
+    numeric_capacity_bytes: int
+    energy_tile_count: int
+    mo_host_staging: bool
+    correlation_owned_device_bytes: int
+    correlation_provider_retained_bytes: int
+    mo_transfer_bytes: int
+    host_to_device_ms: float
+    device_to_host_ms: float
+    transform_library_ms: float
+    tensor_kernel_ms: float
+    equation_hash: str
+
+
+@dataclass(frozen=True)
 class Result:
     energy: float
     forces: np.ndarray | None
@@ -82,6 +103,7 @@ class Result:
     accuracy: AccuracyAssessment | None = None
     resource_diagnostics: dict | None = None
     precision: dict | None = None
+    correlation: CorrelationResult | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +144,7 @@ def method_capabilities(method: str) -> MethodCapabilities:
         _native.METHOD_FAMILY_HARTREE_FOCK: "hartree_fock",
         _native.METHOD_FAMILY_DENSITY_FUNCTIONAL: "density_functional",
         _native.METHOD_FAMILY_COUPLED_CLUSTER: "coupled_cluster",
+        _native.METHOD_FAMILY_PERTURBATION: "perturbation",
     }[native.family]
     properties = set()
     if native.supported_properties & _native.PROPERTY_ENERGY:
@@ -269,11 +292,13 @@ class Calculator:
         auxiliary_basis: str | Path | BasisSet | Sequence[Shell] | None = None,
         density_fitting_relative_threshold: float = 1.0e-10,
         density_fitting_memory_budget_bytes: int = 0,
+        correlation_memory_budget_bytes: int = 0,
+        mp2_denominator_threshold: float = 1e-10,
         max_iterations: int = 100,
         energy_tolerance: float = 1.0e-10,
         density_tolerance: float = 1.0e-8,
         diis_history: int = 8,
-        screening_tolerance: float = 1.0e-12,
+        screening_tolerance: float | None = None,
         precision: str = "fp64",
         target_accuracy: TargetAccuracy | None = None,
         resource_budget=None,
@@ -354,6 +379,24 @@ class Calculator:
         if int(density_fitting_memory_budget_bytes) < 0:
             raise ValueError("density_fitting_memory_budget_bytes must be non-negative")
         self._method = _METHODS[method.lower()]
+        if self._method == _native.METHOD_MP2:
+            for name, value in (
+                ("max_iterations", max_iterations),
+                ("diis_history", diis_history),
+            ):
+                if type(value) is not int or not 1 <= value <= 2**32 - 1:
+                    raise ValueError(f"{name} must be a positive uint32 for MP2")
+        if (
+            type(correlation_memory_budget_bytes) is not int
+            or not 0 <= correlation_memory_budget_bytes < 2**63
+        ):
+            raise ValueError(
+                "correlation_memory_budget_bytes must be a nonnegative signed-64-bit integer"
+            )
+        if not np.isfinite(mp2_denominator_threshold) or mp2_denominator_threshold <= 0:
+            raise ValueError("mp2_denominator_threshold must be finite and positive")
+        self._correlation_memory_budget_bytes = correlation_memory_budget_bytes
+        self._mp2_denominator_threshold = float(mp2_denominator_threshold)
         self._basis = basis
         self._auxiliary_basis = auxiliary_basis
         self._density_fitting_mode = density_fitting_mode
@@ -374,8 +417,13 @@ class Calculator:
         self._energy_tolerance = float(energy_tolerance)
         self._density_tolerance = float(density_tolerance)
         self._diis_history = int(diis_history)
+        if screening_tolerance is None:
+            screening_tolerance = 0.0 if self._method == _native.METHOD_MP2 else 1e-12
         self._screening_tolerance = float(screening_tolerance)
-        if self._screening_tolerance <= 0.0:
+        if self._method == _native.METHOD_MP2:
+            if self._screening_tolerance != 0:
+                raise ValueError("canonical MP2 requires screening_tolerance=0")
+        elif self._screening_tolerance <= 0.0:
             raise ValueError("screening_tolerance must be positive")
         precision_modes = {
             "fp64": _native.PRECISION_FP64,
@@ -452,6 +500,8 @@ class Calculator:
             self._density_fitting_relative_threshold,
             df_budget,
             self._precision_mode,
+            self._correlation_memory_budget_bytes,
+            self._mp2_denominator_threshold,
         )
 
     def _precision_provenance(
@@ -764,6 +814,7 @@ class Calculator:
             self._library.vibeqc_system_create(
                 context, ctypes.byref(descriptor), ctypes.byref(system)
             ),
+            context=context,
         )
         return system
 
@@ -886,30 +937,25 @@ class Calculator:
         *,
         charge: int = 0,
         multiplicity: int = 1,
-        properties: Iterable[str] = ("energy", "forces"),
+        properties: Sequence[str] | None = None,
     ) -> Result:
-        """Run one SCF calculation for explicitly selected observables.
-
-        Energy and convergence diagnostics are always returned. Select
-        ``properties=("energy",)`` to omit analytic-force evaluation; the
-        returned ``Result.forces`` is then ``None``. The default preserves the
-        historical energy-plus-forces endpoint.
-        """
+        """Run one calculation for explicitly selected observables."""
+        if properties is None:
+            properties = ("energy",) if self._method == _native.METHOD_MP2 else ("energy", "forces")
         if isinstance(properties, (str, bytes)):
             raise TypeError("properties must be an iterable of property names")
         try:
             requested_properties = frozenset(properties)
         except TypeError as error:
-            raise TypeError(
-                "properties must contain hashable property names"
-            ) from error
-        supported_properties = frozenset(("energy", "forces"))
+            raise TypeError("properties must contain hashable property names") from error
         if not requested_properties or "energy" not in requested_properties:
             raise ValueError("properties must include 'energy'")
-        unknown_properties = requested_properties - supported_properties
+        unknown_properties = requested_properties - {"energy", "forces"}
         if unknown_properties:
             names = ", ".join(sorted(repr(name) for name in unknown_properties))
             raise ValueError(f"unsupported properties: {names}")
+        if self._method == _native.METHOD_MP2 and "forces" in requested_properties:
+            raise NotImplementedError("MP2 analytic forces are unavailable")
         compute_forces = "forces" in requested_properties
         native_atoms = tuple(Atom.from_value(atom) for atom in atoms)
         if not native_atoms:
@@ -962,11 +1008,10 @@ class Calculator:
                     ctypes.byref(method_descriptor),
                     ctypes.byref(calculation),
                 ),
+                context=context,
             )
             force_storage = (
-                (ctypes.c_double * (3 * len(native_atoms)))()
-                if compute_forces
-                else None
+                (ctypes.c_double * (3 * len(native_atoms)))() if compute_forces else None
             )
             result_descriptor = _native.ResultDescriptor(
                 ctypes.sizeof(_native.ResultDescriptor),
@@ -983,16 +1028,14 @@ class Calculator:
             resource_diagnostics = None
             if resource_plan is None:
                 status = self._library.vibeqc_calculation_execute(
-                    calculation, ctypes.byref(result_descriptor)
+                    calculation, ctypes.byref(result_descriptor), context=context
                 )
             else:
                 from .resources import CpuResourceObservation
 
-                with CpuResourceObservation(
-                    self._library, cpu_workers=1, ledger=ledger
-                ) as observed:
+                with CpuResourceObservation(self._library, cpu_workers=1, ledger=ledger) as observed:
                     status = self._library.vibeqc_calculation_execute(
-                        calculation, ctypes.byref(result_descriptor)
+                        calculation, ctypes.byref(result_descriptor), context=context
                     )
                 resource_diagnostics = {
                     "plan": resource_plan.to_dict(),
@@ -1004,22 +1047,35 @@ class Calculator:
                     _native.check(self._library, status)
                 else:
                     from .resources_native import check_resource_status
-
                     check_resource_status(self._library, status, resource_diagnostics)
             except (RuntimeError, MemoryError) as error:
-                # Preserve scientific diagnostics (for example a DF rank
-                # crossing) before this calculation's context is destroyed.
                 detail = self._library.vibeqc_context_get_last_detail(context)
                 if detail:
-                    # Keep structured resource evidence and allocation-space
-                    # classification on the same exception instance.
                     error.args = (f"{error}: {detail.decode('utf-8')}",)
                 raise
             forces = (
                 np.ctypeslib.as_array(force_storage).copy().reshape(-1, 3)
-                if force_storage is not None
-                else None
+                if force_storage is not None else None
             )
+            correlation = None
+            if self._method == _native.METHOD_MP2:
+                diag = _native.CorrelationDiagnostic()
+                diag.struct_size = ctypes.sizeof(diag)
+                diag.abi_version = _native.ABI_VERSION
+                _native.check(
+                    self._library,
+                    self._library.vibeqc_calculation_get_correlation_diagnostic(
+                        calculation, ctypes.byref(diag)
+                    ),
+                )
+                values = {
+                    name: getattr(diag, name)
+                    for name, _ in diag._fields_
+                    if name not in ("struct_size", "abi_version")
+                }
+                values["mo_host_staging"] = bool(values["mo_host_staging"])
+                values["equation_hash"] = values["equation_hash"].decode("ascii")
+                correlation = CorrelationResult(**values)
             backend = (
                 "cuda"
                 if result_descriptor.executed_backend == _native.BACKEND_CUDA
@@ -1039,11 +1095,9 @@ class Calculator:
                     native_atoms, charge=charge, multiplicity=multiplicity
                 ),
                 accuracy=self._accuracy_assessment(
-                    native_atoms,
-                    charge,
-                    multiplicity,
-                    bool(result_descriptor.converged),
+                    native_atoms, charge, multiplicity, bool(result_descriptor.converged)
                 ),
+                correlation=correlation,
             )
         finally:
             if calculation.value:
