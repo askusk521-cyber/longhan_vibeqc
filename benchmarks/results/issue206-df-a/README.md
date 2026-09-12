@@ -26,11 +26,18 @@ three-center generation, factorization, RI-J/RI-K, response, transfers and
 synchronization. Those values remain `null` until a synchronized component
 capture is available; the large endpoint gap is a follow-up tuning target.
 
-Reproduce the matrix from a clean worktree with:
+Reproduce the matrix from a clean worktree with the local Python/CUDA environment:
 
 ```bash
+ISSUE206_PYTHON=/path/to/python CUDA_HOME=/path/to/cuda \
 sbatch run_issue206_df.slurm
 ```
+
+`ISSUE206_PYTHON` defaults to `python3`, `CUDA_HOME` defaults to the site
+CUDA 12.9 path, `ISSUE206_REPEATS` defaults to 5, and
+`ISSUE206_OUTPUT_DIR` defaults to `.artifacts/issue206-df-a` under the
+checkout. The runner derives its repository root from its own location; the
+archived manifest retains the absolute paths and environment used for job 1097.
 
 The archive contains the exact manifest, four endpoint JSON files, and their
 stdout/stderr logs. The manifest records the Slurm job, CUDA visibility, source
