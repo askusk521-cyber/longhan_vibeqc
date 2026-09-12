@@ -224,12 +224,29 @@ RTX5090_DPSS_SCALAR_RYS3_RESOURCE_LIMITS = {
 
 
 def _direct_cuda_source():
-    """Read direct dispatch with its extracted constant and metadata contracts."""
+    """Read direct dispatch with its shared contracts and numerical owners."""
     root = REPOSITORY_ROOT / "src/scf"
     return "\n".join(
         (root / path).read_text(encoding="utf-8")
         for path in (
             "cuda/direct_constants.hpp",
+            "cuda/integral_limits.hpp",
+            "cuda/scalar_math.cuh",
+            "cuda/gaussian_geometry.cuh",
+            "cuda/cartesian_angular.cuh",
+            "cuda/boys_table.cuh",
+            "cuda/hermite_recurrence.cuh",
+            "cuda/coulomb_auxiliary.cuh",
+            "cuda/one_electron_force_workspace.hpp",
+            "cuda/one_electron_native_overlap.cuh",
+            "cuda/one_electron_native_attraction.cuh",
+            "cuda/one_electron_native_attraction_gradient.cuh",
+            "cuda/one_electron_native_contraction.cuh",
+            "cuda/one_electron_native_force.cuh",
+            "cuda/one_electron_reference.cu",
+            "cuda/one_electron_force_reference.cu",
+            "cuda/nuclear_kernels.cu",
+            "cuda/direct_pair_cache.cu",
             "cuda/scf_constants.hpp",
             "cuda/scf_state_kernels.cu",
             "cuda/scf_matrix_kernels.cu",
@@ -3460,14 +3477,13 @@ def test_one_electron_force_batches_point_charges_in_one_warp_per_ao_pair():
     """Keep nuclear centers device-batched with the scalar path as fallback."""
 
     source = _direct_cuda_source()
-    cooperative_begin = source.index(
+    force_source = (
+        REPOSITORY_ROOT / "src/scf/cuda/one_electron_native_force.cuh"
+    ).read_text(encoding="utf-8")
+    cooperative_begin = force_source.index(
         "void contracted_one_electron_force_pair_cooperative("
     )
-    cooperative_end = source.index(
-        "template <unsigned MaximumAngular, typename Scalar>",
-        cooperative_begin,
-    )
-    cooperative = source[cooperative_begin:cooperative_end]
+    cooperative = force_source[cooperative_begin:]
     assert "atom_base += warpSize" in cooperative
     assert "shared_coefficients[axis]" in cooperative
     assert "if (lane == 0U)" in cooperative

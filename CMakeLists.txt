@@ -354,6 +354,10 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cu
+    src/scf/cuda/one_electron_reference.cu
+    src/scf/cuda/one_electron_force_reference.cu
+    src/scf/cuda/nuclear_kernels.cu
+    src/scf/cuda/direct_pair_cache.cu
     src/scf/cuda/direct_jk.cpp
     src/scf/cuda/one_electron_view.cpp
     src/scf/cuda/one_electron_export.cpp

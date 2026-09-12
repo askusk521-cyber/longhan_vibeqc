@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "molecule/basis.hpp"
+#include "scf/cuda/integral_limits.hpp"
 #include "scf/cuda/launch_geometry.hpp"
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda/scf_constants.hpp"
@@ -21,12 +21,6 @@ namespace vibeqc::scf::cuda_execution {
 constexpr double kMixedPrecisionFloat32UnitRoundoff = 5.9604644775390625e-08;
 static_assert(kMixedPrecisionFloat32UnitRoundoff ==
               cuda_policy::kMixedPrecisionFloat32UnitRoundoff);
-constexpr int kMaximumAngularMomentum = 3;
-constexpr std::size_t kMaximumAoExpansionTerms = molecule::kMaximumAoExpansionTerms;
-constexpr int kHermiteIDimension = kMaximumAngularMomentum + 1;
-constexpr int kHermiteJDimension = kMaximumAngularMomentum + 3;
-constexpr int kHermiteTDimension = 2 * kMaximumAngularMomentum + 4;
-constexpr int kMaximumCoulombOrder = 4 * kMaximumAngularMomentum;
 // Small fixed-topology fleet buckets benefit from evaluating ERIs once and
 // replaying them from the persistent arena. Larger AO spaces switch to fused
 // direct J/K so device memory remains O(N^2), not O(N^4).
