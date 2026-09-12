@@ -673,13 +673,16 @@ void validate_physical_reference(PhysicalReference& ref) {
     for (std::size_t p = 0; p < n; ++p) {
       const auto k = index(mu, p, n);
       ref.commutator_residual = std::max(ref.commutator_residual, std::abs(residual[k]));
-      ref.canonical_density_drift = std::max(ref.canonical_density_drift, std::abs(canonical_density[k] - ref.density[k]));
-      ref.eigen_residual = std::max(ref.eigen_residual, std::abs(fc[k] - sc[k] * ref.orbital_energies[p]));
+      ref.canonical_density_drift =
+          std::max(ref.canonical_density_drift, std::abs(canonical_density[k] - ref.density[k]));
+      ref.eigen_residual =
+          std::max(ref.eigen_residual, std::abs(fc[k] - sc[k] * ref.orbital_energies[p]));
       orthogonality = std::max(orthogonality, std::abs(csc[k] - (mu == p ? 1.0 : 0.0)));
       canonical = std::max(canonical, std::abs(cfc[k] - (mu == p ? ref.orbital_energies[p] : 0.0)));
     }
   }
-  if (std::max({ref.commutator_residual, ref.canonical_density_drift, ref.eigen_residual, orthogonality, canonical}) > 1e-8)
+  if (std::max({ref.commutator_residual, ref.canonical_density_drift, ref.eigen_residual,
+                orthogonality, canonical}) > 1e-8)
     throw std::runtime_error("invalid physical RHF reference: residual/canonicality drift");
 }
 
@@ -735,7 +738,8 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
     if (occupied == 0 || occupied >= n)
       throw std::invalid_argument("physical RHF reference requires a nonempty virtual space");
     const auto capacity = posthf::rhf_reference_capacity(system, options.diis_history);
-    if (options.reference_memory_budget_bytes != 0 && capacity > options.reference_memory_budget_bytes)
+    if (options.reference_memory_budget_bytes != 0 &&
+        capacity > options.reference_memory_budget_bytes)
       throw std::length_error("bounded RHF reference exceeds numeric memory budget");
     const auto jk = plan.build(result.density);
     const auto matrices = assemble_fock(strategy, plan.one_electron().hcore, jk);
@@ -750,7 +754,8 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
     auto canonical = generalized_eigen(ref->fock, orthogonalizer, n);
     ref->coefficients = std::move(canonical.vectors);
     ref->orbital_energies = std::move(canonical.values);
-    ref->energy = electronic_energy(ref->density, ref->hcore, ref->fock) + plan.one_electron().nuclear_repulsion;
+    ref->energy = electronic_energy(ref->density, ref->hcore, ref->fock) +
+                  plan.one_electron().nuclear_repulsion;
     ref->numeric_capacity_bytes = capacity;
     validate_physical_reference(*ref);
     result.energy = ref->energy;

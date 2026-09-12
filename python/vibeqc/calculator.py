@@ -941,13 +941,19 @@ class Calculator:
     ) -> Result:
         """Run one calculation for explicitly selected observables."""
         if properties is None:
-            properties = ("energy",) if self._method == _native.METHOD_MP2 else ("energy", "forces")
+            properties = (
+                ("energy",)
+                if self._method == _native.METHOD_MP2
+                else ("energy", "forces")
+            )
         if isinstance(properties, (str, bytes)):
             raise TypeError("properties must be an iterable of property names")
         try:
             requested_properties = frozenset(properties)
         except TypeError as error:
-            raise TypeError("properties must contain hashable property names") from error
+            raise TypeError(
+                "properties must contain hashable property names"
+            ) from error
         if not requested_properties or "energy" not in requested_properties:
             raise ValueError("properties must include 'energy'")
         unknown_properties = requested_properties - {"energy", "forces"}
@@ -1011,7 +1017,9 @@ class Calculator:
                 context=context,
             )
             force_storage = (
-                (ctypes.c_double * (3 * len(native_atoms)))() if compute_forces else None
+                (ctypes.c_double * (3 * len(native_atoms)))()
+                if compute_forces
+                else None
             )
             result_descriptor = _native.ResultDescriptor(
                 ctypes.sizeof(_native.ResultDescriptor),
@@ -1033,7 +1041,9 @@ class Calculator:
             else:
                 from .resources import CpuResourceObservation
 
-                with CpuResourceObservation(self._library, cpu_workers=1, ledger=ledger) as observed:
+                with CpuResourceObservation(
+                    self._library, cpu_workers=1, ledger=ledger
+                ) as observed:
                     status = self._library.vibeqc_calculation_execute(
                         calculation, ctypes.byref(result_descriptor), context=context
                     )
@@ -1047,6 +1057,7 @@ class Calculator:
                     _native.check(self._library, status)
                 else:
                     from .resources_native import check_resource_status
+
                     check_resource_status(self._library, status, resource_diagnostics)
             except (RuntimeError, MemoryError) as error:
                 detail = self._library.vibeqc_context_get_last_detail(context)
@@ -1055,7 +1066,8 @@ class Calculator:
                 raise
             forces = (
                 np.ctypeslib.as_array(force_storage).copy().reshape(-1, 3)
-                if force_storage is not None else None
+                if force_storage is not None
+                else None
             )
             correlation = None
             if self._method == _native.METHOD_MP2:
@@ -1095,7 +1107,10 @@ class Calculator:
                     native_atoms, charge=charge, multiplicity=multiplicity
                 ),
                 accuracy=self._accuracy_assessment(
-                    native_atoms, charge, multiplicity, bool(result_descriptor.converged)
+                    native_atoms,
+                    charge,
+                    multiplicity,
+                    bool(result_descriptor.converged),
                 ),
                 correlation=correlation,
             )

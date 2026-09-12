@@ -46,8 +46,7 @@ class Mp2Prepared final : public PreparedCalculation {
   }
   Result execute(bool compute_forces) override {
     if (compute_forces) {
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        "canonical MP2 implements energy only");
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "canonical MP2 implements energy only");
     }
     std::lock_guard<std::mutex> lock(mutex_);
     last_.reset();

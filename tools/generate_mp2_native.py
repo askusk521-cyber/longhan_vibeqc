@@ -85,7 +85,9 @@ def _numeric_architectures(value):
             "MP2 CUDA generation requires numeric architectures such as 75;90."
         ) from exc
     if not result:
-        raise ValueError("MP2 CUDA generation requires at least one numeric architecture.")
+        raise ValueError(
+            "MP2 CUDA generation requires at least one numeric architecture."
+        )
     return result
 
 

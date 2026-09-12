@@ -125,7 +125,8 @@ class Calculation {
         0,
         VIBEQC_BACKEND_CPU_REFERENCE};
     const auto status = vibeqc_calculation_execute(handle_, &output);
-    if (status != VIBEQC_STATUS_SUCCESS) throw Error(status, vibeqc_context_get_last_detail(context_));
+    if (status != VIBEQC_STATUS_SUCCESS)
+      throw Error(status, vibeqc_context_get_last_detail(context_));
     result.energy = output.energy;
     result.iterations = output.iterations;
     result.reference_residual = output.density_rms;

@@ -163,10 +163,11 @@ VIBEQC_API int vibeqc_posthf_rhf_density_v1(void* source, int backend, int devic
  * As with the RHF bridge, snapshot canonicalization remains a separately
  * checked host operation and a failed SCF cannot yield reusable state.
  */
-VIBEQC_API int vibeqc_posthf_uhf_density_v1(void* source, int backend, int device, unsigned max_iterations,
-                                 double tolerance, int df, double metric_threshold, double* density,
-                                 std::size_t elements, double* scalars, char* error,
-                                 std::size_t size) {
+VIBEQC_API int vibeqc_posthf_uhf_density_v1(void* source, int backend, int device,
+                                            unsigned max_iterations, double tolerance, int df,
+                                            double metric_threshold, double* density,
+                                            std::size_t elements, double* scalars, char* error,
+                                            std::size_t size) {
   return guarded(error, size, [&] {
     if (!source || !density || !scalars || (backend != 0 && backend != 1) || (df != 0 && df != 1))
       throw std::invalid_argument("invalid UHF export request");
