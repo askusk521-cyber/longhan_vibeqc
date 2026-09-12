@@ -69,9 +69,7 @@ def assemble_frozen_skeleton(
     }
     shapes = {value.shape for value in components.values()}
     if len(shapes) != 1:
-        raise ValueError(
-            f"Hessian components must have identical shapes, got {shapes}"
-        )
+        raise ValueError(f"Hessian components must have identical shapes, got {shapes}")
     skeleton = sum(
         components.values(), start=np.zeros_like(next(iter(components.values())))
     )

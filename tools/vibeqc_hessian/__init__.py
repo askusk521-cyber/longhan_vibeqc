@@ -30,7 +30,6 @@ from .weights import two_electron_energy, two_electron_weight, weight_energy
 
 __all__ = [
     "assemble_frozen_skeleton",
-    "validate_hessian_component",
     "forces_to_gradient",
     "hessian_difference",
     "hessian_symmetry_error",
@@ -38,5 +37,6 @@ __all__ = [
     "numerical_hessian",
     "two_electron_energy",
     "two_electron_weight",
+    "validate_hessian_component",
     "weight_energy",
 ]
