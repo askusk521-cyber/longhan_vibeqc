@@ -25,12 +25,8 @@ sys.path.insert(0, str(ROOT / "python"))
 from vibeqc import Calculator
 from vibeqc.autotune import source_identity
 
-METHOD_STATE = {
-    "lda-rks": (0, 1),
-    "pbe-rks": (0, 1),
-    "lda-uks": (-1, 2),
-    "pbe-uks": (-1, 2),
-}
+METHODS = ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks")
+UKS_METHODS = frozenset(("lda-uks", "pbe-uks"))
 DEFAULT_GRID_POINTS_PER_ATOM = 48 * 16 * 32
 
 
@@ -45,13 +41,25 @@ def timed(call):
 
 
 def systems_for(method: str, batch: int):
-    charge, multiplicity = METHOD_STATE[method]
-    base = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
-    systems = [
-        [(element, (x, y, z + 0.01 * item)) for element, (x, y, z) in base]
-        for item in range(batch)
-    ]
-    return systems, [charge] * batch, [multiplicity] * batch
+    h2 = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
+    if method in UKS_METHODS:
+        inventory = ((h2, -1, 2), ([("H", (0.0, 0.0, 0.0))], 0, 2))
+    else:
+        inventory = ((h2, 0, 1), ([("He", (0.0, 0.0, 0.0))], 0, 1))
+    systems = []
+    charges = []
+    multiplicities = []
+    for item in range(batch):
+        template, charge, multiplicity = inventory[item % len(inventory)]
+        systems.append(
+            [
+                (element, (x, y, z + 0.01 * (item // len(inventory))))
+                for element, (x, y, z) in template
+            ]
+        )
+        charges.append(charge)
+        multiplicities.append(multiplicity)
+    return systems, charges, multiplicities
 
 
 def changed_coordinates(systems):
@@ -59,7 +67,7 @@ def changed_coordinates(systems):
         np.asarray([xyz for _, xyz in system], dtype=np.float64) for system in systems
     ]
     for item, coordinates in enumerate(changed):
-        coordinates[1, 2] += 0.025 + 0.005 * item
+        coordinates[-1, 2] += 0.025 + 0.005 * item
     return changed
 
 
@@ -186,9 +194,7 @@ def run_case(method: str, batch: int):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
-        "--methods", nargs="+", choices=tuple(METHOD_STATE), default=list(METHOD_STATE)
-    )
+    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
     parser.add_argument("--batches", nargs="+", type=int, default=[1, 2])
     args = parser.parse_args()
     if any(batch < 1 for batch in args.batches):
