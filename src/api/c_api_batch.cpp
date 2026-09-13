@@ -8,6 +8,7 @@
 #include "api/handles.hpp"
 #include "api/precision.hpp"
 #include "methods/method.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "vibeqc/vibeqc.h"
 
 extern "C" {
@@ -16,6 +17,7 @@ vibeqc_status vibeqc_batch_prepare(vibeqc_context* context, const vibeqc_system*
                                    uint32_t system_count,
                                    const vibeqc_method_descriptor* descriptor,
                                    vibeqc_batch_flags flags, vibeqc_batch** batch) {
+  vibeqc::runtime::host_trace::Region trace("batch_prepare");
   if (context == nullptr || systems == nullptr || system_count == 0 || descriptor == nullptr ||
       batch == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
@@ -50,7 +52,10 @@ vibeqc_status vibeqc_batch_prepare(vibeqc_context* context, const vibeqc_system*
   }
 }
 
-void vibeqc_batch_destroy(vibeqc_batch* batch) { delete batch; }
+void vibeqc_batch_destroy(vibeqc_batch* batch) {
+  vibeqc::runtime::host_trace::Region trace("batch_destroy");
+  delete batch;
+}
 
 uint32_t vibeqc_batch_get_system_count(const vibeqc_batch* batch) {
   return batch == nullptr ? 0 : static_cast<std::uint32_t>(batch->plan->size());
@@ -363,6 +368,7 @@ vibeqc_status vibeqc_batch_execute(vibeqc_batch* batch, const vibeqc_batch_input
                                    uint32_t input_count,
                                    vibeqc_batch_item_result_descriptor* results,
                                    uint32_t result_count) {
+  vibeqc::runtime::host_trace::Region trace("batch_execute");
   if (batch == nullptr || results == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }

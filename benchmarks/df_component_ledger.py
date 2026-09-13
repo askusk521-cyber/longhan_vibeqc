@@ -260,6 +260,136 @@ def trace_identity(path: Path) -> dict:
     }
 
 
+def validate_host_record(record: dict) -> dict:
+    """Validate actual host work separately from the existing CUDA-event view."""
+    try:
+        if record["schema"] != "vibeqc.df_host_trace" or record["version"] != 1:
+            raise ValueError("unsupported host trace schema/version")
+        if record["valid"] is not True:
+            raise ValueError("invalid or truncated host trace")
+        _integer(record["id"], "id")
+        regions = record["regions"]
+        if not isinstance(regions, list) or not regions:
+            raise ValueError("missing host trace regions")
+        ancestors = []
+        for index, row in enumerate(regions):
+            parent = _integer(row["parent"], "parent", -1)
+            if (index == 0 and parent != -1) or (index > 0 and parent not in ancestors):
+                raise ValueError("invalid host trace parent hierarchy")
+            while ancestors and ancestors[-1] != parent:
+                ancestors.pop()
+            ancestors.append(index)
+            if not isinstance(row["name"], str) or not row["name"]:
+                raise ValueError("missing host phase name")
+            if row["reason"] not in {
+                "unspecified",
+                "overlap",
+                "core_guess",
+                "final_fock",
+                "reference_export",
+                "fallback",
+            }:
+                raise ValueError("unknown eigensolve reason")
+            _integer(row["item"], "item", -1)
+            _integer(row["nbf"], "nbf")
+            if row["name"] == "reference_eigensolve" and not row["nbf"]:
+                raise ValueError("empty actual eigensolve dimension")
+            if row["finished"] is not True or type(row["failed"]) is not bool:
+                raise ValueError("unfinished host trace region")
+            _milliseconds(row["wall_ms"], "wall_ms")
+            if row["cpu_ms"] is not None:
+                _milliseconds(row["cpu_ms"], "cpu_ms")
+        cpu_available = [r["cpu_ms"] is not None for r in regions]
+        if any(cpu_available) and not all(cpu_available):
+            raise ValueError("incomplete thread CPU clock")
+        return {
+            "wall_exclusive_ms": _exclusive(regions, "wall_ms"),
+            "cpu_exclusive_ms": _exclusive(regions, "cpu_ms")
+            if all(cpu_available)
+            else None,
+        }
+    except (KeyError, TypeError, IndexError) as error:
+        raise ValueError("incomplete host trace record") from error
+
+
+def read_host_trace(path: Path) -> list[dict]:
+    """Read one process's fresh JSONL ledger, preserving every attempted solve."""
+    records = [
+        json.loads(line) for line in path.read_text().splitlines() if line.strip()
+    ]
+    if not records:
+        raise ValueError("missing host trace")
+    seen = set()
+    for record in records:
+        validate_host_record(record)
+        if record["id"] in seen:
+            raise ValueError(
+                "duplicate host operation ID; use a fresh file per process"
+            )
+        seen.add(record["id"])
+    return records
+
+
+def aggregate_host(records: list[dict]) -> dict:
+    """Count leaf invocations and retain disjoint host phases for the #206 ledger.
+
+    A bucket-local source index is disambiguated by its root/ancestor path.
+    CPU clock time excludes descheduling/waiting, whereas wall time includes
+    them; their difference is not assumed to be exclusively CUDA wait time.
+    """
+    if not records:
+        raise ValueError("missing host trace records")
+    phases = defaultdict(lambda: {"calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0})
+    solves = []
+    totals = defaultdict(
+        lambda: {"calls": 0, "failed_calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0}
+    )
+    for record in records:
+        values = validate_host_record(record)
+        rows = record["regions"]
+        for index, row in enumerate(rows):
+            phase = phases[row["name"]]
+            phase["calls"] += 1
+            phase["wall_ms"] += values["wall_exclusive_ms"][index]
+            if values["cpu_exclusive_ms"] is None:
+                phase["cpu_ms"] = None
+            elif phase["cpu_ms"] is not None:
+                phase["cpu_ms"] += values["cpu_exclusive_ms"][index]
+            if row["name"] != "reference_eigensolve":
+                continue
+            path, parent = [], row["parent"]
+            while parent >= 0:
+                path.append({"region": parent, "name": rows[parent]["name"]})
+                parent = rows[parent]["parent"]
+            solves.append({"root_id": record["id"], "ancestors": path[::-1], **row})
+            total = totals[row["reason"]]
+            total["calls"] += 1
+            total["failed_calls"] += row["failed"]
+            total["wall_ms"] += row["wall_ms"]
+            if row["cpu_ms"] is None:
+                total["cpu_ms"] = None
+            elif total["cpu_ms"] is not None:
+                total["cpu_ms"] += row["cpu_ms"]
+    return {
+        "exclusive_phases": dict(phases),
+        "roots": [
+            {"root_id": record["id"], **record["regions"][0]} for record in records
+        ],
+        "reference_eigensolves": solves,
+        "eigensolves_by_reason": dict(totals),
+        "interpretation": (
+            "Reference eigensolve leaf rows count actual calls, including failures. "
+            "Item indices are local to the enclosing native bucket; root and ancestor IDs "
+            "disambiguate ragged buckets; fleet worker items use source ordering. "
+            "Host phases are exclusive within a root only. Concurrent worker roots "
+            "overlap the waiting endpoint, so summed wall phases are not elapsed endpoint time. "
+            "CPU and wall clocks "
+            "overlap and must not be added to each other or CUDA events. CPU clock is "
+            "null where thread CPU timing is unavailable. Use separate clean endpoint timings."
+        ),
+    }
+
+
 def force_attribution(energy: dict, force: dict) -> dict:
     """Compare named host intervals to the same profiled pair's force delta.
 

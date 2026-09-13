@@ -1,0 +1,1667 @@
+diff --git a/benchmarks/df_component_ledger.py b/benchmarks/df_component_ledger.py
+index 5b2e36d..4f443db 100644
+--- a/benchmarks/df_component_ledger.py
++++ b/benchmarks/df_component_ledger.py
+@@ -260,6 +260,136 @@ def trace_identity(path: Path) -> dict:
+     }
+ 
+ 
++def validate_host_record(record: dict) -> dict:
++    """Validate actual host work separately from the existing CUDA-event view."""
++    try:
++        if record["schema"] != "vibeqc.df_host_trace" or record["version"] != 1:
++            raise ValueError("unsupported host trace schema/version")
++        if record["valid"] is not True:
++            raise ValueError("invalid or truncated host trace")
++        _integer(record["id"], "id")
++        regions = record["regions"]
++        if not isinstance(regions, list) or not regions:
++            raise ValueError("missing host trace regions")
++        ancestors = []
++        for index, row in enumerate(regions):
++            parent = _integer(row["parent"], "parent", -1)
++            if (index == 0 and parent != -1) or (index > 0 and parent not in ancestors):
++                raise ValueError("invalid host trace parent hierarchy")
++            while ancestors and ancestors[-1] != parent:
++                ancestors.pop()
++            ancestors.append(index)
++            if not isinstance(row["name"], str) or not row["name"]:
++                raise ValueError("missing host phase name")
++            if row["reason"] not in {
++                "unspecified",
++                "overlap",
++                "core_guess",
++                "final_fock",
++                "reference_export",
++                "fallback",
++            }:
++                raise ValueError("unknown eigensolve reason")
++            _integer(row["item"], "item", -1)
++            _integer(row["nbf"], "nbf")
++            if row["name"] == "reference_eigensolve" and not row["nbf"]:
++                raise ValueError("empty actual eigensolve dimension")
++            if row["finished"] is not True or type(row["failed"]) is not bool:
++                raise ValueError("unfinished host trace region")
++            _milliseconds(row["wall_ms"], "wall_ms")
++            if row["cpu_ms"] is not None:
++                _milliseconds(row["cpu_ms"], "cpu_ms")
++        cpu_available = [r["cpu_ms"] is not None for r in regions]
++        if any(cpu_available) and not all(cpu_available):
++            raise ValueError("incomplete thread CPU clock")
++        return {
++            "wall_exclusive_ms": _exclusive(regions, "wall_ms"),
++            "cpu_exclusive_ms": _exclusive(regions, "cpu_ms")
++            if all(cpu_available)
++            else None,
++        }
++    except (KeyError, TypeError, IndexError) as error:
++        raise ValueError("incomplete host trace record") from error
++
++
++def read_host_trace(path: Path) -> list[dict]:
++    """Read one process's fresh JSONL ledger, preserving every attempted solve."""
++    records = [
++        json.loads(line) for line in path.read_text().splitlines() if line.strip()
++    ]
++    if not records:
++        raise ValueError("missing host trace")
++    seen = set()
++    for record in records:
++        validate_host_record(record)
++        if record["id"] in seen:
++            raise ValueError(
++                "duplicate host operation ID; use a fresh file per process"
++            )
++        seen.add(record["id"])
++    return records
++
++
++def aggregate_host(records: list[dict]) -> dict:
++    """Count leaf invocations and retain disjoint host phases for the #206 ledger.
++
++    A bucket-local source index is disambiguated by its root/ancestor path.
++    CPU clock time excludes descheduling/waiting, whereas wall time includes
++    them; their difference is not assumed to be exclusively CUDA wait time.
++    """
++    if not records:
++        raise ValueError("missing host trace records")
++    phases = defaultdict(lambda: {"calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0})
++    solves = []
++    totals = defaultdict(
++        lambda: {"calls": 0, "failed_calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0}
++    )
++    for record in records:
++        values = validate_host_record(record)
++        rows = record["regions"]
++        for index, row in enumerate(rows):
++            phase = phases[row["name"]]
++            phase["calls"] += 1
++            phase["wall_ms"] += values["wall_exclusive_ms"][index]
++            if values["cpu_exclusive_ms"] is None:
++                phase["cpu_ms"] = None
++            elif phase["cpu_ms"] is not None:
++                phase["cpu_ms"] += values["cpu_exclusive_ms"][index]
++            if row["name"] != "reference_eigensolve":
++                continue
++            path, parent = [], row["parent"]
++            while parent >= 0:
++                path.append({"region": parent, "name": rows[parent]["name"]})
++                parent = rows[parent]["parent"]
++            solves.append({"root_id": record["id"], "ancestors": path[::-1], **row})
++            total = totals[row["reason"]]
++            total["calls"] += 1
++            total["failed_calls"] += row["failed"]
++            total["wall_ms"] += row["wall_ms"]
++            if row["cpu_ms"] is None:
++                total["cpu_ms"] = None
++            elif total["cpu_ms"] is not None:
++                total["cpu_ms"] += row["cpu_ms"]
++    return {
++        "exclusive_phases": dict(phases),
++        "roots": [
++            {"root_id": record["id"], **record["regions"][0]} for record in records
++        ],
++        "reference_eigensolves": solves,
++        "eigensolves_by_reason": dict(totals),
++        "interpretation": (
++            "Reference eigensolve leaf rows count actual calls, including failures. "
++            "Item indices are local to the enclosing native bucket; root and ancestor IDs "
++            "disambiguate ragged buckets; fleet worker items use source ordering. "
++            "Host phases are exclusive within a root only. Concurrent worker roots "
++            "overlap the waiting endpoint, so summed wall phases are not elapsed endpoint time. "
++            "CPU and wall clocks "
++            "overlap and must not be added to each other or CUDA events. CPU clock is "
++            "null where thread CPU timing is unavailable. Use separate clean endpoint timings."
++        ),
++    }
++
++
+ def force_attribution(energy: dict, force: dict) -> dict:
+     """Compare named host intervals to the same profiled pair's force delta.
+ 
+diff --git a/benchmarks/df_host_workloads.py b/benchmarks/df_host_workloads.py
+new file mode 100644
+index 0000000..17b6a3b
+--- /dev/null
++++ b/benchmarks/df_host_workloads.py
+@@ -0,0 +1,244 @@
++"""Host-eigensolve diagnostic workloads used by the existing #206 matrix CLI.
++
++The A/B configurations are identical protocol controls. Separate clean and
++profiled invocations retain setup, destruction and each changed-geometry call;
++no relative performance or external-engine parity is inferred from this probe.
++"""
++
++from __future__ import annotations
++
++import os
++import time
++from pathlib import Path
++
++import numpy as np
++
++from benchmarks._cases import benchmark_cases
++from benchmarks.compare_gpu4pyscf_batch import convergence_payload, scaled_geometries
++from benchmarks.df_component_ledger import (
++    aggregate_host,
++    read_host_trace,
++    trace_identity,
++)
++from benchmarks.issue206_df_force_probe import _source_metadata
++from benchmarks.validation_gate import _cuda
++from tools.vibeqc_validation.performance import measure_interleaved
++from tools.vibeqc_validation.schema import canonical_hash
++
++
++def host_workloads(
++    *,
++    case_name,
++    batch_size,
++    library,
++    repeats,
++    memory_budget_bytes,
++    energy_only,
++    trace_directory=None,
++):
++    """Measure one source-bound cold/replay/rebuild domain without hiding setup.
++
++    Warm updates are frozen after cold convergence. Every changed sample starts
++    from the original geometry, restored outside its measured region. A trace
++    is collected inside that region and includes all failed attempts; its wall
++    time is diagnostic and must never be compared to a clean sample as a gain.
++    """
++    from vibeqc import Calculator
++
++    if repeats < 5 or batch_size < 1:
++        raise ValueError(
++            "at least five paired samples and a positive batch are required"
++        )
++    if any(os.environ.get(k) for k in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")):
++        raise ValueError(
++            "provide trace_directory explicitly; ambient profiling is not clean timing"
++        )
++    library = Path(library).resolve(strict=True)
++    source = _source_metadata(library)
++    device, synchronize = _cuda()
++    case = benchmark_cases()[case_name]
++    systems = scaled_geometries(case.atoms, batch_size)
++    properties = ("energy",) if energy_only else ("energy", "forces")
++    inputs = {
++        "case": case_name,
++        "systems": systems,
++        "method": case.method,
++        "basis": case.vibeqc_basis,
++        "representation": case.basis_representation,
++        "charge": case.charge,
++        "multiplicity": case.multiplicity,
++        "auxiliary_basis": case.vibeqc_basis,
++        "properties": properties,
++        "energy_tolerance": 1e-12,
++        "density_tolerance": 1e-10,
++        "screening_tolerance": 1e-12,
++        "metric_relative_threshold": 1e-10,
++        "memory_budget_bytes": memory_budget_bytes,
++    }
++    input_hash = canonical_hash(inputs)
++    calculator = Calculator(
++        method=case.method,
++        basis=case.vibeqc_basis,
++        basis_representation=case.basis_representation,
++        device="cuda",
++        max_iterations=100,
++        energy_tolerance=1e-12,
++        density_tolerance=1e-10,
++        screening_tolerance=1e-12,
++        density_fitting="cuda",
++        auxiliary_basis=case.vibeqc_basis,
++        density_fitting_relative_threshold=1e-10,
++        density_fitting_memory_budget_bytes=memory_budget_bytes,
++    )
++    if Path(calculator._library._name).resolve() != library:
++        raise RuntimeError(
++            "loaded library differs from the recorded source-bound binary"
++        )
++    if trace_directory is not None:
++        trace_directory = Path(trace_directory)
++        trace_directory.mkdir(parents=True, exist_ok=False)
++    sequence = 0
++
++    def measured(workload, evaluate):
++        def sample(_selection):
++            nonlocal sequence
++            path = None
++            if trace_directory is not None:
++                path = trace_directory / f"{sequence:04d}-{workload}.jsonl"
++                with path.open("x"):
++                    pass
++                os.environ["VIBEQC_DF_HOST_TRACE"] = str(path.resolve())
++            sequence += 1
++            try:
++                result = evaluate()
++            finally:
++                if path is not None:
++                    os.environ.pop("VIBEQC_DF_HOST_TRACE")
++            if path is not None:
++                result["host_components"] = {
++                    **aggregate_host(read_host_trace(path)),
++                    "raw_trace": trace_identity(path),
++                }
++            return result
++
++        return sample
++
++    def prepare(geometries=None):
++        return calculator.prepare_batch(
++            systems if geometries is None else geometries,
++            charges=[case.charge] * batch_size,
++            multiplicities=[case.multiplicity] * batch_size,
++            warm_start=True,
++        )
++
++    def execute(batch, coordinates=None):
++        result = batch.execute(coordinates, strict=True, properties=properties)
++        if any(item.executed_backend != "cuda" for item in result.items):
++            raise RuntimeError("a CUDA workload cannot pass with a substituted backend")
++        return {
++            "energies": result.energies.tolist(),
++            "convergence": convergence_payload(result),
++            "fock_builds": [item.fock_builds for item in result.items],
++            "forces": None
++            if energy_only
++            else [item.forces.tolist() for item in result.items],
++            "metric": [
++                d.to_dict() for d in batch.last_density_fitting_metric_diagnostics()
++            ],
++        }
++
++    def cold():
++        # Both ownership creation and destruction are within the timed call.
++        with prepare() as batch:
++            return execute(batch)
++
++    rows = measure_interleaved(
++        measured("cold-start", cold),
++        synchronize,
++        workload="cold-start",
++        inputs_hash=input_hash,
++        repeats=repeats,
++    )
++    synchronize()
++    setup_start = time.perf_counter()
++    batch = prepare()
++    try:
++        seed = execute(batch)
++        batch.set_warm_start_updates(False)
++        synchronize()
++        setup_seconds = time.perf_counter() - setup_start
++        for workload in (
++            "unchanged-geometry",
++            "energy-only" if energy_only else "energy-plus-force",
++        ):
++            rows += measure_interleaved(
++                measured(workload, lambda: execute(batch)),
++                synchronize,
++                workload=workload,
++                inputs_hash=input_hash,
++                repeats=repeats,
++            )
++        coordinates = [np.array([atom[1] for atom in system]) for system in systems]
++        changed = [xyz.copy() for xyz in coordinates]
++        changed[-1][-1, 0] += 0.01
++        changed_systems = [
++            [(atom[0], tuple(xyz)) for atom, xyz in zip(system, positions, strict=True)]
++            for system, positions in zip(systems, changed, strict=True)
++        ]
++        # Rebuild from independent ownership, outside measured replay, to
++        # detect a stale geometry cache even when all repeated samples agree.
++        with prepare(changed_systems) as changed_batch:
++            changed_seed = execute(changed_batch)
++        changed_hash = canonical_hash(
++            {**inputs, "coordinates": [xyz.tolist() for xyz in changed]}
++        )
++        rows += measure_interleaved(
++            measured("changed-geometry", lambda: execute(batch, changed)),
++            synchronize,
++            workload="changed-geometry",
++            inputs_hash=changed_hash,
++            repeats=repeats,
++            prepare=lambda _: execute(batch, coordinates),
++        )
++    finally:
++        synchronize()
++        start = time.perf_counter()
++        batch.close()
++        synchronize()
++        destruction_seconds = time.perf_counter() - start
++    if _source_metadata(library) != source:
++        raise RuntimeError("source/library changed during workload measurement")
++    # Same-model cold endpoints check cache/replay integrity. They are not an
++    # independent scientific oracle or a substitute for the matched #206 gate.
++    for row in rows:
++        expected = changed_seed if row["workload"] == "changed-geometry" else seed
++        if not np.allclose(
++            row["diagnostics"]["energies"],
++            expected["energies"],
++            atol=1e-9,
++            rtol=0,
++        ):
++            raise RuntimeError("cold/replay energy endpoint changed")
++        if not energy_only and not np.allclose(
++            row["diagnostics"]["forces"], expected["forces"], atol=1e-8, rtol=0
++        ):
++            raise RuntimeError("cold/replay force endpoint changed")
++    return {
++        "schema": "vibeqc.issue206.df_host_workloads",
++        "version": 1,
++        "source": source,
++        "device": device,
++        "inputs": inputs,
++        "inputs_hash": input_hash,
++        "cold_endpoints": {"original": seed, "changed": changed_seed},
++        "profiled": trace_directory is not None,
++        "samples": rows,
++        "prepared_setup_seconds": setup_seconds,
++        "prepared_destruction_seconds": destruction_seconds,
++        "comparison": "identical native configurations as an ABBA protocol control; no speedup claim",
++        "limitations": [
++            "This probe records actual host solves; complete device work/traffic requires the separate CUDA/Nsight ledger.",
++            "Reported legacy Fock counts can omit finalizer work; actual reference-eigensolve leaves remain complete within traced scopes.",
++            "External DF numerical/performance parity remains the existing matched #206 matrix gate.",
++        ],
++    }
+diff --git a/benchmarks/issue206_df_force_probe.py b/benchmarks/issue206_df_force_probe.py
+index 8217536..081105f 100644
+--- a/benchmarks/issue206_df_force_probe.py
++++ b/benchmarks/issue206_df_force_probe.py
+@@ -28,7 +28,9 @@ try:
+         FORCE_OPERATIONS,
+         ONE_ELECTRON_OPERATIONS,
+         aggregate,
++        aggregate_host,
+         force_attribution,
++        read_host_trace,
+         read_trace,
+         trace_identity,
+     )
+@@ -38,7 +40,9 @@ except ModuleNotFoundError:  # imported as ``benchmarks.issue206_df_force_probe`
+         FORCE_OPERATIONS,
+         ONE_ELECTRON_OPERATIONS,
+         aggregate,
++        aggregate_host,
+         force_attribution,
++        read_host_trace,
+         read_trace,
+         trace_identity,
+     )
+@@ -186,18 +190,24 @@ def _traced_sample(
+     # Never append to evidence from an earlier calculation or process.
+     with path.open("x"):
+         pass
+-    previous = os.environ.get("VIBEQC_DF_TRACE")
+-    os.environ["VIBEQC_DF_TRACE"] = str(path.resolve())
++    host_path = path.with_suffix(".host.jsonl")
++    with host_path.open("x"):
++        pass
++    variables = {"VIBEQC_DF_TRACE": path, "VIBEQC_DF_HOST_TRACE": host_path}
++    previous = {name: os.environ.get(name) for name in variables}
++    for name, target in variables.items():
++        os.environ[name] = str(target.resolve())
+     try:
+         options = (
+             {"memory_budget_bytes": memory_budget_bytes} if memory_budget_bytes else {}
+         )
+         sample = _sample(case_name, properties, library, **options)
+     finally:
+-        if previous is None:
+-            os.environ.pop("VIBEQC_DF_TRACE", None)
+-        else:
+-            os.environ["VIBEQC_DF_TRACE"] = previous
++        for name, value in previous.items():
++            if value is None:
++                os.environ.pop(name, None)
++            else:
++                os.environ[name] = value
+     records = read_trace(path)
+     operations = {r["operation"] for r in records}
+     if not {"ri_j", "ri_k"} <= operations:
+@@ -213,6 +223,10 @@ def _traced_sample(
+     elif force_roots:
+         raise ValueError("unexpected force trace in energy-only sample")
+     sample["components"] = {**aggregate(records), "raw_trace": trace_identity(path)}
++    sample["host_components"] = {
++        **aggregate_host(read_host_trace(host_path)),
++        "raw_trace": trace_identity(host_path),
++    }
+     return sample
+ 
+ 
+@@ -244,7 +258,9 @@ def main() -> None:
+         parser.error("run requires a finite Slurm allocation (SLURM_JOB_ID)")
+     if not os.environ.get("CUDA_VISIBLE_DEVICES"):
+         parser.error("run requires Slurm-provided CUDA_VISIBLE_DEVICES")
+-    if os.environ.get("VIBEQC_DF_TRACE"):
++    if any(
++        os.environ.get(name) for name in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")
++    ):
+         parser.error(
+             "use --component-trace-dir so traces cannot silently contaminate timing runs"
+         )
+diff --git a/benchmarks/issue206_df_matrix.py b/benchmarks/issue206_df_matrix.py
+index dc763ce..0c24306 100644
+--- a/benchmarks/issue206_df_matrix.py
++++ b/benchmarks/issue206_df_matrix.py
+@@ -24,6 +24,7 @@ from pathlib import Path
+ from typing import Any
+ 
+ ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT))
+ BENCHMARK = ROOT / "benchmarks" / "compare_gpu4pyscf_batch.py"
+ 
+ 
+@@ -260,7 +261,24 @@ def main() -> None:
+ 
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("--run", action="store_true", help="execute cases in Slurm")
+-    parser.add_argument("--case", choices=sorted({item.name for item in MATRIX}))
++    parser.add_argument(
++        "--case",
++        choices=sorted(
++            {item.name for item in MATRIX}
++            | {"water-hexadecamer-2s4-def2-svp-spherical"}
++        ),
++    )
++    parser.add_argument("--batch", type=int, choices=(1, 4))
++    parser.add_argument(
++        "--host-workloads",
++        action="store_true",
++        help="run the #308 native host-eigensolve protocol control within #206",
++    )
++    parser.add_argument(
++        "--host-trace-dir",
++        type=Path,
++        help="diagnostic host traces; requires --host-workloads and a fresh directory",
++    )
+     parser.add_argument("--repeats", type=int, default=5)
+     parser.add_argument("--energy-only", action="store_true")
+     parser.add_argument(
+@@ -285,7 +303,19 @@ def main() -> None:
+     if args.memory_budget_bytes < 0:
+         parser.error("--memory-budget-bytes must be nonnegative")
+ 
++    if args.host_trace_dir and not args.host_workloads:
++        parser.error("--host-trace-dir requires --host-workloads")
++    if args.host_workloads and args.repeats < 5:
++        parser.error("host workload controls require at least five paired samples")
+     cases = _matrix(args.case)
++    if args.case == "water-hexadecamer-2s4-def2-svp-spherical":
++        if not args.host_workloads:
++            parser.error(
++                "384-AO host probe does not replace the mandatory matched matrix"
++            )
++        cases = tuple(MatrixCase(args.case, 384, b) for b in (1, 4))
++    if args.batch:
++        cases = tuple(case for case in cases if case.batch_size == args.batch)
+     # Children run from ROOT; resolve caller-relative paths before changing cwd.
+     output_dir = args.output_dir.resolve()
+     library = args.library.resolve()
+@@ -301,8 +331,42 @@ def main() -> None:
+         memory_budget_bytes=args.memory_budget_bytes,
+         energy_only=args.energy_only,
+     )
++    if args.host_workloads:
++        payload["execution"]["benchmark"] = "issue206_df_matrix.py --host-workloads"
++        payload["execution"]["profiled"] = args.host_trace_dir is not None
++        payload["matched_contract"]["comparison"] = (
++            "identical native ABBA protocol control; no external parity or speedup claim"
++        )
+     _write(manifest_path, payload)
+-    if args.run:
++    if args.run and args.host_workloads:
++        from benchmarks.df_host_workloads import host_workloads
++
++        os.environ["VIBEQC_LIBRARY"] = str(library)
++        for entry in payload["matrix"]:
++            stem = f"host-{entry['ao_count']}ao-b{entry['batch_size']}"
++            result_path = output_dir / f"{stem}.json"
++            entry.update(status="running", result=None)
++            _write(manifest_path, payload)
++            try:
++                result = host_workloads(
++                    case_name=entry["name"],
++                    batch_size=entry["batch_size"],
++                    library=library,
++                    repeats=args.repeats,
++                    memory_budget_bytes=args.memory_budget_bytes,
++                    energy_only=args.energy_only,
++                    trace_directory=None
++                    if args.host_trace_dir is None
++                    else args.host_trace_dir.resolve() / stem,
++                )
++                _write(result_path, result)
++                entry.update(status="passed", result=str(result_path))
++            except Exception as error:
++                entry.update(status="failed", detail=str(error))
++                _write(manifest_path, payload)
++                raise
++            _write(manifest_path, payload)
++    elif args.run:
+         run_matrix(
+             payload,
+             manifest_path=manifest_path,
+diff --git a/docs/df_component_trace.md b/docs/df_component_trace.md
+index b53b680..1683d5e 100644
+--- a/docs/df_component_trace.md
++++ b/docs/df_component_trace.md
+@@ -38,6 +38,52 @@ invalid instrumentation. Output paths should be outside the source tree (or
+ ignored by Git) so writing evidence does not change the identified checkout.
+ Trace files must be fresh; the probe never overwrites earlier captures.
+ 
++## Host eigensolve ledger for #308
++
++`VIBEQC_DF_HOST_TRACE=/absolute/fresh.jsonl` records host scopes and actual
++CPU-reference eigensolve invocations. The existing force probe's
++`--component-trace-dir` collects this companion file together with the CUDA
++ledger. The two clocks are reported separately. Setting either trace variable
++implicitly on a clean force-probe invocation is rejected.
++
++Each `reference_eigensolve` leaf records its dimension, reason (`overlap`,
++`core_guess`, `final_fock`, `reference_export`, `fallback`, or `unspecified`),
++item, host wall milliseconds, thread CPU milliseconds and exceptional exit.
++Only the actual oracle entry emits this leaf; an intended solve, cache flag or
++graph declaration cannot count as executed work. The Jacobi arithmetic and
++overlap singularity threshold are unchanged. A small observer interface keeps
++the independent reference and initial-guess modules free of runtime/CUDA
++dependencies. The runtime owns timers, bounded records and file output.
++
++`benchmarks/df_component_ledger.py` validates the host JSONL and subtracts
++immediate children within each root to produce exclusive host phases. Root
++and ancestor IDs disambiguate source indices local to different CUDA buckets.
++Thread CPU time is `null` when the platform cannot supply it; process CPU time
++is never substituted. Host wall time includes waiting and descheduling, so
++wall minus CPU time is not automatically all GPU waiting. Concurrent CPU
++worker roots overlap: their wall times must not be summed into endpoint time.
++Host and CUDA-event times must not be added together either.
++
++The existing #206 matrix entry point also supports native protocol controls:
++
++```bash
++srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 --time=00:20:00 \
++  env PYTHONPATH="$PWD/python" /path/to/python benchmarks/issue206_df_matrix.py \
++  --run --host-workloads --case water-tetramer-def2-svp-spherical --batch 1 \
++  --library "$PWD/build/cuda/libvibeqc.so" --memory-budget-bytes 1073741824 \
++  --energy-only --repeats 5 --host-trace-dir /path/to/fresh-host-traces \
++  --output-dir /path/to/host-components
++```
++
++It retains cold creation/solve/destruction, fixed-seed replay, energy-only or
++energy-plus-force, and a changed-geometry item. Every changed sample restores
++the original geometry before starting its timer. Omit `--host-trace-dir` for
++separate clean timing; choose batch 4 or the existing 192/384-AO inputs to
++extend the domain. Identical A/B configurations are an ABBA protocol control,
++not a speedup or an external-engine parity result. Complete traffic/device
++work still comes from the separate CUDA/Nsight ledger; the original matched
++DF-versus-DF matrix remains the owner of parity acceptance.
++
+ The default `--memory-budget-bytes 0` preserves the original probe's host
+ resident compatibility route. A positive value, for example `268435456`,
+ selects the existing bounded generated-source execution. Record and compare
+diff --git a/experiments/vibeqc/issue-308-completion/README.md b/experiments/vibeqc/issue-308-completion/README.md
+new file mode 100644
+index 0000000..6ad9426
+--- /dev/null
++++ b/experiments/vibeqc/issue-308-completion/README.md
+@@ -0,0 +1,58 @@
++# CUDA DF host-eigensolve campaign
++
++Baseline: live `origin/master` at `15d6936390723edf9e9eb0c91fecde4390490573`.
++The only open implementation PRs at the start were #306/#307, both for DFT.
++This work implements #308 through #309/#310/#311 and reuses #206's existing
++measurement/acceptance workflow. It does not replace #5 or Direct-vs-Direct
++gates. No performance gain has been measured in this initial instrumentation
++increment.
++
++## Initial-density caller audit
++
++The shared helpers currently return a core-Hamiltonian orbital frame even
++when a warm density is supplied. Any lazy-guess change must account for the
++following callers, rather than assuming all output orbital objects are unused.
++
++| Caller | Use of initial orbitals | Required preservation |
++| --- | --- | --- |
++| `scf/solver/mean_field_driver.cpp`, RHF/UHF CPU plans | Iterative Fock solve replaces the frame before forming a proposed density; strict proposal callbacks run after that solve | Cold densities, UHF frontier mixing, nonconverged and hook/export contracts |
++| `scf/rhf.cpp`, CUDA DF single/bucket paths | Device loop consumes density and X, not initial orbitals; host fallback overwrites the frame on its first iteration | Explicit fallback and per-item failure isolation; finalization never consumes stale core orbitals |
++| `dft/rks.cpp`, RKS occupied-factor path | A cold-only factor is packed before iteration; warm input intentionally has no such factor until a new orbital solve | Preserve the cold guard and generation-linked factor identity |
++| `dft/rks.cpp`, UKS | First physical iteration replaces alpha/beta orbitals | Independent spin populations, empty beta and cold frontier perturbation |
++
++The CPU helper normalizes warm RHF density by symmetry and electron trace,
++and UHF channels independently, clearing a zero-occupation channel. Both
++validate finite values and shape after their current unconditional hcore
++solve. Moving that solve must preserve these density checks and explicitly
++represent any unavailable initial orbitals.
++
++## Existing provider audit
++
++`scf/cuda/eigensolver.cpp::launch_solver` already dispatches native small,
++batched Jacobi, `XsyevBatched`, and ordinary `Xsyevd` families. The last one
++serializes a batch on its owning stream with shared workspace, and does not
++require graph capture. Existing eligibility/probe decisions belong to the
++prepared owner. #310 should consume this boundary and workspace ownership,
++not add another Jacobi implementation or repeat #49's graph qualification.
++
++DF also has a retained `DeviceSolver` in `scf/cuda/df_scf_state.hpp` and
++`df_scf_library.cpp`: <=32 uses `DsyevjBatched`; larger dimensions use
++`XsyevBatched`. Its persistent SCF state already owns density, proposal,
++physical Fock, eigenvalue and occupied-factor buffers. These are candidate
++inputs to #311, but the generations are not automatically a consistent final
++physical state. The current finalizer rebuilds J/K, diagonalizes F on the CPU,
++projects density and rebuilds again before returning energy/forces.
++
++## Instrumentation increment
++
++The new optional host collector observes actual oracle calls by reason,
++dimension and item, with nested host phases and distinct thread CPU/wall
++durations. Its observer interface preserves reference-module dependency
++direction. The existing #206 force probe retains both host and CUDA ledgers;
++the existing #206 matrix CLI adds native cold/replay/rebuild protocol controls.
++See [the timing contract](../../../docs/df_component_trace.md).
++
++This increment does not yet remove a solve. Subsequent measured ablations are
++lazy core guesses, retained X, qualified required solves, verified final-state
++reuse and the combined endpoint. Every final correctness and resource gate
++in #308 and its children remains required.
+diff --git a/src/api/c_api_batch.cpp b/src/api/c_api_batch.cpp
+index 5309283..f41131e 100644
+--- a/src/api/c_api_batch.cpp
++++ b/src/api/c_api_batch.cpp
+@@ -8,6 +8,7 @@
+ #include "api/handles.hpp"
+ #include "api/precision.hpp"
+ #include "methods/method.hpp"
++#include "runtime/host_component_trace.hpp"
+ #include "vibeqc/vibeqc.h"
+ 
+ extern "C" {
+@@ -16,6 +17,7 @@ vibeqc_status vibeqc_batch_prepare(vibeqc_context* context, const vibeqc_system*
+                                    uint32_t system_count,
+                                    const vibeqc_method_descriptor* descriptor,
+                                    vibeqc_batch_flags flags, vibeqc_batch** batch) {
++  vibeqc::runtime::host_trace::Region trace("batch_prepare");
+   if (context == nullptr || systems == nullptr || system_count == 0 || descriptor == nullptr ||
+       batch == nullptr) {
+     return VIBEQC_STATUS_INVALID_ARGUMENT;
+@@ -50,7 +52,10 @@ vibeqc_status vibeqc_batch_prepare(vibeqc_context* context, const vibeqc_system*
+   }
+ }
+ 
+-void vibeqc_batch_destroy(vibeqc_batch* batch) { delete batch; }
++void vibeqc_batch_destroy(vibeqc_batch* batch) {
++  vibeqc::runtime::host_trace::Region trace("batch_destroy");
++  delete batch;
++}
+ 
+ uint32_t vibeqc_batch_get_system_count(const vibeqc_batch* batch) {
+   return batch == nullptr ? 0 : static_cast<std::uint32_t>(batch->plan->size());
+@@ -363,6 +368,7 @@ vibeqc_status vibeqc_batch_execute(vibeqc_batch* batch, const vibeqc_batch_input
+                                    uint32_t input_count,
+                                    vibeqc_batch_item_result_descriptor* results,
+                                    uint32_t result_count) {
++  vibeqc::runtime::host_trace::Region trace("batch_execute");
+   if (batch == nullptr || results == nullptr) {
+     return VIBEQC_STATUS_INVALID_ARGUMENT;
+   }
+diff --git a/src/api/c_api_calculation.cpp b/src/api/c_api_calculation.cpp
+index ecc74a4..173bc39 100644
+--- a/src/api/c_api_calculation.cpp
++++ b/src/api/c_api_calculation.cpp
+@@ -5,6 +5,7 @@
+ #include "api/handles.hpp"
+ #include "api/precision.hpp"
+ #include "methods/method.hpp"
++#include "runtime/host_component_trace.hpp"
+ #include "vibeqc/vibeqc.h"
+ 
+ extern "C" {
+@@ -12,6 +13,7 @@ extern "C" {
+ vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context, const vibeqc_system* system,
+                                          const vibeqc_method_descriptor* descriptor,
+                                          vibeqc_calculation** calculation) {
++  vibeqc::runtime::host_trace::Region trace("calculation_prepare");
+   if (context == nullptr || system == nullptr || descriptor == nullptr || calculation == nullptr) {
+     return VIBEQC_STATUS_INVALID_ARGUMENT;
+   }
+@@ -32,10 +34,14 @@ vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context, const vibeqc_s
+   }
+ }
+ 
+-void vibeqc_calculation_destroy(vibeqc_calculation* calculation) { delete calculation; }
++void vibeqc_calculation_destroy(vibeqc_calculation* calculation) {
++  vibeqc::runtime::host_trace::Region trace("calculation_destroy");
++  delete calculation;
++}
+ 
+ vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculation,
+                                          vibeqc_result_descriptor* output) {
++  vibeqc::runtime::host_trace::Region trace("calculation_execute");
+   if (calculation == nullptr || output == nullptr) {
+     return VIBEQC_STATUS_INVALID_ARGUMENT;
+   }
+diff --git a/src/runtime/host_component_trace.hpp b/src/runtime/host_component_trace.hpp
+new file mode 100644
+index 0000000..ed29baf
+--- /dev/null
++++ b/src/runtime/host_component_trace.hpp
+@@ -0,0 +1,230 @@
++#pragma once
++
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <ctime>
++#include <exception>
++#include <memory>
++#include <mutex>
++#include <string>
++#include <vector>
++
++#include "scf/reference/observation.hpp"
++
++namespace vibeqc::runtime::host_trace {
++
++/** Host counterpart of #206's CUDA component ledger. Opt in with a fresh
++ * VIBEQC_DF_HOST_TRACE JSONL path. Nested wall/thread-CPU intervals are
++ * inclusive; consumers subtract immediate children and never add CPU/GPU
++ * clocks. No allocation, clock read, file I/O or CUDA fence occurs disabled.
++ * Diagnostic runs include tracing overhead and cannot replace clean timings.
++ */
++namespace observation = scf::reference::observation;
++using observation::active_reason;
++using observation::EigenReason;
++using observation::Reason;
++inline thread_local long long active_item = -1;
++
++/** An item is a source index within the enclosing native bucket, not a CUDA
++ * spin-expanded slot. The endpoint/bucket scope disambiguates ragged groups. */
++class Item {
++ public:
++  explicit Item(std::size_t value) noexcept : previous_(active_item) {
++    active_item = static_cast<long long>(value);
++  }
++  ~Item() { active_item = previous_; }
++  Item(const Item&) = delete;
++  Item& operator=(const Item&) = delete;
++
++ private:
++  long long previous_;
++};
++
++namespace detail {
++using Clock = std::chrono::steady_clock;
++inline double thread_seconds() noexcept {
++#if defined(CLOCK_THREAD_CPUTIME_ID)
++  timespec value{};
++  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0)
++    return static_cast<double>(value.tv_sec) + 1e-9 * value.tv_nsec;
++#endif
++  // Never substitute process CPU time: another thread's work is not this item.
++  return -1;
++}
++inline const char* reason_name(EigenReason reason) noexcept {
++  switch (reason) {
++    case EigenReason::overlap:
++      return "overlap";
++    case EigenReason::core_guess:
++      return "core_guess";
++    case EigenReason::final_fock:
++      return "final_fock";
++    case EigenReason::reference_export:
++      return "reference_export";
++    case EigenReason::fallback:
++      return "fallback";
++    default:
++      return "unspecified";
++  }
++}
++struct Region {
++  const char* name{};
++  EigenReason reason{};
++  long long parent{-1}, item{-1};
++  std::size_t nbf{};
++  Clock::time_point start;
++  double cpu_start{}, wall_ms{}, cpu_ms{-1};
++  int exceptions{};
++  bool finished{}, failed{};
++};
++struct State {
++  std::string path;
++  std::vector<Region> regions;
++  long long current{-1};
++  std::uint64_t id{};
++  bool valid{true};
++};
++inline thread_local State* active{};
++inline std::atomic<std::uint64_t> next_id{0};
++inline std::mutex output_mutex;
++
++inline std::size_t begin(const char* name, std::size_t nbf) noexcept {
++  if (!active) return std::numeric_limits<std::size_t>::max();
++  try {
++    if (active->regions.size() >= 65536) {
++      active->valid = false;
++      return std::numeric_limits<std::size_t>::max();
++    }
++    const auto index = active->regions.size();
++    active->regions.push_back({name, active_reason, active->current, active_item, nbf, Clock::now(),
++                               thread_seconds(), 0, -1, std::uncaught_exceptions()});
++    active->current = static_cast<long long>(index);
++    return index;
++  } catch (...) {
++    active->valid = false;
++    return std::numeric_limits<std::size_t>::max();
++  }
++}
++inline void end(std::size_t index, int exceptions) noexcept {
++  if (!active || index >= active->regions.size()) return;
++  auto& row = active->regions[index];
++  row.wall_ms = std::chrono::duration<double, std::milli>(Clock::now() - row.start).count();
++  const auto cpu_end = thread_seconds();
++  if (row.cpu_start >= 0 && cpu_end >= row.cpu_start) row.cpu_ms = 1000 * (cpu_end - row.cpu_start);
++  row.finished = true;
++  row.failed = std::uncaught_exceptions() > exceptions;
++  if (active->current != static_cast<long long>(index)) active->valid = false;
++  active->current = row.parent;
++}
++inline const observation::Observer observer{begin, end};
++
++inline void write(const State& state) {
++  std::lock_guard<std::mutex> lock(output_mutex);
++  auto* file = std::fopen(state.path.c_str(), "a");
++  if (!file) return;  // The runner rejects missing/incomplete trace evidence.
++  std::fprintf(file,
++               "{\"schema\":\"vibeqc.df_host_trace\",\"version\":1,\"id\":%llu,"
++               "\"valid\":%s,\"regions\":[",
++               static_cast<unsigned long long>(state.id), state.valid ? "true" : "false");
++  bool comma = false;
++  for (const auto& row : state.regions) {
++    // Names/reasons are internal static identifiers, never user input.
++    std::fprintf(file,
++                 "%s{\"name\":\"%s\",\"reason\":\"%s\",\"parent\":%lld,\"item\":%lld,"
++                 "\"nbf\":%zu,\"wall_ms\":%.17g,\"cpu_ms\":",
++                 comma ? "," : "", row.name, reason_name(row.reason), row.parent, row.item, row.nbf,
++                 row.wall_ms);
++    if (row.cpu_ms >= 0)
++      std::fprintf(file, "%.17g", row.cpu_ms);
++    else
++      std::fputs("null", file);
++    std::fprintf(file, ",\"finished\":%s,\"failed\":%s}", row.finished ? "true" : "false",
++                 row.failed ? "true" : "false");
++    comma = true;
++  }
++  std::fputs("]}\n", file);
++  std::fclose(file);
++}
++}  // namespace detail
++
++/** Scope around actual work; the reference_eigensolve leaf counts executions,
++ * including exceptions. It must not be placed around a plan/capture declaration.
++ * Scope names must be static ASCII identifiers without JSON metacharacters.
++ */
++class Region {
++ public:
++  explicit Region(const char* name, std::size_t nbf = 0) noexcept {
++    auto* state = detail::active;
++    try {
++      if (!state) {
++        const char* path = std::getenv("VIBEQC_DF_HOST_TRACE");
++        if (!path || !*path) return;
++        owner_ = std::make_unique<detail::State>();
++        state = owner_.get();
++        state->path = path;
++        state->id = detail::next_id.fetch_add(1, std::memory_order_relaxed);
++      }
++      detail::active = state;
++      index_ = detail::begin(name, nbf);
++      if (index_ == std::numeric_limits<std::size_t>::max()) {
++        if (owner_) {
++          detail::active = nullptr;
++          // Preserve an explicitly invalid root so partial evidence cannot
++          // be mistaken for a successful zero-call execution.
++          try {
++            detail::write(*owner_);
++          } catch (...) {
++          }
++        }
++        return;
++      }
++      if (owner_) {
++        previous_observer_ = observation::active;
++        observation::active = &detail::observer;
++      }
++      state_ = state;
++    } catch (...) {
++      if (state) state->valid = false;
++      owner_.reset();
++    }
++  }
++  ~Region() { finish(); }
++  void finish() noexcept {
++    if (!state_) return;
++    detail::end(index_, state_->regions[index_].exceptions);
++    state_ = nullptr;
++    if (owner_) {
++      observation::active = previous_observer_;
++      detail::active = nullptr;
++      try {
++        detail::write(*owner_);
++      } catch (...) {
++      }
++      owner_.reset();
++    }
++  }
++  Region(const Region&) = delete;
++  Region& operator=(const Region&) = delete;
++
++ private:
++  std::unique_ptr<detail::State> owner_;
++  detail::State* state_{};
++  const observation::Observer* previous_observer_{};
++  std::size_t index_{};
++};
++
++/** Preserve C++17 prvalue elision for nonmovable prepared providers. */
++template <class Function>
++decltype(auto) call(const char* name, Function&& function) {
++  Region scope(name);
++  return function();
++}
++template <class Function>
++decltype(auto) with_reason(EigenReason reason, Function&& function) {
++  Reason scope(reason);
++  return function();
++}
++}  // namespace vibeqc::runtime::host_trace
+diff --git a/src/scf/fleet.cpp b/src/scf/fleet.cpp
+index 56ebbf3..1b47355 100644
+--- a/src/scf/fleet.cpp
++++ b/src/scf/fleet.cpp
+@@ -13,6 +13,7 @@
+ #include <utility>
+ 
+ #include "molecule/basis.hpp"
++#include "runtime/host_component_trace.hpp"
+ #include "runtime/resource_usage.hpp"
+ #include "scf/fock_prepared.hpp"
+ #include "scf/mean_field.hpp"
+@@ -215,6 +216,10 @@ std::vector<FleetItemResult> FleetPlan::execute(
+   last_inactive_eigensolver_profile_.clear();
+   std::vector<FleetItemResult> results(systems_.size());
+   const auto execute_one = [&](std::size_t system_index) {
++    // CPU workers do not inherit the caller's thread-local observer. Open a
++    // worker root so actual solves remain visible, indexed in source order.
++    runtime::host_trace::Item traced_item(system_index);
++    runtime::host_trace::Region item_trace("fleet_item");
+     FleetItemResult& item = results[system_index];
+     item.bucket_id = bucket_ids_[system_index];
+     item.executed_backend = execution_options.resolved_fock_build->backend == FockBackend::Cuda
+diff --git a/src/scf/initial_guess/density.cpp b/src/scf/initial_guess/density.cpp
+index c53820f..62c9f6a 100644
+--- a/src/scf/initial_guess/density.cpp
++++ b/src/scf/initial_guess/density.cpp
+@@ -7,6 +7,7 @@
+ #include "core/types.hpp"
+ #include "integrals/s_integrals.hpp"
+ #include "scf/reference/mean_field.hpp"
++#include "scf/reference/observation.hpp"
+ 
+ namespace vibeqc::scf::initial_guess {
+ 
+@@ -81,6 +82,8 @@ std::pair<Matrix, Matrix> prepare_initial_uhf_density(
+     EigenResult& alpha_orbitals, EigenResult& beta_orbitals) {
+   const std::size_t n = ints.nbf;
+   const std::size_t matrix_size = n * n;
++  scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
++  scf::reference::observation::Scope trace("initial_density", n);
+   alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+   beta_orbitals = alpha_orbitals;
+   if (initial_density == nullptr) {
+@@ -107,6 +110,8 @@ Matrix prepare_initial_density(const core::System& system, const integrals::Inte
+                                const Matrix& orthogonalizer, std::size_t occupied,
+                                const std::vector<double>* initial_density, EigenResult& orbitals) {
+   const std::size_t n = ints.nbf;
++  scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
++  scf::reference::observation::Scope trace("initial_density", n);
+   orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+   if (initial_density == nullptr) {
+     return density_from_orbitals(orbitals.vectors, n, occupied);
+diff --git a/src/scf/reference/linalg.cpp b/src/scf/reference/linalg.cpp
+index ad774c2..d947aa5 100644
+--- a/src/scf/reference/linalg.cpp
++++ b/src/scf/reference/linalg.cpp
+@@ -6,6 +6,8 @@
+ #include <stdexcept>
+ #include <utility>
+ 
++#include "scf/reference/observation.hpp"
++
+ namespace vibeqc::scf::reference {
+ 
+ Matrix identity(std::size_t n) {
+@@ -44,7 +46,11 @@ Matrix transpose(const Matrix& a, std::size_t n) {
+ #if __has_cpp_attribute(gnu::aligned)
+ [[gnu::aligned(32)]]
+ #endif
+-EigenResult symmetric_eigen(Matrix matrix, std::size_t n) {
++#if __has_cpp_attribute(gnu::noinline)
++// Keep the aligned numerical loop separate from the optional trace wrapper.
++[[gnu::noinline]]
++#endif
++static EigenResult symmetric_eigen_impl(Matrix matrix, std::size_t n) {
+   Matrix vectors = identity(n);
+   const std::size_t max_sweeps = std::max<std::size_t>(50, 20 * n * n);
+   for (std::size_t sweep = 0; sweep < max_sweeps; ++sweep) {
+@@ -107,7 +113,20 @@ EigenResult symmetric_eigen(Matrix matrix, std::size_t n) {
+   return result;
+ }
+ 
++EigenResult symmetric_eigen(Matrix matrix, std::size_t n) {
++  // Instrument the call boundary so the independent aligned Jacobi loop is
++  // unchanged. Only this leaf represents an actual reference diagonalization.
++  scf::reference::observation::Scope trace("reference_eigensolve", n);
++  return symmetric_eigen_impl(std::move(matrix), n);
++}
++
+ Matrix symmetric_orthogonalizer(const Matrix& overlap, std::size_t n) {
++  using namespace observation;
++  Reason reason(active_reason == EigenReason::reference_export ||
++                        active_reason == EigenReason::fallback
++                    ? active_reason
++                    : EigenReason::overlap);
++  Scope trace("overlap_orthogonalization", n);
+   const EigenResult eigen = symmetric_eigen(overlap, n);
+   Matrix scaled = eigen.vectors;
+   for (std::size_t column = 0; column < n; ++column) {
+@@ -123,6 +142,7 @@ Matrix symmetric_orthogonalizer(const Matrix& overlap, std::size_t n) {
+ }
+ 
+ EigenResult generalized_eigen(const Matrix& fock, const Matrix& orthogonalizer, std::size_t n) {
++  scf::reference::observation::Scope trace("generalized_eigensolve", n);
+   const Matrix transformed =
+       multiply(transpose(orthogonalizer, n), multiply(fock, orthogonalizer, n), n);
+   EigenResult result = symmetric_eigen(transformed, n);
+diff --git a/src/scf/reference/observation.hpp b/src/scf/reference/observation.hpp
+new file mode 100644
+index 0000000..29df0ef
+--- /dev/null
++++ b/src/scf/reference/observation.hpp
+@@ -0,0 +1,53 @@
++#pragma once
++
++#include <cstddef>
++#include <exception>
++#include <limits>
++
++namespace vibeqc::scf::reference::observation {
++
++/** Optional observer of actual reference work. The oracle knows no runtime,
++ * file format, CUDA API or timer; its caller owns the thread-local observer.
++ * Callbacks must not throw or alter the numerical inputs/outputs. */
++struct Observer {
++  std::size_t (*begin)(const char*, std::size_t) noexcept;
++  void (*end)(std::size_t, int) noexcept;
++};
++inline thread_local const Observer* active{};
++enum class EigenReason { unspecified, overlap, core_guess, final_fock, reference_export, fallback };
++inline thread_local EigenReason active_reason = EigenReason::unspecified;
++
++class Reason {
++ public:
++  explicit Reason(EigenReason value) noexcept : previous_(active_reason) { active_reason = value; }
++  ~Reason() { active_reason = previous_; }
++  Reason(const Reason&) = delete;
++  Reason& operator=(const Reason&) = delete;
++
++ private:
++  EigenReason previous_;
++};
++
++/** One observed call, including an exceptional exit; a null observer costs
++ * only the branch. A sink can reject a sample using the sentinel token. */
++class Scope {
++ public:
++  Scope(const char* name, std::size_t n) noexcept : observer_(active) {
++    if (observer_) {
++      exceptions_ = std::uncaught_exceptions();
++      token_ = observer_->begin(name, n);
++    }
++  }
++  ~Scope() {
++    if (observer_ && token_ != std::numeric_limits<std::size_t>::max())
++      observer_->end(token_, exceptions_);
++  }
++  Scope(const Scope&) = delete;
++  Scope& operator=(const Scope&) = delete;
++
++ private:
++  const Observer* observer_{};
++  std::size_t token_{};
++  int exceptions_{};
++};
++}  // namespace vibeqc::scf::reference::observation
+diff --git a/src/scf/rhf.cpp b/src/scf/rhf.cpp
+index 0e57bc2..d435537 100644
+--- a/src/scf/rhf.cpp
++++ b/src/scf/rhf.cpp
+@@ -17,6 +17,7 @@
+ #include "molecule/basis.hpp"
+ #include "posthf/capacity.hpp"
+ #include "posthf/raw_source.hpp"
++#include "runtime/host_component_trace.hpp"
+ #include "runtime/resource_ledger.hpp"
+ #include "runtime/resource_usage.hpp"
+ #include "scf/cuda/rhf_policy.hpp"
+@@ -36,6 +37,7 @@
+ #include "scf/solver/proposal_control.hpp"
+ 
+ namespace vibeqc::scf {
++namespace host_trace = runtime::host_trace;
+ namespace {
+ 
+ using initial_guess::prepare_initial_density;
+@@ -383,6 +385,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+                                                    const ScfOptions& options, ScfResult& result,
+                                                    CudaDensityFittingJkPlan* cuda_plan = nullptr,
+                                                    std::size_t cuda_system = 0) {
++  host_trace::Region final_trace("finalization");
+ #if !VIBEQC_HAS_CUDA
+   (void)cuda_plan;
+ #endif
+@@ -426,7 +429,9 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+     final_fock =
+         build_density_fitting_rhf_fock(data.one_electron.hcore, data.three_center, density);
+   }
+-  EigenResult orbitals = generalized_eigen(final_fock, orthogonalizer, n);
++  EigenResult orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
++    return generalized_eigen(final_fock, orthogonalizer, n);
++  });
+   density = density_from_orbitals(orbitals.vectors, n, occupied);
+   if (cuda_plan != nullptr) {
+     std::vector<double> coulomb;
+@@ -454,6 +459,8 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+   result.energy = electronic_energy(density, data.one_electron.hcore, final_fock) +
+                   data.one_electron.nuclear_repulsion;
+   if (options.export_physical_reference) {
++    host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
++    host_trace::Region export_trace("reference_export", n);
+     auto canonical = generalized_eigen(final_fock, orthogonalizer, n);
+     auto reference = std::make_shared<PhysicalReference>();
+     reference->nbf = n;
+@@ -475,6 +482,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+     return;
+   }
+ 
++  host_trace::Region force_trace("force_response", n);
+   const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
+   // The CUDA response is the sole device path; failures propagate before force
+   // assembly. The independent CPU calculation below serves CPU callers only.
+@@ -524,6 +532,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+     std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
+     const ScfOptions& options, ScfResult& result, CudaDensityFittingJkPlan* cuda_plan = nullptr,
+     std::size_t cuda_system = 0) {
++  host_trace::Region final_trace("finalization");
+ #if !VIBEQC_HAS_CUDA
+   (void)cuda_plan;
+ #endif
+@@ -575,8 +584,12 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+     std::tie(alpha_fock, beta_fock) = build_density_fitting_uhf_focks(
+         data.one_electron.hcore, data.three_center, alpha_density, beta_density);
+   }
+-  EigenResult alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
+-  EigenResult beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
++  EigenResult alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
++    return generalized_eigen(alpha_fock, orthogonalizer, n);
++  });
++  EigenResult beta_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
++    return generalized_eigen(beta_fock, orthogonalizer, n);
++  });
+   alpha_density = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
+   beta_density = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
+   if (cuda_plan != nullptr) {
+@@ -614,6 +627,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
+     return;
+   }
+ 
++  host_trace::Region force_trace("force_response", n);
+   const Matrix alpha_weighted = energy_weighted_density(
+       alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
+   const Matrix beta_weighted =
+@@ -778,6 +792,8 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
+     ref->hcore = plan.one_electron().hcore;
+     ref->fock = matrices.alpha;
+     ref->density = result.density;
++    host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
++    host_trace::Region export_trace("reference_export", n);
+     const auto orthogonalizer = symmetric_orthogonalizer(ref->overlap, n);
+     auto canonical = generalized_eigen(ref->fock, orthogonalizer, n);
+     ref->coefficients = std::move(canonical.vectors);
+@@ -1386,6 +1402,7 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
+                                             const core::System& auxiliary_system,
+                                             const ScfOptions& options, int device_id,
+                                             const std::vector<double>* initial_density) {
++  host_trace::Region endpoint_trace("run_rhf_density_fitting_cuda_impl");
+   if (options.hooks || options.strict_initial_density)
+     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
+ 
+@@ -1417,11 +1434,13 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
+     std::vector<double> device_final_density;
+     std::vector<CudaDensityFittingDeviceScfItem> device_records;
+     std::string detail;
+-    const vibeqc_status device_status = run_cuda_density_fitting_rhf_device_scf(
+-        plan.get(), data.one_electron.hcore, orthogonalizer, density,
+-        {static_cast<std::int32_t>(occupied)}, {data.one_electron.nuclear_repulsion},
+-        options.max_iterations, options.energy_tolerance, options.density_tolerance,
+-        device_final_density, device_records, detail);
++    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
++      return run_cuda_density_fitting_rhf_device_scf(
++          plan.get(), data.one_electron.hcore, orthogonalizer, density,
++          {static_cast<std::int32_t>(occupied)}, {data.one_electron.nuclear_repulsion},
++          options.max_iterations, options.energy_tolerance, options.density_tolerance,
++          device_final_density, device_records, detail);
++    });
+     // A resource rejection must not trigger an undisclosed host SCF retry.
+     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
+       throw std::bad_alloc();
+@@ -1457,7 +1476,9 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
+                           data.one_electron.nuclear_repulsion;
+     const Matrix residual = commutator_residual(fock, density, data.one_electron.overlap, n);
+     const Matrix effective_fock = diis.update(fock, residual);
+-    orbitals = generalized_eigen(effective_fock, orthogonalizer, n);
++    orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
++      return generalized_eigen(effective_fock, orthogonalizer, n);
++    });
+     Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
+     result.iterations = iteration;
+     result.energy = energy;
+@@ -1487,6 +1508,7 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
+                                             const core::System& auxiliary_system,
+                                             const ScfOptions& options, int device_id,
+                                             const std::vector<double>* initial_density) {
++  host_trace::Region endpoint_trace("run_uhf_density_fitting_cuda_impl");
+   if (options.hooks || options.strict_initial_density)
+     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
+ 
+@@ -1517,11 +1539,13 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
+     std::vector<double> device_final_beta;
+     std::vector<CudaDensityFittingDeviceScfItem> device_records;
+     std::string detail;
+-    const vibeqc_status device_status = run_cuda_density_fitting_uhf_device_scf(
+-        plan.get(), data.one_electron.hcore, orthogonalizer, alpha_density, beta_density,
+-        {static_cast<std::int32_t>(alpha_occupied)}, {static_cast<std::int32_t>(beta_occupied)},
+-        {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
+-        options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
++    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
++      return run_cuda_density_fitting_uhf_device_scf(
++          plan.get(), data.one_electron.hcore, orthogonalizer, alpha_density, beta_density,
++          {static_cast<std::int32_t>(alpha_occupied)}, {static_cast<std::int32_t>(beta_occupied)},
++          {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
++          options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
++    });
+     // A resource rejection must not trigger an undisclosed host SCF retry.
+     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
+       throw std::bad_alloc();
+@@ -1567,8 +1591,12 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
+     const Matrix effective_joined =
+         diis.update(concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
+     std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, n * n);
+-    alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
+-    beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
++    alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
++      return generalized_eigen(alpha_fock, orthogonalizer, n);
++    });
++    beta_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
++      return generalized_eigen(beta_fock, orthogonalizer, n);
++    });
+     Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
+     Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
+     result.iterations = iteration;
+@@ -1600,6 +1628,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* output_diagnostics,
+     CudaDensityFittingJkPlan** cached_plan,
+     std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
++  host_trace::Region endpoint_trace("run_rhf_density_fitting_cuda_bucket_impl");
+   if (options.hooks || options.strict_initial_density)
+     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
+ 
+@@ -1681,6 +1710,8 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+   std::size_t nbf = 0;
+   std::size_t naux = 0;
+   for (std::size_t source = 0; source < systems.size(); ++source) {
++    host_trace::Item traced_item(source);
++    host_trace::Region preparation_trace("prepare_item");
+     const std::size_t slot_before = data.size();
+     try {
+       DensityFittingScfData prepared;
+@@ -1839,10 +1870,12 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+     std::vector<double> device_final_density;
+     std::vector<CudaDensityFittingDeviceScfItem> device_records;
+     std::string device_detail;
+-    const vibeqc_status device_status = run_cuda_density_fitting_rhf_device_scf(
+-        plan, hcore, orthogonalizer, initial_density, occupied, nuclear, options.max_iterations,
+-        options.energy_tolerance, options.density_tolerance, device_final_density, device_records,
+-        device_detail);
++    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
++      return run_cuda_density_fitting_rhf_device_scf(
++          plan, hcore, orthogonalizer, initial_density, occupied, nuclear, options.max_iterations,
++          options.energy_tolerance, options.density_tolerance, device_final_density, device_records,
++          device_detail);
++    });
+     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger) {
+       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
+       return outputs;
+@@ -1854,6 +1887,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+     if (device_converged) {
+       for (std::size_t slot = 0; slot < data.size(); ++slot) {
+         const std::size_t source = source_indices[slot];
++        host_trace::Item traced_item(source);
+         densities[slot].assign(device_final_density.begin() + slot * matrix_size,
+                                device_final_density.begin() + (slot + 1) * matrix_size);
+         ScfResult& result = outputs[source].scf;
+@@ -1905,6 +1939,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+     for (std::size_t slot = 0; slot < data.size(); ++slot) {
+       if (!active[slot]) continue;
+       const std::size_t source = source_indices[slot];
++      host_trace::Item traced_item(source);
+       try {
+         Matrix fock = data[slot].one_electron.hcore;
+         const double* j = coulomb.data() + slot * matrix_size;
+@@ -1918,7 +1953,9 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+         const Matrix residual =
+             commutator_residual(fock, densities[slot], data[slot].one_electron.overlap, nbf);
+         const Matrix effective_fock = diis[slot].update(fock, residual);
+-        orbitals[slot] = generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
++        orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
++          return generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
++        });
+         Matrix next_density =
+             density_from_orbitals(orbitals[slot].vectors, nbf,
+                                   static_cast<std::size_t>(systems[source].electron_count / 2));
+@@ -1953,6 +1990,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+ 
+   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
+     const std::size_t source = source_indices[slot];
++    host_trace::Item traced_item(source);
+     ScfResult& result = outputs[source].scf;
+     if (outputs[source].status != VIBEQC_STATUS_INTERNAL_ERROR) {
+       continue;
+@@ -1983,6 +2021,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* output_diagnostics,
+     CudaDensityFittingJkPlan** cached_plan,
+     std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
++  host_trace::Region endpoint_trace("run_uhf_density_fitting_cuda_bucket_impl");
+   if (options.hooks || options.strict_initial_density)
+     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
+ 
+@@ -2053,6 +2092,8 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+   std::size_t nbf = 0;
+   std::size_t naux = 0;
+   for (std::size_t source = 0; source < systems.size(); ++source) {
++    host_trace::Item traced_item(source);
++    host_trace::Region preparation_trace("prepare_item");
+     const std::size_t slot_before = data.size();
+     try {
+       DensityFittingScfData prepared;
+@@ -2224,10 +2265,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+     std::vector<double> device_final_beta;
+     std::vector<CudaDensityFittingDeviceScfItem> device_records;
+     std::string device_detail;
+-    const vibeqc_status device_status = run_cuda_density_fitting_uhf_device_scf(
+-        plan, hcore, orthogonalizer, initial_alpha, initial_beta, alpha_occupied, beta_occupied,
+-        nuclear, options.max_iterations, options.energy_tolerance, options.density_tolerance,
+-        device_final_alpha, device_final_beta, device_records, device_detail);
++    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
++      return run_cuda_density_fitting_uhf_device_scf(
++          plan, hcore, orthogonalizer, initial_alpha, initial_beta, alpha_occupied, beta_occupied,
++          nuclear, options.max_iterations, options.energy_tolerance, options.density_tolerance,
++          device_final_alpha, device_final_beta, device_records, device_detail);
++    });
+     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger) {
+       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
+       return outputs;
+@@ -2239,6 +2282,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+     if (device_converged) {
+       for (std::size_t slot = 0; slot < data.size(); ++slot) {
+         const std::size_t source = source_indices[slot];
++        host_trace::Item traced_item(source);
+         alpha_densities[slot].assign(device_final_alpha.begin() + slot * matrix_size,
+                                      device_final_alpha.begin() + (slot + 1) * matrix_size);
+         beta_densities[slot].assign(device_final_beta.begin() + slot * matrix_size,
+@@ -2296,6 +2340,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+     for (std::size_t slot = 0; slot < data.size(); ++slot) {
+       if (!active[slot]) continue;
+       const std::size_t source = source_indices[slot];
++      host_trace::Item traced_item(source);
+       try {
+         const auto [alpha_occupied, beta_occupied] = spin_occupations(systems[source]);
+         Matrix alpha_fock = data[slot].one_electron.hcore;
+@@ -2318,8 +2363,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+         const Matrix effective_joined = diis[slot].update(
+             concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
+         std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, matrix_size);
+-        alpha_orbitals[slot] = generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
+-        beta_orbitals[slot] = generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
++        alpha_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
++          return generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
++        });
++        beta_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
++          return generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
++        });
+         Matrix next_alpha =
+             density_from_orbitals(alpha_orbitals[slot].vectors, nbf, alpha_occupied, 1.0);
+         Matrix next_beta =
+@@ -2358,6 +2407,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+ 
+   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
+     const std::size_t source = source_indices[slot];
++    host_trace::Item traced_item(source);
+     ScfResult& result = outputs[source].scf;
+     if (outputs[source].status != VIBEQC_STATUS_INTERNAL_ERROR) {
+       continue;
+diff --git a/tests/python/test_df_host_trace.py b/tests/python/test_df_host_trace.py
+new file mode 100644
+index 0000000..49a775e
+--- /dev/null
++++ b/tests/python/test_df_host_trace.py
+@@ -0,0 +1,123 @@
++"""Actual solver counts and fault-rejecting #206 host ledger gates."""
++
++import copy
++import json
++import os
++
++import pytest
++
++from benchmarks.df_component_ledger import (
++    aggregate_host,
++    read_host_trace,
++    validate_host_record,
++)
++
++
++def host_record():
++    base = {"reason": "overlap", "item": 0, "nbf": 2, "finished": True, "failed": False}
++    return {
++        "schema": "vibeqc.df_host_trace",
++        "version": 1,
++        "id": 0,
++        "valid": True,
++        "regions": [
++            dict(base, name="endpoint", parent=-1, wall_ms=5, cpu_ms=3),
++            dict(base, name="reference_eigensolve", parent=0, wall_ms=2, cpu_ms=1),
++        ],
++    }
++
++
++def test_host_ledger_counts_actual_leaves_and_keeps_clocks_separate(tmp_path):
++    record = host_record()
++    path = tmp_path / "host.jsonl"
++    path.write_text(json.dumps(record) + "\n")
++    summary = aggregate_host(read_host_trace(path))
++    assert summary["exclusive_phases"]["endpoint"] == {
++        "calls": 1,
++        "wall_ms": 3,
++        "cpu_ms": 2,
++    }
++    assert summary["eigensolves_by_reason"]["overlap"] == {
++        "calls": 1,
++        "failed_calls": 0,
++        "wall_ms": 2,
++        "cpu_ms": 1,
++    }
++    for row in record["regions"]:
++        row["cpu_ms"] = None
++    assert aggregate_host([record])["exclusive_phases"]["endpoint"]["cpu_ms"] is None
++    path.write_text(path.read_text() * 2)
++    with pytest.raises(ValueError, match="duplicate"):
++        read_host_trace(path)
++
++
++@pytest.mark.parametrize(
++    "key,value",
++    [
++        ("finished", False),
++        ("wall_ms", 8),
++        ("cpu_ms", float("nan")),
++        ("parent", 1),
++        ("nbf", 0),
++        ("reason", "invented"),
++    ],
++)
++def test_partial_or_mistimed_host_records_cannot_pass(key, value):
++    record = copy.deepcopy(host_record())
++    record["regions"][1][key] = value
++    with pytest.raises(ValueError):
++        validate_host_record(record)
++
++
++@pytest.mark.parametrize("method", ("rhf", "uhf"))
++@pytest.mark.parametrize("device", ("cpu", "cuda"))
++def test_native_solver_calls_include_warm_preparation_and_finalization(
++    tmp_path, monkeypatch, method, device
++):
++    """Baseline call counts come from executed leaves, including warm overhead.
++
++    Later ablations intentionally change the CUDA warm count expectations;
++    removing the trace hook itself must never satisfy a zero-call gate.
++    """
++    if device == "cuda" and os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1":
++        pytest.skip("requires an explicitly Slurm-allocated GPU")
++    from vibeqc import Calculator
++
++    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
++    charge, spin = (0, 1) if method == "rhf" else (1, 2)
++    calculator = Calculator(
++        method=method,
++        device=device,
++        density_fitting=device,
++        energy_tolerance=1e-12,
++        density_tolerance=1e-10,
++    )
++    with calculator.prepare_batch(
++        [atoms, atoms], charges=[charge] * 2, multiplicities=[spin] * 2
++    ) as batch:
++        cold = batch.execute(strict=True, properties=("energy",))
++        batch.set_warm_start_updates(False)
++        path = tmp_path / "warm.host.jsonl"
++        monkeypatch.setenv("VIBEQC_DF_HOST_TRACE", str(path))
++        warm = batch.execute(strict=True, properties=("energy",))
++        monkeypatch.delenv("VIBEQC_DF_HOST_TRACE")
++        assert [r.energy for r in warm.items] == pytest.approx(
++            [r.energy for r in cold.items], abs=1e-10
++        )
++        records = read_host_trace(path)
++        assert any(r["regions"][0]["name"] == "batch_execute" for r in records)
++        summary = aggregate_host(records)
++        by_reason = summary["eigensolves_by_reason"]
++        assert by_reason["overlap"]["calls"] == 2
++        assert by_reason["core_guess"]["calls"] == 2
++        if device == "cuda":
++            assert by_reason["final_fock"]["calls"] == (2 if method == "rhf" else 4)
++            assert not by_reason.get("fallback", {}).get("calls", 0)
++            leaves = summary["reference_eigensolves"]
++            assert {row["item"] for row in leaves if row["reason"] == "core_guess"} == {
++                0,
++                1,
++            }
++        before = path.read_bytes()
++        batch.execute(strict=True, properties=("energy",))
++        assert path.read_bytes() == before
+diff --git a/tests/python/test_issue206_df_force_probe.py b/tests/python/test_issue206_df_force_probe.py
+index ebeeb2a..e3aa744 100644
+--- a/tests/python/test_issue206_df_force_probe.py
++++ b/tests/python/test_issue206_df_force_probe.py
+@@ -122,10 +122,11 @@ def test_changed_binary_never_publishes_a_ledger(protocol, monkeypatch):
+     assert not output.exists()
+ 
+ 
++@pytest.mark.parametrize("variable", ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE"))
+ def test_unrequested_trace_cannot_contaminate_unprofiled_evidence(
+-    protocol, monkeypatch
++    protocol, monkeypatch, variable
+ ):
+-    monkeypatch.setenv("VIBEQC_DF_TRACE", "unexpected.jsonl")
++    monkeypatch.setenv(variable, "unexpected.jsonl")
+     with pytest.raises(SystemExit):
+         probe.main()
+ 
+@@ -200,6 +201,26 @@ def test_trace_protocol_preserves_raw_evidence_and_requires_force_components(
+         Path(os.environ["VIBEQC_DF_TRACE"]).write_text(
+             "".join(json.dumps(row) + "\n" for row in rows)
+         )
++        host = {
++            "schema": "vibeqc.df_host_trace",
++            "version": 1,
++            "id": 0,
++            "valid": True,
++            "regions": [
++                {
++                    "name": "reference_eigensolve",
++                    "reason": "core_guess",
++                    "parent": -1,
++                    "item": 0,
++                    "nbf": 2,
++                    "wall_ms": 1,
++                    "cpu_ms": 0.5,
++                    "finished": True,
++                    "failed": False,
++                }
++            ],
++        }
++        Path(os.environ["VIBEQC_DF_HOST_TRACE"]).write_text(json.dumps(host) + "\n")
+         return dict(force if "forces" in properties else energy)
+ 
+     monkeypatch.setattr(probe, "_sample", sample)
+@@ -219,3 +240,4 @@ def test_trace_protocol_preserves_raw_evidence_and_requires_force_components(
+         with pytest.raises(FileExistsError):
+             probe.main()
+     assert "VIBEQC_DF_TRACE" not in os.environ
++    assert "VIBEQC_DF_HOST_TRACE" not in os.environ

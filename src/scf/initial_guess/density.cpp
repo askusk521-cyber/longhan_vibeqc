@@ -7,6 +7,7 @@
 #include "core/types.hpp"
 #include "integrals/s_integrals.hpp"
 #include "scf/reference/mean_field.hpp"
+#include "scf/reference/observation.hpp"
 
 namespace vibeqc::scf::initial_guess {
 
@@ -81,6 +82,8 @@ std::pair<Matrix, Matrix> prepare_initial_uhf_density(
     EigenResult& alpha_orbitals, EigenResult& beta_orbitals) {
   const std::size_t n = ints.nbf;
   const std::size_t matrix_size = n * n;
+  scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
+  scf::reference::observation::Scope trace("initial_density", n);
   alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
   beta_orbitals = alpha_orbitals;
   if (initial_density == nullptr) {
@@ -107,6 +110,8 @@ Matrix prepare_initial_density(const core::System& system, const integrals::Inte
                                const Matrix& orthogonalizer, std::size_t occupied,
                                const std::vector<double>* initial_density, EigenResult& orbitals) {
   const std::size_t n = ints.nbf;
+  scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
+  scf::reference::observation::Scope trace("initial_density", n);
   orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
   if (initial_density == nullptr) {
     return density_from_orbitals(orbitals.vectors, n, occupied);
