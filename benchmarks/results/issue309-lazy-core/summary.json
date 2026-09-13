@@ -207,8 +207,306 @@
       }
     }
   },
+  "larger_domains": {
+    "192b1": {
+      "energy": {
+        "changed-geometry": {
+          "baseline_over_candidate": 1.3362537798040448,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 4.3324389040935785,
+            "candidate": 3.242227613925934
+          },
+          "samples": 10
+        },
+        "cold-start": {
+          "baseline_over_candidate": 0.9983320745317376,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 4.3421430150046945,
+            "candidate": 4.349397485842928
+          },
+          "samples": 10
+        },
+        "energy-only": {
+          "baseline_over_candidate": 1.4736290486168186,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 3.243772849906236,
+            "candidate": 2.2012139710132033
+          },
+          "samples": 10
+        },
+        "unchanged-geometry": {
+          "baseline_over_candidate": 1.4737545359146265,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 3.2452388510573655,
+            "candidate": 2.2020212810020894
+          },
+          "samples": 10
+        }
+      },
+      "force": {
+        "changed-geometry": {
+          "baseline_over_candidate": 1.167708223959428,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 7.421299452194944,
+            "candidate": 6.355439912062138
+          },
+          "samples": 10
+        },
+        "cold-start": {
+          "baseline_over_candidate": 1.0017530832174302,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 7.473314722068608,
+            "candidate": 7.460236307000741
+          },
+          "samples": 10
+        },
+        "energy-plus-force": {
+          "baseline_over_candidate": 1.2000783788574254,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 6.391964541980997,
+            "candidate": 5.326289227930829
+          },
+          "samples": 10
+        },
+        "unchanged-geometry": {
+          "baseline_over_candidate": 1.2004108706107612,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 6.391006010817364,
+            "candidate": 5.324015441117808
+          },
+          "samples": 10
+        }
+      },
+      "profiled": {
+        "changed-geometry": {
+          "baseline_over_candidate": 1.3336533324017719,
+          "core_guess_counts": {
+            "baseline": [
+              1
+            ],
+            "candidate": [
+              0
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 4.3158753090538085,
+            "candidate": 3.2361298128962517
+          },
+          "samples": 10
+        },
+        "cold-start": {
+          "baseline_over_candidate": 1.0011480462243543,
+          "core_guess_counts": {
+            "baseline": [
+              1
+            ],
+            "candidate": [
+              1
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 4.34954437892884,
+            "candidate": 4.344556627096608
+          },
+          "samples": 10
+        },
+        "energy-only": {
+          "baseline_over_candidate": 1.4744821713430893,
+          "core_guess_counts": {
+            "baseline": [
+              1
+            ],
+            "candidate": [
+              0
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 3.2437364058569074,
+            "candidate": 2.1999156509991735
+          },
+          "samples": 10
+        },
+        "unchanged-geometry": {
+          "baseline_over_candidate": 1.4738730724622313,
+          "core_guess_counts": {
+            "baseline": [
+              1
+            ],
+            "candidate": [
+              0
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 3.2430037918966264,
+            "candidate": 2.2003277300391346
+          },
+          "samples": 10
+        }
+      }
+    },
+    "96b4": {
+      "energy": {
+        "changed-geometry": {
+          "baseline_over_candidate": 1.2760605137868544,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 1.358410099055618,
+            "candidate": 1.0645342320203781
+          },
+          "samples": 10
+        },
+        "cold-start": {
+          "baseline_over_candidate": 1.0001058227950017,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 1.408607424935326,
+            "candidate": 1.4084583779331297
+          },
+          "samples": 10
+        },
+        "energy-only": {
+          "baseline_over_candidate": 1.4715370073053038,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 0.9139245150145143,
+            "candidate": 0.6210679789073765
+          },
+          "samples": 10
+        },
+        "unchanged-geometry": {
+          "baseline_over_candidate": 1.4703152931679209,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 0.9134817889425904,
+            "candidate": 0.6212829269934446
+          },
+          "samples": 10
+        }
+      },
+      "force": {
+        "changed-geometry": {
+          "baseline_over_candidate": 1.1118279913447475,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 2.979423933895305,
+            "candidate": 2.6797525850124657
+          },
+          "samples": 10
+        },
+        "cold-start": {
+          "baseline_over_candidate": 1.004247399230156,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 3.023818029090762,
+            "candidate": 3.011028986889869
+          },
+          "samples": 10
+        },
+        "energy-plus-force": {
+          "baseline_over_candidate": 1.1343656295166733,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 2.5337865920737386,
+            "candidate": 2.2336595240049064
+          },
+          "samples": 10
+        },
+        "unchanged-geometry": {
+          "baseline_over_candidate": 1.13565220121098,
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 2.537292089080438,
+            "candidate": 2.2342157980892807
+          },
+          "samples": 10
+        }
+      },
+      "profiled": {
+        "changed-geometry": {
+          "baseline_over_candidate": 1.27569364180389,
+          "core_guess_counts": {
+            "baseline": [
+              4
+            ],
+            "candidate": [
+              0
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 1.3580005229450762,
+            "candidate": 1.064519315958023
+          },
+          "samples": 10
+        },
+        "cold-start": {
+          "baseline_over_candidate": 1.0002398816045999,
+          "core_guess_counts": {
+            "baseline": [
+              4
+            ],
+            "candidate": [
+              4
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 1.4107169169001281,
+            "candidate": 1.4103785930201411
+          },
+          "samples": 10
+        },
+        "energy-only": {
+          "baseline_over_candidate": 1.4688452328871018,
+          "core_guess_counts": {
+            "baseline": [
+              4
+            ],
+            "candidate": [
+              0
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 0.9143121729139239,
+            "candidate": 0.6224700550083071
+          },
+          "samples": 10
+        },
+        "unchanged-geometry": {
+          "baseline_over_candidate": 1.4695677741835136,
+          "core_guess_counts": {
+            "baseline": [
+              4
+            ],
+            "candidate": [
+              0
+            ]
+          },
+          "iteration_retry_matched": true,
+          "median_seconds": {
+            "baseline": 0.9147458930965513,
+            "candidate": 0.6224591401405632
+          },
+          "samples": 10
+        }
+      }
+    }
+  },
   "limitations": [
-    "This first ablation covers 96 AO, batch1, RHF spherical, 1GiB DF allowance. Larger/batch4/constrained and full #308 scientific/performance acceptance remain required.",
+    "Ablations cover RHF spherical 96 AO batch 1/4 and 192 AO batch 1, with a 1 GiB DF allowance. 192 AO batch 4, 384 AO, constrained modes and full #308 scientific/performance acceptance remain outstanding.",
     "The eager control restores only the discarded core solve in the same binary; it is not a different SCF initial density.",
     "Cold samples have no meaningful gain. The overall all-workload timing assessment is not-run; warm/changed components exceed its noise floor individually.",
     "The branch-validation guard was added after measurement and checked against every retained sample; the exact earlier measured runner is preserved in the source patch."
