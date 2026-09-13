@@ -77,10 +77,24 @@ The first-domain measured checkout is P0 commit `07b83d2` plus
 The embedded library/source identity was independently checked and is retained
 in `summary.json`. The later iteration-branch guard was checked against every
 retained sample; the exact earlier measured runner remains reconstructible.
-`raw-traces.json` keeps original JSONL text and SHA-256; `files.json` pins the
-retained files. No large profiler database or routine log is published here.
+`raw-evidence.zip` preserves the original JSON/JSONL collections, source patch
+and `files.json` byte for byte. The adjacent standard manifest records the
+archive size/SHA-256, each member hash and measured source identities. All
+14 members were restored and compared with their originals before removing
+the expanded copies. No profiler database or routine log is published here.
 
 ## Reproduction
+
+Verify the archive or restore it into a fresh directory using the repository's
+standard verifier (the README and compact summary stay directly reviewable):
+
+```bash
+python -m tools.unpack_evidence benchmarks/results/issue309-lazy-core \
+  --output /tmp/issue309-lazy-core-evidence
+```
+
+Paths such as `larger/` and `measured-source.patch` below refer to restored
+archive members. Original measurements, distinct domains and hashes are unchanged.
 
 Build the measured source as Release with CUDA 12.9.1, architecture 120 and
 AOT shells disabled, following the [P0 build recipe](../issue308-host-baseline/README.md).
