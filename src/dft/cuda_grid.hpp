@@ -13,5 +13,4 @@ extern "C" {
  */
 int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const double* weights,
                     std::size_t npoint, double* integrals, char* error, std::size_t size);
-
 }

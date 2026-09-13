@@ -184,7 +184,7 @@ __global__ void scatter_matrix(const double* local, const size_t* ids, I nao, I 
 }
 
 __device__ vibeqc::dft::point::Value evaluate_xc_point(bool pbe, const double* features, I npoint,
-                                                        I point) {
+                                                       I point) {
   const double rho[2]{features[point], features[5 * npoint + point]};
   double gradient[2][3]{};
   if (pbe)
@@ -239,8 +239,8 @@ __global__ void xc_local_potential_kernel(bool pbe, const double* features, cons
         for (int axis = 0; axis < 3; ++axis) {
           const double derivative_row = ao[(axis + 1) * stride + base + row];
           const double derivative_col = ao[(axis + 1) * stride + base + col];
-          contribution += xc.gradient[spin][axis] *
-                          (derivative_row * phi_col + phi_row * derivative_col);
+          contribution +=
+              xc.gradient[spin][axis] * (derivative_row * phi_col + phi_row * derivative_col);
         }
       }
       value += weights[point] * contribution;
@@ -613,8 +613,8 @@ int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const doub
       cuda_check(cudaMemsetAsync(ctx.error, 0, sizeof(int), ctx.stream));
       cuda_check(cudaMemsetAsync(device_integrals, 0, 3 * sizeof(double), ctx.stream));
       if (matrix_elements)
-        cuda_check(cudaMemsetAsync(p.local_potential, 0, matrix_elements * sizeof(double),
-                                   ctx.stream));
+        cuda_check(
+            cudaMemsetAsync(p.local_potential, 0, matrix_elements * sizeof(double), ctx.stream));
       if (npoint)
         cuda_check(cudaMemcpyAsync(device_weights, weights, npoint * sizeof(double),
                                    cudaMemcpyHostToDevice, ctx.stream));
@@ -626,8 +626,8 @@ int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const doub
         cuda_check(cudaGetLastError());
         if (matrix_elements) {
           xc_local_potential_kernel<<<blocks(matrix_elements, 128), 128, 0, ctx.stream>>>(
-              pbe != 0, p.features, p.ao, device_weights, npoint, p.last_active,
-              p.local_potential, ctx.error);
+              pbe != 0, p.features, p.ao, device_weights, npoint, p.last_active, p.local_potential,
+              ctx.error);
           cuda_check(cudaGetLastError());
         }
       });
