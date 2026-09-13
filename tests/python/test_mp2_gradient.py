@@ -64,6 +64,13 @@ def test_dense_derivative_oracle_rejects_output_budget_before_allocation(monkeyp
             source.df_gradient_tile_cuda(0, (-1, 1, 1, 1), np.ones(1))
         with pytest.raises(ValueError, match="weights must be real"):
             source.df_gradient_tile_cuda(0, (0, 1, 1, 1), np.ones(1, dtype=complex))
+        with pytest.raises(ValueError, match="weights must be real"):
+            source.weighted_eri_gradient_cuda(np.ones((source.nbf,) * 4, dtype=complex))
+        shell_shape = tuple(source.shell_sizes[0] for _ in range(4))
+        with pytest.raises(ValueError, match="weights must be real"):
+            source.weighted_eri_shell_gradient_cuda(
+                (0, 0, 0, 0), np.ones(shell_shape, dtype=complex)
+            )
 
 
 @pytest.mark.parametrize("shell_tile", [False, True])
