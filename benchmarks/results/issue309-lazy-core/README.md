@@ -25,8 +25,23 @@ discarded core frame without changing the supplied density or SCF controls.
 | Warm energy plus complete force | 0.781138 | 0.711037 | 1.099 |
 | Changed-geometry energy plus force | 0.964042 | 0.885154 | 1.089 |
 
-Every selection has identical iteration/retry branches: 34 cold, 2 warm and
-22 changed-geometry iterations. Energy and full-force endpoints match the
+The same five-pair protocol was then run from the clean lazy-core commit for
+two additional domains. Every cold/warm/changed sample and traced solve count
+is retained under `larger/`; these clean warm endpoint medians are:
+
+| Domain | Endpoint | Eager (s) | Lazy (s) | Eager / lazy |
+| --- | --- | ---: | ---: | ---: |
+| 96 AO, batch 4 | energy | 0.913925 | 0.621068 | 1.472 |
+| 96 AO, batch 4 | energy plus force | 2.533787 | 2.233660 | 1.134 |
+| 192 AO, batch 1 | energy | 3.243773 | 2.201214 | 1.474 |
+| 192 AO, batch 1 | energy plus force | 6.391965 | 5.326289 | 1.200 |
+
+All additional iteration/retry branches match, and the energy/force gates
+pass. Their exact clean source/library identities are in each collection;
+the iteration guard executes in the runner for these additional domains.
+
+In the first 96-AO batch-1 domain, both selections have identical
+iteration/retry branches: 34 cold, 2 warm and 22 changed-geometry iterations. Energy and full-force endpoints match the
 separately prepared same-model cold references at 1e-9 Eh / 1e-8 Eh/Bohr.
 The changed geometry is restored before each sample. These cache/replay checks
 supplement existing independent scientific tests; they do not claim external
@@ -57,7 +72,8 @@ Pre-commit passed. Every GPU run used a finite Slurm allocation.
 
 All samples preserve source revision, dirty patch, actual library hash,
 inputs, setup/destruction cost and per-item convergence/energy/force records.
-The measured checkout is P0 commit `07b83d2` plus `measured-source.patch`.
+The first-domain measured checkout is P0 commit `07b83d2` plus
+`measured-source.patch`; the additional domains use clean commit `b362dbe`.
 The embedded library/source identity was independently checked and is retained
 in `summary.json`. The later iteration-branch guard was checked against every
 retained sample; the exact earlier measured runner remains reconstructible.
@@ -82,5 +98,5 @@ srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 --time=00:20:00 \
 
 Omit `--energy-only` for complete forces. Use a separate invocation with
 `--host-trace-dir /tmp/issue309-traces` and a new output directory to check
-actual calls. Larger/batch-4, constrained-memory, other spin/representation
+actual calls. 192-AO batch 4, 384 AOs, constrained-memory, other spin/representation
 domains and independent matched #206 acceptance remain required.
