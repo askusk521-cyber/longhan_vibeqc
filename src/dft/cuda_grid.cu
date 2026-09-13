@@ -321,7 +321,8 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
     static_assert(sizeof(size_t) == sizeof(double), "grid map arena requires 64-bit indices");
     const size_t numeric = mul(8, elements), error_offset = mul(add(numeric, 255) / 256, 256);
     const size_t workspace = add(error_offset, 256), bytes = add(workspace, 4U << 20);
-    if (bytes != expected_bytes) throw std::invalid_argument("native/Python grid plan mismatch");
+    if (expected_bytes && bytes != expected_bytes)
+      throw std::invalid_argument("native/Python grid plan mismatch");
     p->context.prepare(device, major, minor, bytes, error_offset, workspace, 4U << 20, 96U << 20,
                        true);
     p->basis = reinterpret_cast<double*>(p->context.arena);

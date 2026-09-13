@@ -160,6 +160,7 @@ add_library(vibeqc SHARED
   src/api/error.cpp
   src/dft/ao_grid.cpp
   src/dft/bridge.cpp
+  src/dft/cuda_xc.cpp
   src/dft/grid.cpp
   src/dft/rks.cpp
   src/dft/xc.cpp
