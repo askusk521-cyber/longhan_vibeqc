@@ -55,8 +55,54 @@ def validate_ablation_branches(rows):
             or branches["baseline"] != branches["candidate"]
         ):
             raise ValueError(
-                "eager/lazy timing requires matching SCF iteration/retry branches"
+                "preparation timing requires matching SCF iteration/retry branches"
             )
+
+
+def preparation_policies(ablation):
+    """Return eager-core/rebuild-overlap switches for a causal A/B comparison.
+
+    All three increments share the original eager/rebuilt baseline. Comparing
+    the separate candidates yields baseline, lazy-only, cache-only and combined
+    measurements without changing the binary or frozen SCF seed.
+    """
+    candidates = {
+        "lazy-core": (False, True),
+        "overlap-cache": (True, False),
+        "combined": (False, False),
+    }
+    if ablation not in candidates:
+        raise ValueError("unknown preparation ablation")
+    return {"baseline": (True, True), "candidate": candidates[ablation]}
+
+
+def validate_preparation_counts(components, *, batch_size, workload, eager, rebuild):
+    """Require actual solves and matching cache scopes, including partial rebuilds.
+
+    The changed-geometry workload moves only the last item and restores the
+    original geometry before every sample. Other items must retain their X.
+    """
+    cold = workload == "cold-start"
+    changed = workload == "changed-geometry"
+    expected_core = batch_size if cold or eager else 0
+    expected_overlap = batch_size if cold or rebuild else int(changed)
+    expected_misses = 0 if rebuild else expected_overlap
+    expected_hits = 0 if rebuild else batch_size - expected_misses
+    solves = components["eigensolves_by_reason"]
+    phases = components["exclusive_phases"]
+    expected = (
+        (solves, "core_guess", expected_core),
+        (solves, "overlap", expected_overlap),
+        (phases, "initial_density", batch_size),
+        (phases, "overlap_cache_miss", expected_misses),
+        (phases, "overlap_cache_hit", expected_hits),
+    )
+    if any(
+        rows.get(name, {}).get("calls", 0) != count for rows, name, count in expected
+    ):
+        raise RuntimeError(
+            "preparation ablation did not execute its declared solve/cache policy"
+        )
 
 
 def host_workloads(
@@ -69,6 +115,7 @@ def host_workloads(
     energy_only,
     trace_directory=None,
     eager_core_ablation=False,
+    preparation_ablation=None,
 ):
     """Measure one source-bound cold/replay/rebuild domain without hiding setup.
 
@@ -87,10 +134,20 @@ def host_workloads(
         raise ValueError(
             "provide trace_directory explicitly; ambient profiling is not clean timing"
         )
-    if os.environ.get("VIBEQC_DF_EAGER_CORE_GUESS"):
+    if any(
+        os.environ.get(k)
+        for k in ("VIBEQC_DF_EAGER_CORE_GUESS", "VIBEQC_DF_REBUILD_OVERLAP")
+    ):
         raise ValueError(
-            "use eager_core_ablation explicitly; ambient guess policy is ambiguous"
+            "use an explicit ablation; ambient preparation policy is ambiguous"
         )
+    if preparation_ablation and eager_core_ablation:
+        raise ValueError("select one preparation ablation")
+    policies = (
+        preparation_policies(preparation_ablation) if preparation_ablation else None
+    )
+    if eager_core_ablation:
+        policies = {"baseline": (True, False), "candidate": (False, False)}
     library = Path(library).resolve(strict=True)
     source = _source_metadata(library)
     device, synchronize = _cuda()
@@ -113,6 +170,8 @@ def host_workloads(
         "metric_relative_threshold": 1e-10,
         "memory_budget_bytes": memory_budget_bytes,
         "eager_core_ablation": eager_core_ablation,
+        "preparation_ablation": preparation_ablation,
+        "preparation_policies": policies,
     }
     input_hash = canonical_hash(inputs)
     calculator = Calculator(
@@ -142,8 +201,8 @@ def host_workloads(
         def sample(_selection):
             nonlocal sequence
             # Both selections replay the same frozen density on one plan.
-            # This diagnostic request only restores the previously discarded
-            # warm core frame; its executed solves remain visible in the trace.
+            # Diagnostic switches restore discarded work, preserving numerical
+            # inputs. Separate actual-count gates reject ineffective controls.
             path = None
             if trace_directory is not None:
                 path = trace_directory / f"{sequence:04d}-{workload}.jsonl"
@@ -152,12 +211,15 @@ def host_workloads(
                 os.environ["VIBEQC_DF_HOST_TRACE"] = str(path.resolve())
             sequence += 1
             try:
-                if eager_core_ablation and _selection == "baseline":
-                    os.environ["VIBEQC_DF_EAGER_CORE_GUESS"] = "1"
+                if policies:
+                    eager, rebuild = policies[_selection]
+                    os.environ["VIBEQC_DF_EAGER_CORE_GUESS"] = "1" if eager else "0"
+                    os.environ["VIBEQC_DF_REBUILD_OVERLAP"] = "1" if rebuild else "0"
                 result = evaluate()
             finally:
-                if eager_core_ablation:
+                if policies:
                     os.environ.pop("VIBEQC_DF_EAGER_CORE_GUESS", None)
+                    os.environ.pop("VIBEQC_DF_REBUILD_OVERLAP", None)
                 if path is not None:
                     os.environ.pop("VIBEQC_DF_HOST_TRACE")
             if path is not None:
@@ -183,6 +245,14 @@ def host_workloads(
                         raise RuntimeError(
                             "eager/lazy ablation did not execute its declared core-guess policy"
                         )
+                if preparation_ablation:
+                    validate_preparation_counts(
+                        components,
+                        batch_size=batch_size,
+                        workload=workload,
+                        eager=eager,
+                        rebuild=rebuild,
+                    )
                 result["host_components"] = {
                     **components,
                     "raw_trace": trace_identity(path),
@@ -276,7 +346,7 @@ def host_workloads(
         destruction_seconds = time.perf_counter() - start
     if _source_metadata(library) != source:
         raise RuntimeError("source/library changed during workload measurement")
-    if eager_core_ablation:
+    if policies:
         validate_ablation_branches(rows)
     # Same-model cold endpoints check cache/replay integrity. They are not an
     # independent scientific oracle or a substitute for the matched #206 gate.
@@ -305,11 +375,13 @@ def host_workloads(
         "samples": rows,
         "prepared_setup_seconds": setup_seconds,
         "prepared_destruction_seconds": destruction_seconds,
-        "comparison": "eager core frame versus lazy warm initialization on one native library"
+        "comparison": f"original eager/rebuilt preparation versus {preparation_ablation} on one native library"
+        if preparation_ablation
+        else "eager core frame versus lazy warm initialization on one native library"
         if eager_core_ablation
         else "identical native configurations as an ABBA protocol control; no speedup claim",
         "timing_assessment": assess_comparison(rows)
-        if eager_core_ablation and trace_directory is None
+        if policies and trace_directory is None
         else None,
         "limitations": [
             "This probe records actual host solves; complete device work/traffic requires the separate CUDA/Nsight ledger.",

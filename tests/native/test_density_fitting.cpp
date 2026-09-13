@@ -18,6 +18,7 @@
 #include "scf/cuda_df_gradient.hpp"
 #include "scf/density_fitting.hpp"
 #include "scf/df_response_weights.hpp"
+#include "scf/initial_guess/overlap.hpp"
 #include "scf/mean_field.hpp"
 
 namespace {
@@ -967,11 +968,14 @@ int main() {
             ~PlanGuard() { vibeqc::scf::destroy_cuda_density_fitting_jk_plan(plan); }
           } cached;
           std::vector<std::optional<vibeqc::scf::DensityFittingScfData>> prepared_cache;
+          std::vector<vibeqc::scf::initial_guess::OverlapOrthogonalizer> overlap_owners(2);
+          const std::vector<vibeqc::scf::initial_guess::OverlapOrthogonalizer*> overlap_views{
+              &overlap_owners[0], &overlap_owners[1]};
           std::vector<double> initial_forces;
           for (std::size_t budget : {0U, 32768U, 1024U * 1024U, 8U * 1024U * 1024U}) {
             bucket_options.density_fitting_memory_budget_bytes = budget;
             const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
-                                    bucket_initial, 0, nullptr, &prepared_cache);
+                                    bucket_initial, 0, nullptr, &prepared_cache, &overlap_views);
             if (budget == 32768U) {
               // This sp batch cannot fit its preparation metadata in 32 KiB.
               // A stale default cache used to bypass that active limit.
@@ -1006,10 +1010,10 @@ int main() {
             for (double cutoff : {1.0e-10, 0.05, 1.0e-10}) {
               bucket_options.density_fitting_relative_threshold = cutoff;
               const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
-                                      bucket_initial, 0, nullptr, &prepared_cache);
+                                      bucket_initial, 0, nullptr, &prepared_cache, &overlap_views);
               PlanGuard fresh;
               const auto expected = run(&fresh.plan, bucket_systems, auxiliary, bucket_options,
-                                        bucket_initial, 0, nullptr, nullptr);
+                                        bucket_initial, 0, nullptr, nullptr, nullptr);
               for (std::size_t i = 0; i < bucket_systems.size(); ++i) {
                 require(replay[i].status == VIBEQC_STATUS_SUCCESS &&
                             expected[i].status == VIBEQC_STATUS_SUCCESS,

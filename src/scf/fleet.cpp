@@ -170,6 +170,12 @@ FleetPlan::FleetPlan(std::vector<core::System> systems, vibeqc_method method, Sc
   if (strategy.schedule == FockSchedule::CudaIndependent &&
       (shell_class_profiling_enabled_ || inactive_eigensolver_profiling_enabled_))
     throw std::invalid_argument("independent CUDA SCF does not expose fused-solver profiles");
+  const auto fitted_term = [](const FockTermSpec& term) {
+    return term.present && term.approximation == FockApproximation::DensityFitted;
+  };
+  if (backend == FockBackend::Cuda &&
+      (fitted_term(strategy.spec.coulomb) || fitted_term(strategy.spec.exchange)))
+    cuda_df_orthogonalizers_.resize(systems_.size());
   std::iota(execution_order_.begin(), execution_order_.end(), 0);
   std::stable_sort(execution_order_.begin(), execution_order_.end(),
                    [&](std::size_t a, std::size_t b) {
@@ -238,8 +244,10 @@ std::vector<FleetItemResult> FleetPlan::execute(
     item.warm_start_used = has_warm_density;
     const auto evaluate = [&](const std::vector<double>* initial_density) {
       const core::System auxiliary = auxiliary_for_geometry(auxiliary_template_, execution_system);
-      return run_fock_strategy_cached(independent_fock_plans_[system_index], execution_system,
-                                      &auxiliary, execution_options, device_id_, initial_density);
+      return run_fock_strategy_cached(
+          independent_fock_plans_[system_index], execution_system, &auxiliary, execution_options,
+          device_id_, initial_density,
+          cuda_df_orthogonalizers_.empty() ? nullptr : &cuda_df_orthogonalizers_[system_index]);
     };
     try {
       const std::vector<double>* initial_density =
@@ -414,6 +422,7 @@ std::vector<FleetItemResult> FleetPlan::execute(
       std::vector<core::System> df_systems;
       std::vector<std::size_t> original_indices;
       std::vector<const std::vector<double>*> initial_densities;
+      std::vector<initial_guess::OverlapOrthogonalizer*> overlap_caches;
       std::vector<double> bucket_positions;
       bool malformed_coordinate = false;
       df_systems.reserve(bucket_size);
@@ -439,6 +448,7 @@ std::vector<FleetItemResult> FleetPlan::execute(
         original_indices.push_back(system_index);
         initial_densities.push_back(has_warm_density ? &warm_densities_[system_index]->density
                                                      : nullptr);
+        overlap_caches.push_back(&cuda_df_orthogonalizers_[system_index]);
         append_geometry_positions(df_systems.back(), bucket_positions);
       }
 
@@ -472,11 +482,11 @@ std::vector<FleetItemResult> FleetPlan::execute(
                 ? run_uhf_density_fitting_cuda_bucket_cached(
                       &cuda_density_fitting_plans_[bucket], df_systems, auxiliary_template_,
                       execution_options, initial_densities, device_id_, &bucket_metric_diagnostics,
-                      prepared_cache)
+                      prepared_cache, &overlap_caches)
                 : run_rhf_density_fitting_cuda_bucket_cached(
                       &cuda_density_fitting_plans_[bucket], df_systems, auxiliary_template_,
                       execution_options, initial_densities, device_id_, &bucket_metric_diagnostics,
-                      prepared_cache);
+                      prepared_cache, &overlap_caches);
         if (!malformed_coordinate &&
             std::all_of(df_results.begin(), df_results.end(), [](const RhfBucketItem& result) {
               return result.status == VIBEQC_STATUS_SUCCESS;
@@ -535,9 +545,11 @@ std::vector<FleetItemResult> FleetPlan::execute(
                   auxiliary_for_geometry(auxiliary_template_, df_systems[slot]);
               item.scf = method_ == VIBEQC_METHOD_UHF
                              ? run_uhf_density_fitting_cuda(df_systems[slot], auxiliary,
-                                                            execution_options, device_id_, nullptr)
-                             : run_rhf_density_fitting_cuda(df_systems[slot], auxiliary,
-                                                            execution_options, device_id_, nullptr);
+                                                            execution_options, device_id_, nullptr,
+                                                            &cuda_df_orthogonalizers_[system_index])
+                             : run_rhf_density_fitting_cuda(
+                                   df_systems[slot], auxiliary, execution_options, device_id_,
+                                   nullptr, &cuda_df_orthogonalizers_[system_index]);
               item.status =
                   item.scf.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_SCF_NOT_CONVERGED;
             } catch (...) {

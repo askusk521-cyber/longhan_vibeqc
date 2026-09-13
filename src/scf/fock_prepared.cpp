@@ -7,6 +7,7 @@
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
+#include "scf/initial_guess/overlap.hpp"
 
 namespace vibeqc::scf {
 namespace {
@@ -103,6 +104,7 @@ struct PreparedFockPlan::Impl {
       cuda_df{nullptr, &destroy_cuda_density_fitting_jk_plan};
   std::optional<CpuFockPlanView> cpu_view;
   std::optional<CudaFockPlanView> cuda_view;
+  initial_guess::OverlapOrthogonalizer overlap_cache;
 
   const integrals::IntegralData& one_electron() const {
     return fitted ? fitted->one_electron : exact;
@@ -240,15 +242,25 @@ const core::System& PreparedFockPlan::system() const noexcept { return impl_->or
 const integrals::IntegralData& PreparedFockPlan::one_electron() const noexcept {
   return impl_->one_electron();
 }
+std::vector<double> PreparedFockPlan::overlap_orthogonalizer(
+    initial_guess::OverlapOrthogonalizer* external_cache) const {
+  const auto& data = one_electron();
+  auto* cache = impl_->cuda_view && impl_->fitted
+                    ? (external_cache ? external_cache : &impl_->overlap_cache)
+                    : nullptr;
+  return initial_guess::prepare_overlap_orthogonalizer(system(), data.overlap, data.nbf, cache);
+}
 const DensityFittingScfData* PreparedFockPlan::cpu_fitted_data() const noexcept {
   return impl_->cpu_view && impl_->fitted ? &*impl_->fitted : nullptr;
 }
 std::size_t PreparedFockPlan::cpu_observation_capacity() const noexcept {
   const auto* fitted = cpu_fitted_data();
   const auto& data = fitted ? fitted->one_electron : one_electron();
-  const auto orbital = runtime::vector_capacities(
-      data.overlap, data.hcore, data.eri, data.overlap_derivative, data.hcore_derivative,
-      data.eri_derivative, data.nuclear_repulsion_derivative);
+  const auto orbital = runtime::add_capacity(
+      runtime::vector_capacities(data.overlap, data.hcore, data.eri, data.overlap_derivative,
+                                 data.hcore_derivative, data.eri_derivative,
+                                 data.nuclear_repulsion_derivative),
+      impl_->overlap_cache.numeric_capacity_bytes());
   return fitted ? runtime::add_capacity(orbital, runtime::vector_capacities(
                                                      fitted->raw.metric, fitted->raw.three_center,
                                                      fitted->raw.metric_derivative,

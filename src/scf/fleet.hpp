@@ -10,6 +10,7 @@
 #include "scf/cuda_batch.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/density_fitting.hpp"
+#include "scf/initial_guess/overlap.hpp"
 #include "scf/types.hpp"
 #include "scf/warm_state.hpp"
 
@@ -113,6 +114,10 @@ class FleetPlan {
   std::vector<std::size_t> execution_order_;
   std::vector<std::size_t> bucket_ids_;
   std::vector<std::optional<HfWarmState>> warm_densities_;
+  // Compact per-source overlap state survives a neighboring item's failure
+  // or a value/force provider replan. This owner fixes basis and device;
+  // each cache independently checks the actual geometry and overlap values.
+  std::vector<initial_guess::OverlapOrthogonalizer> cuda_df_orthogonalizers_;
   // Independent CUDA sources are item-owned: a bad neighbor or a changed
   // ragged bucket population cannot reinterpret another item's source slot.
   std::vector<std::unique_ptr<PreparedFockPlan>> independent_fock_plans_;

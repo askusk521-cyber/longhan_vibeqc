@@ -68,3 +68,45 @@ geometry, actual host solves and a separate CUDA graph-node/transfer capture.
 
 The [lazy-core ablation](../../../benchmarks/results/issue309-lazy-core/README.md)
 retains the first clean/traced 96-AO energy/force pairs and caller validation.
+
+## Prepared overlap cache increment
+
+`initial_guess::OverlapOrthogonalizer` retains the existing FP64 symmetric
+inverse square root and checks exact overlap values and coordinates before
+reuse. The fixed `< 1e-10` overlap singularity policy and full-rank X layout
+are unchanged. Invalid shape, nonfinite S/X and singular solves clear this
+item's retained state before a retry can publish a replacement.
+
+The existing immutable calculation/source owner fixes ordered orbital basis,
+representation and backend/device. Separate owners never share cache storage.
+`FleetPlan` indexes caches in original source order, outside the replaceable
+bucket provider, so one changed geometry, a failed neighbor or an energy/force
+source replan cannot discard another item's X. Prepared single HF calculations
+retain X across fused/independent dispatch; the explicit independent `FockPlan`
+API retains its own cache and supports supplied RHF/UHF density. CPU and exact
+Direct paths keep their original reference-solve behavior.
+
+Only dependencies of S/X control this cache. Charge/occupation changes require
+appropriate density handling; DF metric cutoff and response/output selection
+do not change orbital overlap. Geometry changes always rebuild, even when a
+rigid translation happens to leave S equal. The overlap cutoff is currently
+fixed, not a runtime policy: changing its representation or numerical policy
+must invalidate the prepared owner. No basis or policy identity is inferred
+from matrix dimensions.
+
+The existing CUDA DF lifetime ledger reserves an additional two host AO
+matrices plus coordinates per source through destruction. The device SCF
+already owns its dX reservation; no additional device allocation is introduced.
+The independent source's host capacity observer includes its lazily retained
+numeric capacity. Cache storage is bounded to one S/X pair per item and follows
+the existing externally serialized prepared-object contract.
+
+The existing #206 runner accepts `--preparation-ablation lazy-core`,
+`overlap-cache` or `combined`. Each pairs the original eager/rebuilt baseline
+with that candidate on one binary and frozen density. The private
+`VIBEQC_DF_REBUILD_OVERLAP=1` diagnostic actually re-enters the reference solve.
+The traced gate checks leaf calls, cache misses/hits, preparation scopes and
+SCF iteration/retry branches, including a single changed item in batch 4.
+Clean and traced measurements are separate; cache-hit counts alone do not
+establish a speedup. Required solve providers (#310), final-state reuse (#311)
+and the remaining #206 acceptance matrix are still open.
