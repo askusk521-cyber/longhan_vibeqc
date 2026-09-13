@@ -476,6 +476,36 @@ class PreparedSpatialGrid:
                 result.close()
                 self._leased = False
 
+    @contextmanager
+    def device_xc_tasks(self, density, functional, *, stamp=None, route="auto"):
+        """Lend serial local CUDA tasks with the minimal native XC feature mask."""
+        with self._lock:
+            self._check()
+            if self._cuda is None:
+                raise ValueError("device XC consumption requires CUDA")
+            required = {"rho"} if functional == "LDA_XC_PW" else {"rho", "gradient"}
+            if functional not in ("LDA_XC_PW", "PBE") or not required.issubset(
+                self._cuda.ingredients
+            ):
+                raise ValueError("prepared CUDA features do not cover native XC")
+            self._start_execution(density, stamp=stamp, route=route)
+            self._leased = True
+
+            def iterator():
+                for task, ids in self._tiles():
+                    with self._cuda.xc_task(
+                        self.grid.points[ids], task.ao_ids, functional, stamp=stamp
+                    ) as lease:
+                        yield task, ids, lease
+
+            result = iterator()
+        try:
+            yield result
+        finally:
+            with self._lock:
+                result.close()
+                self._leased = False
+
     def reconfigure(self, basis, grid, **changes):
         """Replace immutable scientific state transactionally, charging both owners."""
         with self._lock:

@@ -148,9 +148,10 @@ def test_spatial_xc_current_routes_and_two_budgets(
                     check(actual[key], expected[key])
                 stats = endpoint.statistics
                 assert stats["source"]["source_kind"] == route
-                assert stats["xc_backend"] == "native_cpu"
+                assert stats["xc_backend"] == "native_cuda"
                 assert stats["spatial"]["mask_identity"] == spatial.tasks.identity
-                assert stats["spatial"]["potential_scatter_backend"] == "native_cpu"
+                assert stats["spatial"]["potential_scatter_backend"] == "native_cuda"
+                assert stats["cpu_contraction_seconds"] == 0
                 assert (
                     stats["native_metrics"]["owned_device_bytes"]
                     == spatial.tile_plan.allocation_bytes
