@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from functools import cache, lru_cache
 from importlib import resources
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -21,6 +22,9 @@ from .basis_capabilities import require_basis, resolved_basis_metadata
 from .elements import atomic_number as element_number
 from .elements import checked_integer
 from .profiles import canonical_hash
+
+if TYPE_CHECKING:
+    from .ks_diagnostics import KsDiagnostic
 
 _METHODS = {
     "rhf": _native.METHOD_RHF,
@@ -125,6 +129,7 @@ class Result:
     precision: dict | None = None
     correlation: CorrelationResult | None = None
     physical_residual_rms: float | None = None
+    ks_diagnostic: KsDiagnostic | None = None
 
 
 @dataclass(frozen=True)
@@ -1327,6 +1332,11 @@ class Calculator:
                 if result_descriptor.executed_backend == _native.BACKEND_CUDA
                 else "cpu_reference"
             )
+            ks_diagnostic = None
+            if self._ks_options is not None:
+                from .ks_diagnostics import read_ks_diagnostic
+
+                ks_diagnostic = read_ks_diagnostic(self._library, calculation)
             return Result(
                 energy=result_descriptor.energy,
                 forces=forces,
@@ -1348,6 +1358,7 @@ class Calculator:
                 ),
                 correlation=correlation,
                 physical_residual_rms=physical_residual_rms,
+                ks_diagnostic=ks_diagnostic,
             )
         finally:
             if calculation.value:

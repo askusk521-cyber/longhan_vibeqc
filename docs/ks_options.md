@@ -44,6 +44,9 @@ GGA needs values and first spatial derivatives. SCF requires scalar energy
 and its first derivative for the potential, even for an energy-only output.
 Neither route computes tau or higher AO jets.
 
+Completed results expose the resolved grid and physical iteration records in
+[`ks_diagnostic`](ks_diagnostics.md).
+
 `GridSpec` selects the radial/polar/azimuth counts, partition iterations,
 coincident-center tolerance and per-element radial scales. The native grid
 uses the same rational-Legendre radial rule, Legendre-trapezoid angular rule

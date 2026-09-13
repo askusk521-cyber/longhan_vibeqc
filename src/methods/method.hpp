@@ -48,6 +48,9 @@ struct Result {
   /** Optional physical commutator at the returned density; zero is a valid
    * measured value, while absence means the method does not report it. */
   std::optional<double> physical_residual_rms;
+  /** Completed KS solve, moved through the adapter and ABI handle. Keeping a
+   * single exported history owner preserves the method resource bound. */
+  std::optional<dft::ScfDiagnostic> ks_diagnostic;
 };
 
 struct BatchItemResult {

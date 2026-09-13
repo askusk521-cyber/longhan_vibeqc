@@ -87,6 +87,14 @@ void check_measures(bool uks, bool pbe) {
                                      &handles.calculation) == VIBEQC_STATUS_SUCCESS,
           "preparation failed");
   vibeqc_scf_diagnostic diagnostic{sizeof(diagnostic), VIBEQC_ABI_VERSION, -7, -11};
+  vibeqc_ks_diagnostic ks{};
+  ks.struct_size = sizeof(ks);
+  ks.abi_version = VIBEQC_ABI_VERSION;
+  ks.nuclear_energy = -19;
+  require(vibeqc_calculation_get_ks_diagnostic(handles.calculation, &ks, nullptr, 0) ==
+                  VIBEQC_STATUS_NOT_IMPLEMENTED &&
+              ks.nuclear_energy == -19,
+          "unexecuted calculation published a KS snapshot");
   require(
       vibeqc_calculation_get_scf_diagnostic(nullptr, &diagnostic) == VIBEQC_STATUS_INVALID_ARGUMENT,
       "null calculation accepted");
@@ -110,6 +118,33 @@ void check_measures(bool uks, bool pbe) {
               diagnostic.density_rms == result.density_rms &&
               std::abs(diagnostic.physical_residual_rms - native.physical_residual_rms) < 1e-13,
           "C API changed the legacy density measure or conflated it with physical residual");
+  vibeqc_ks_iteration row{};
+  row.struct_size = sizeof(row);
+  row.abi_version = VIBEQC_ABI_VERSION;
+  require(vibeqc_calculation_get_ks_diagnostic(handles.calculation, &ks, &row, 1) ==
+              VIBEQC_STATUS_SUCCESS,
+          "completed valid nonconverged KS history unavailable");
+  const auto& physical = native.dft_diagnostic;
+  require(ks.history_count == 1 && row.iteration == 1 && ks.fock_builds == 1 &&
+              ks.grid_points == grid.point_count() && ks.tile_points == 256 &&
+              ks.required_ao_order == (pbe ? 1U : 0U) && !ks.initial_density_used &&
+              ks.occupations[0] == physical.occupations[0] &&
+              ks.occupations[1] == physical.occupations[1] &&
+              std::abs(ks.xc_energy - physical.components.xc) < 1e-13 &&
+              std::abs(ks.physical_residual_max - physical.physical_residual) < 1e-13 &&
+              row.xc_energy == ks.xc_energy && std::isinf(row.energy_change) &&
+              std::abs(row.density_change_max - physical.history[0].density_change) < 1e-13,
+          "KS snapshot lost its model, occupations, physical components or iteration history");
+  ks.nuclear_energy = -19;
+  require(vibeqc_calculation_get_ks_diagnostic(handles.calculation, &ks, &row, 0) ==
+                  VIBEQC_STATUS_INVALID_ARGUMENT &&
+              ks.nuclear_energy == -19,
+          "short KS history buffer partially overwrote summary");
+  row.abi_version += 1;
+  require(vibeqc_calculation_get_ks_diagnostic(handles.calculation, &ks, &row, 1) ==
+                  VIBEQC_STATUS_ABI_MISMATCH &&
+              ks.nuclear_energy == -19,
+          "invalid KS history ABI partially overwrote summary");
   diagnostic.abi_version += 1;
   require(vibeqc_calculation_get_scf_diagnostic(handles.calculation, &diagnostic) ==
               VIBEQC_STATUS_ABI_MISMATCH,
@@ -133,6 +168,10 @@ void check_measures(bool uks, bool pbe) {
                   VIBEQC_STATUS_NOT_IMPLEMENTED &&
               diagnostic.density_rms == -7 && diagnostic.physical_residual_rms == -11,
           "failed backend execution retained stale diagnostic values");
+  require(vibeqc_calculation_get_ks_diagnostic(handles.calculation, &ks, nullptr, 0) ==
+                  VIBEQC_STATUS_NOT_IMPLEMENTED &&
+              ks.nuclear_energy == -19,
+          "failed execution exposed the preceding KS history");
 }
 }  // namespace
 

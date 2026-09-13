@@ -20,6 +20,8 @@ struct ScfIteration {
   EnergyComponents components;
   double energy_change{}, density_change{}, physical_residual{};
   std::array<double, 2> electrons{};
+  /** Only the orbital proposal is shifted; the recorded physical terms are not. */
+  bool occupation_stabilized{};
 };
 
 /** Method-owned diagnostics for one solve; history is reset for every replay.
@@ -27,6 +29,10 @@ struct ScfIteration {
  */
 struct ScfDiagnostic {
   std::array<std::size_t, 2> occupations{};
+  std::array<double, 2> electrons{};
+  std::size_t grid_points{}, tile_points{}, ao_order{}, fock_builds{};
+  bool initial_density_used{};
+  double density_change{};
   double physical_residual{std::numeric_limits<double>::infinity()};
   EnergyComponents components;
   std::vector<ScfIteration> history;

@@ -57,7 +57,8 @@ def _item_host_inventory(item, *, diis_history, max_iterations, pbe, backend, mo
     basis = byte_product(8, packed)
     warm_and_matrices = byte_product(8, n2, 4 + 4 * spins) + 8 * 3 * a * 4
     # 128 bytes covers ScfIteration (checked by native inventory v1); the
-    # factor two includes vector growth or the temporary returned CUDA history.
+    # factor two includes CPU vector growth or the CUDA owner plus its exported
+    # history. The adapter/ABI move that export through to its cached handle.
     history = byte_product(256, max_iterations)
     provider = byte_product(8, 2 * n2 + (n2 * n2 if backend == "cpu" else 0))
     # The provider retains S/H; do not count those again as a second owner.

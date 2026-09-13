@@ -267,6 +267,49 @@ Physical ownership comparison against merged `15d6936`: scientific CUDA
 retirement. The current source/build snapshot is retained in
 `docs/cuda_ownership_current.json`.
 
+## Public physical KS diagnostic increment
+
+The C/Python result path now retains the native physical KS snapshot:
+occupations, AO-metric electron counts, actual grid/tile/AO order, final energy
+components, per-spin maximum convergence measures, Fock-build count and every
+iteration of the reported solve. UKS history records whether each orbital
+proposal used occupation stabilization. CPU RKS final validation remains
+separate from its original historical iterations. The first energy difference
+is absent in Python JSON because there is no preceding energy.
+
+The additive C summary/history query validates every output before writing,
+preserves legacy result-array strides, and cannot expose an earlier item's
+record after a failed or invalid replay. Python snapshots contain immutable
+dataclasses/tuples and survive later execution unchanged. The adapter moves
+the exported native history to the C handle rather than copying it at each
+layer. See [the public contract](../../../docs/ks_diagnostics.md).
+
+CPU validation: 25/25 native tests; seven initial diagnostic tests plus
+the explicit cold-retry case; 93 selected KS/HF resource, calculator, model,
+batch and independent-SCF regressions (three optional skips); and eight model
+option cases with actual diagnostic grid/tile checks. All ten complete native
+C++ heap cases fit their plans and release tracked allocations:
+`/tmp/vibeqc-162-diagnostics-cpu-heap-20260914.json`.
+
+CUDA validation passed 4/4 native tests and all 46 selected KS/HF diagnostic,
+model, resource, batch and independent-SCF cases. Full native KS and all seven
+CUDA diagnostic cases passed Compute Sanitizer memcheck: zero errors and zero
+bytes leaked in each process. Every GPU run used a finite Slurm RTX 5090 job.
+
+The independent H3+ RKS diagnostic cases exposed a CUDA DIIS failure: after
+history errors became nearly dependent, the kernel returned the current Fock
+instead of retrying with recent independent errors. LDA/PBE energy was stable
+while residuals remained about 1e-8/1e-7 after 150 steps. Normalized KS DIIS now
+retires the oldest ring entry and retries, matching CPU policy without moving
+matrices or adding storage. The unnormalized HF slot order/fallback is retained.
+These same independent H3+ component/physical-residual cases now pass. Warm
+fallback also releases its discarded exported history before a second solve,
+preserving the existing two-history resource bound.
+
+This increment does not yet supply complete timing/transport records across
+preparation, discarded warm attempts, geometry rebuild and finalization.
+Those remain part of the original acceptance work below.
+
 ## Remaining work against the full issue
 
 1. Preserve the implemented method-level #203 resource contract as richer
@@ -282,10 +325,11 @@ retirement. The current source/build snapshot is retained in
    numerical identity as diagnostics and evidence are completed. Geometry,
    basis, spin/charge, grid and functional/regularization changes must retain
    the validated invalidation and current-density generation gates.
-5. Expose physical residual, density change, occupations, iteration history,
-   components, actual backend and transfers. The merged additive SCF query
-   already exposes distinct density-update and physical RMS; richer KS
-   occupations/history/components/transport remain to be published.
+5. Complete measured component costs and transport diagnostics, including
+   common provider preparation, discarded attempts and final outputs. Public
+   physical residual/density change, occupations, grid/model and numerical
+   history/component snapshots are implemented; the enclosing result reports
+   the actual backend.
 6. Publish permanent source-bound resource evidence alongside the final #138
    workload records. Public KS budgets now include prepare/execute observation,
    all J/grid/XC/state/DIIS owners and host setup bounds. The standalone CPU

@@ -280,6 +280,49 @@ class ScfDiagnostic(ctypes.Structure):
     ]
 
 
+class KsIterationDescriptor(ctypes.Structure):
+    """One physical iteration; energy_change has no finite value on step one."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("iteration", ctypes.c_uint32),
+        ("occupation_stabilized", ctypes.c_int32),
+        ("nuclear_energy", ctypes.c_double),
+        ("one_electron_energy", ctypes.c_double),
+        ("hartree_energy", ctypes.c_double),
+        ("xc_energy", ctypes.c_double),
+        ("energy_change", ctypes.c_double),
+        ("density_change_max", ctypes.c_double),
+        ("physical_residual_max", ctypes.c_double),
+        ("electrons", ctypes.c_double * 2),
+    ]
+
+
+class KsDiagnosticDescriptor(ctypes.Structure):
+    """Additive KS summary; legacy result arrays retain their exact stride."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("scf_domain_version", ctypes.c_uint32),
+        ("required_ao_order", ctypes.c_uint32),
+        ("history_count", ctypes.c_uint32),
+        ("initial_density_used", ctypes.c_int32),
+        ("occupations", ctypes.c_uint64 * 2),
+        ("grid_points", ctypes.c_uint64),
+        ("tile_points", ctypes.c_uint64),
+        ("fock_builds", ctypes.c_uint64),
+        ("electrons", ctypes.c_double * 2),
+        ("nuclear_energy", ctypes.c_double),
+        ("one_electron_energy", ctypes.c_double),
+        ("hartree_energy", ctypes.c_double),
+        ("xc_energy", ctypes.c_double),
+        ("density_change_max", ctypes.c_double),
+        ("physical_residual_max", ctypes.c_double),
+    ]
+
+
 class PrecisionProvenance(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -605,6 +648,20 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
         ctypes.POINTER(PppsQueueProfile),
     ]
     library.vibeqc_batch_get_last_ppps_queue_profile.restype = ctypes.c_int
+    for name, prefix in (
+        ("vibeqc_calculation_get_ks_diagnostic", [ctypes.c_void_p]),
+        ("vibeqc_batch_get_ks_diagnostic", [ctypes.c_void_p, ctypes.c_uint32]),
+    ):
+        ks_query = getattr(library, name, None)
+        if ks_query is not None:
+            ks_query.argtypes = [
+                *prefix,
+                ctypes.POINTER(KsDiagnosticDescriptor),
+                ctypes.POINTER(KsIterationDescriptor),
+                ctypes.c_uint32,
+            ]
+            ks_query.restype = ctypes.c_int
+
     library.vibeqc_batch_get_last_eigensolver_diagnostics.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(EigensolverDiagnostic),

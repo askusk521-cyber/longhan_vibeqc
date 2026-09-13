@@ -249,6 +249,9 @@ struct CudaKsPlan::Impl : KsStateStorage {
     output = {};
     output.dft_diagnostic.history = std::move(retained_history);
     output.dft_diagnostic.occupations = occupations;
+    output.dft_diagnostic.grid_points = xc->layout().npoint;
+    output.dft_diagnostic.tile_points = xc->layout().tile_points;
+    output.dft_diagnostic.ao_order = xc->layout().pbe ? 1 : 0;
     output.initial_density_used = input != nullptr || use_warm;
     is_active = false;
     started = true;
@@ -379,16 +382,15 @@ struct CudaKsPlan::Impl : KsStateStorage {
     diagnostic.components = {provider.one_electron().nuclear_repulsion, physical.one_electron,
                              physical.hartree, physical.xc};
     diagnostic.physical_residual = physical.residual;
+    diagnostic.electrons = {physical.electrons[0], physical.electrons[1]};
+    diagnostic.density_change = physical.density_change;
     output.physical_residual_rms = physical.residual_rms;
     output.energy = diagnostic.components.total();
     output.energy_change = std::abs(output.energy - previous_energy);
     output.density_rms = physical.density_rms;
-    diagnostic.history.push_back({output.iterations,
-                                  diagnostic.components,
-                                  output.energy_change,
-                                  physical.density_change,
-                                  physical.residual,
-                                  {physical.electrons[0], physical.electrons[1]}});
+    diagnostic.history.push_back({output.iterations, diagnostic.components, output.energy_change,
+                                  physical.density_change, physical.residual, diagnostic.electrons,
+                                  stabilize_occupations});
     // The kernel validates electronic components; their host-side sum with
     // the nuclear term must also be finite before any convergence/cache gate.
     is_failed = physical.failure != 0 || !std::isfinite(output.energy);

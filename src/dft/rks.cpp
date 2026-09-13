@@ -4,6 +4,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "dft/ao_grid.hpp"
@@ -148,6 +149,9 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   result.initial_density_used = initial_density != nullptr;
   auto& ks = result.dft_diagnostic;
   ks.occupations = {occupied, occupied};
+  ks.grid_points = grid.point_count();
+  ks.tile_points = std::min(options.xc_tile_points, grid.point_count());
+  ks.ao_order = std::string_view(method_name) == "PBE" ? 1 : 0;
   auto& diagnostic = result.xc_density_diagnostic;
   diagnostic.physical_residual = std::numeric_limits<double>::infinity();
   std::shared_ptr<const OccupiedDensityFactor> factor;
@@ -241,6 +245,8 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
     result.physical_residual_rms = ks.physical_residual;
     ks.components = physical.components;
     const double spin_electrons = dot(density, ints.overlap) / 2.0;
+    ks.electrons = {spin_electrons, spin_electrons};
+    ks.density_change = result.density_rms;
     ks.history.push_back({iteration,
                           physical.components,
                           result.energy_change,
@@ -282,6 +288,9 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   ks.physical_residual = diagnostic.physical_residual;
   result.physical_residual_rms = ks.physical_residual;
   ks.components = final.components;
+  const double final_spin_electrons = dot(density, ints.overlap) / 2.0;
+  ks.electrons = {final_spin_electrons, final_spin_electrons};
+  ks.density_change = result.density_rms;
   result.energy_change = std::abs(final.energy - result.energy);
   result.converged = result.energy_change < options.energy_tolerance &&
                      result.density_rms < options.density_tolerance &&

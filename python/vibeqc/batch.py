@@ -14,6 +14,7 @@ import numpy as np
 from . import _native
 from .accuracy import AccuracyAssessment
 from .calculator import Atom, Calculator
+from .ks_diagnostics import KsDiagnostic, read_ks_diagnostic
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class BatchItemResult:
     precision: dict | None = None
     # Physical commutator at the returned density; absent for unsupported methods.
     physical_residual_rms: float | None = None
+    ks_diagnostic: KsDiagnostic | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -743,6 +745,9 @@ class PreparedBatch:
                     energy_change=output.energy_change,
                     density_rms=output.density_rms,
                     physical_residual_rms=physical_residual_rms,
+                    ks_diagnostic=read_ks_diagnostic(self._library, self._batch, index)
+                    if self._calculator._ks_options is not None
+                    else None,
                     executed_backend={
                         _native.BACKEND_CPU_REFERENCE: "cpu_reference",
                         _native.BACKEND_CUDA: "cuda",

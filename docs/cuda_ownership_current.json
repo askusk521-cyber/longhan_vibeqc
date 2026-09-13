@@ -2903,20 +2903,20 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 9145,
+      "bytes": 9916,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 165,
+        "runtime": 177,
         "scientific": 0
       },
       "path": "src/scf/cuda/scf_diis_kernels.cu",
-      "physical_lines": 184,
+      "physical_lines": 200,
       "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
       "regions": [],
       "role": "runtime",
-      "sha256": "8277ab641324db08873871176b8107e81dbe6dd69d2232b908a240c79c89816d",
+      "sha256": "0c7d21c7f648e56681a0ec510a89e3d9b45e4f5d1a02049a52caf7b1b38b6bc4",
       "subsystem": "scf_tensor"
     },
     {
@@ -3361,7 +3361,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 9029,
+    "runtime": 9041,
     "scientific": 10585
   },
   "migration_ledger": {
@@ -3578,7 +3578,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 1987,
+      "runtime": 1999,
       "scientific": 425
     },
     "xc": {

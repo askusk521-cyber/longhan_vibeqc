@@ -133,6 +133,9 @@ def test_custom_native_grid_matches_independent_scf_and_budget(method, device):
     native = calculator.singlepoint(atoms, charge=charge, multiplicity=multiplicity)
     assert native.converged and native.physical_residual_rms < 1e-9
     assert native.executed_backend == ("cuda" if device == "cuda" else "cpu_reference")
+    assert native.ks_diagnostic.grid_points == len(grid.weights)
+    assert native.ks_diagnostic.tile_points == options.tile_points
+    assert native.ks_diagnostic.ao_order == calculator.ks_options.ao_order
     for guess in ("minao", "1e"):
         reference = dft.UKS(mol) if uks else dft.RKS(mol)
         reference.xc = "PBE" if method.startswith("pbe") else "LDA_X,LDA_C_PW"

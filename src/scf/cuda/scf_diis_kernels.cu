@@ -56,109 +56,125 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
     return;
   }
 
-  const std::uint32_t dimension = count + 1;
   const std::size_t system_stride =
       static_cast<std::size_t>(history_capacity + 1) * (history_capacity + 1);
   double* matrix = linear_system + static_cast<std::size_t>(system) * system_stride;
   double* rhs = coefficients + static_cast<std::size_t>(system) * (history_capacity + 1);
-  const std::size_t linear_elements = static_cast<std::size_t>(dimension) * dimension;
-  for (std::size_t element = threadIdx.x; element < linear_elements; element += blockDim.x) {
-    matrix[element] = 0.0;
-  }
-  for (std::uint32_t row = threadIdx.x; row < dimension; row += blockDim.x) {
-    rhs[row] = row == count ? -1.0 : 0.0;
-  }
-  __syncwarp();
-  const std::size_t dot_count = static_cast<std::size_t>(count) * count;
-  for (std::size_t pair = threadIdx.x; pair < dot_count; pair += blockDim.x) {
-    const std::uint32_t row = static_cast<std::uint32_t>(pair / count);
-    const std::uint32_t column = static_cast<std::uint32_t>(pair % count);
-    const std::size_t row_offset = static_cast<std::size_t>(system) * history_stride +
-                                   static_cast<std::size_t>(row) * vector_size;
-    const std::size_t column_offset = static_cast<std::size_t>(system) * history_stride +
-                                      static_cast<std::size_t>(column) * vector_size;
-    double dot = 0.0;
-    for (std::size_t element = 0; element < vector_size; ++element) {
-      dot += residual_history[row_offset + element] * residual_history[column_offset + element];
-    }
-    matrix[static_cast<std::size_t>(row) * dimension + column] = dot;
-  }
-  __syncwarp();
-  if (threadIdx.x == 0) {
-    // A single common scale preserves the augmented DIIS solution. KS uses
-    // this to avoid treating every residual below 1e-7 as an absolute-pivot
-    // singularity. Existing HF callers retain the historical default path.
-    if (normalize_metric) {
-      double scale = 0.0;
-      for (std::uint32_t row = 0; row < count; ++row)
-        scale = fmax(scale, fabs(matrix[static_cast<std::size_t>(row) * dimension + row]));
-      if (scale > 0.0 && isfinite(scale))
-        for (std::uint32_t row = 0; row < count; ++row)
-          for (std::uint32_t column = 0; column < count; ++column)
-            matrix[static_cast<std::size_t>(row) * dimension + column] /= scale;
-    }
-    for (std::uint32_t row = 0; row < count; ++row) {
-      matrix[static_cast<std::size_t>(row) * dimension + count] = -1.0;
-      matrix[static_cast<std::size_t>(count) * dimension + row] = -1.0;
-    }
-  }
-  __syncwarp();
-
+  // Normalized KS DIIS retires the oldest dependent error and retries, as
+  // CPU Diis does. Preserve chronological ring order without moving matrices.
+  // Historical HF callers retain their unnormalized slot order and fallback.
+  std::uint32_t first =
+      normalize_metric ? (slot + 1 + history_capacity - count) % history_capacity : 0;
   int nonsingular = 1;
-  if (threadIdx.x == 0) {
-    for (std::uint32_t column = 0; column < dimension; ++column) {
-      std::uint32_t pivot = column;
-      for (std::uint32_t row = column + 1; row < dimension; ++row) {
-        if (fabs(matrix[static_cast<std::size_t>(row) * dimension + column]) >
-            fabs(matrix[static_cast<std::size_t>(pivot) * dimension + column])) {
-          pivot = row;
-        }
+  for (;;) {
+    const std::uint32_t dimension = count + 1;
+    const std::size_t linear_elements = static_cast<std::size_t>(dimension) * dimension;
+    for (std::size_t element = threadIdx.x; element < linear_elements; element += blockDim.x) {
+      matrix[element] = 0.0;
+    }
+    for (std::uint32_t row = threadIdx.x; row < dimension; row += blockDim.x) {
+      rhs[row] = row == count ? -1.0 : 0.0;
+    }
+    __syncwarp();
+    const std::size_t dot_count = static_cast<std::size_t>(count) * count;
+    for (std::size_t pair = threadIdx.x; pair < dot_count; pair += blockDim.x) {
+      const std::uint32_t row = static_cast<std::uint32_t>(pair / count);
+      const std::uint32_t column = static_cast<std::uint32_t>(pair % count);
+      const std::size_t row_offset =
+          static_cast<std::size_t>(system) * history_stride +
+          static_cast<std::size_t>((first + row) % history_capacity) * vector_size;
+      const std::size_t column_offset =
+          static_cast<std::size_t>(system) * history_stride +
+          static_cast<std::size_t>((first + column) % history_capacity) * vector_size;
+      double dot = 0.0;
+      for (std::size_t element = 0; element < vector_size; ++element) {
+        dot += residual_history[row_offset + element] * residual_history[column_offset + element];
       }
-      const double diagonal = matrix[static_cast<std::size_t>(pivot) * dimension + column];
-      if (fabs(diagonal) < 1.0e-14) {
-        nonsingular = 0;
-        break;
+      matrix[static_cast<std::size_t>(row) * dimension + column] = dot;
+    }
+    __syncwarp();
+    if (threadIdx.x == 0) {
+      // A single common scale preserves the augmented DIIS solution. KS uses
+      // this to avoid treating every residual below 1e-7 as an absolute-pivot
+      // singularity. Existing HF callers retain the historical default path.
+      if (normalize_metric) {
+        double scale = 0.0;
+        for (std::uint32_t row = 0; row < count; ++row)
+          scale = fmax(scale, fabs(matrix[static_cast<std::size_t>(row) * dimension + row]));
+        if (scale > 0.0 && isfinite(scale))
+          for (std::uint32_t row = 0; row < count; ++row)
+            for (std::uint32_t column = 0; column < count; ++column)
+              matrix[static_cast<std::size_t>(row) * dimension + column] /= scale;
       }
-      if (pivot != column) {
-        for (std::uint32_t item = 0; item < dimension; ++item) {
-          const std::size_t first = static_cast<std::size_t>(column) * dimension + item;
-          const std::size_t second = static_cast<std::size_t>(pivot) * dimension + item;
-          const double swap = matrix[first];
-          matrix[first] = matrix[second];
-          matrix[second] = swap;
-        }
-        const double swap = rhs[column];
-        rhs[column] = rhs[pivot];
-        rhs[pivot] = swap;
-      }
-      const double scale = matrix[static_cast<std::size_t>(column) * dimension + column];
-      for (std::uint32_t item = column; item < dimension; ++item) {
-        matrix[static_cast<std::size_t>(column) * dimension + item] /= scale;
-      }
-      rhs[column] /= scale;
-      for (std::uint32_t row = 0; row < dimension; ++row) {
-        if (row == column) continue;
-        const double factor = matrix[static_cast<std::size_t>(row) * dimension + column];
-        for (std::uint32_t item = column; item < dimension; ++item) {
-          matrix[static_cast<std::size_t>(row) * dimension + item] -=
-              factor * matrix[static_cast<std::size_t>(column) * dimension + item];
-        }
-        rhs[row] -= factor * rhs[column];
+      for (std::uint32_t row = 0; row < count; ++row) {
+        matrix[static_cast<std::size_t>(row) * dimension + count] = -1.0;
+        matrix[static_cast<std::size_t>(count) * dimension + row] = -1.0;
       }
     }
+    __syncwarp();
+
+    nonsingular = 1;
+    if (threadIdx.x == 0) {
+      for (std::uint32_t column = 0; column < dimension; ++column) {
+        std::uint32_t pivot = column;
+        for (std::uint32_t row = column + 1; row < dimension; ++row) {
+          if (fabs(matrix[static_cast<std::size_t>(row) * dimension + column]) >
+              fabs(matrix[static_cast<std::size_t>(pivot) * dimension + column])) {
+            pivot = row;
+          }
+        }
+        const double diagonal = matrix[static_cast<std::size_t>(pivot) * dimension + column];
+        if (fabs(diagonal) < 1.0e-14) {
+          nonsingular = 0;
+          break;
+        }
+        if (pivot != column) {
+          for (std::uint32_t item = 0; item < dimension; ++item) {
+            const std::size_t first = static_cast<std::size_t>(column) * dimension + item;
+            const std::size_t second = static_cast<std::size_t>(pivot) * dimension + item;
+            const double swap = matrix[first];
+            matrix[first] = matrix[second];
+            matrix[second] = swap;
+          }
+          const double swap = rhs[column];
+          rhs[column] = rhs[pivot];
+          rhs[pivot] = swap;
+        }
+        const double scale = matrix[static_cast<std::size_t>(column) * dimension + column];
+        for (std::uint32_t item = column; item < dimension; ++item) {
+          matrix[static_cast<std::size_t>(column) * dimension + item] /= scale;
+        }
+        rhs[column] /= scale;
+        for (std::uint32_t row = 0; row < dimension; ++row) {
+          if (row == column) continue;
+          const double factor = matrix[static_cast<std::size_t>(row) * dimension + column];
+          for (std::uint32_t item = column; item < dimension; ++item) {
+            matrix[static_cast<std::size_t>(row) * dimension + item] -=
+                factor * matrix[static_cast<std::size_t>(column) * dimension + item];
+          }
+          rhs[row] -= factor * rhs[column];
+        }
+      }
+    }
+    __syncwarp();
+    // The solve is lane-zero-only; broadcast its success flag before any lane
+    // decides whether it should form the extrapolated Fock matrix.
+    nonsingular = __shfl_sync(0xffffffffU, nonsingular, 0);
+
+    if (nonsingular || !normalize_metric || count <= 2) break;
+    --count;
+    first = (first + 1) % history_capacity;
+    if (threadIdx.x == 0) history_count[system] = count;
   }
-  __syncwarp();
-  // The solve is lane-zero-only; broadcast its success flag before any lane
-  // decides whether it should form the extrapolated Fock matrix.
-  nonsingular = __shfl_sync(0xffffffffU, nonsingular, 0);
 
   for (std::size_t element = threadIdx.x; element < vector_size; element += blockDim.x) {
     double value = fock[matrix_offset + element];
     if (nonsingular) {
       value = 0.0;
       for (std::uint32_t item = 0; item < count; ++item) {
-        const std::size_t item_offset = static_cast<std::size_t>(system) * history_stride +
-                                        static_cast<std::size_t>(item) * vector_size;
+        const std::size_t item_offset =
+            static_cast<std::size_t>(system) * history_stride +
+            static_cast<std::size_t>((first + item) % history_capacity) * vector_size;
         value += rhs[item] * fock_history[item_offset + element];
       }
     }

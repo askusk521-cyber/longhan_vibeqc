@@ -96,6 +96,9 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   result.initial_density_used = initial_density != nullptr;
   auto& diagnostic = result.dft_diagnostic;
   diagnostic.occupations = {na, nb};
+  diagnostic.grid_points = grid.point_count();
+  diagnostic.tile_points = std::min(options.xc_tile_points, grid.point_count());
+  diagnostic.ao_order = pbe ? 1 : 0;
   double previous_energy = std::numeric_limits<double>::infinity();
   const double residual_gate = std::min(1.0e-9, options.density_tolerance);
   bool stabilize_occupations = false;
@@ -124,12 +127,11 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
     const double change_a = density_rms(next_a, alpha), change_b = density_rms(next_b, beta);
     const double density_change = std::max(change_a, change_b);
     result.density_rms = std::hypot(change_a, change_b) / std::sqrt(2.0);
-    diagnostic.history.push_back({iteration,
-                                  physical.components,
-                                  result.energy_change,
-                                  density_change,
-                                  diagnostic.physical_residual,
-                                  {dot(alpha, ints.overlap), dot(beta, ints.overlap)}});
+    diagnostic.electrons = {dot(alpha, ints.overlap), dot(beta, ints.overlap)};
+    diagnostic.density_change = density_change;
+    diagnostic.history.push_back({iteration, physical.components, result.energy_change,
+                                  density_change, diagnostic.physical_residual,
+                                  diagnostic.electrons, stabilize_occupations});
     // Sample actual coexisting capacities. Recurrence, XC tile and solver
     // temporaries have already retired here and remain outside this sample.
     runtime::sample_cpu_capacity(runtime::add_capacity(

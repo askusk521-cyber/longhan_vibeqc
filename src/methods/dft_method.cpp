@@ -126,7 +126,7 @@ dft::GridSpec ks_grid_options(const vibeqc_method_descriptor& descriptor,
   return grid;
 }
 
-Result adapt_result(const scf::ScfResult& native, vibeqc_backend backend) {
+Result adapt_result(scf::ScfResult native, vibeqc_backend backend) {
   Result result;
   result.energy = native.energy;
   result.convergence.iterations = native.iterations;
@@ -136,6 +136,10 @@ Result adapt_result(const scf::ScfResult& native, vibeqc_backend backend) {
   result.convergence.converged = native.converged;
   result.executed_backend = backend;
   result.fock_builds = native.fock_builds;
+  native.dft_diagnostic.fock_builds = native.fock_builds;
+  native.dft_diagnostic.initial_density_used = native.initial_density_used;
+  // Move the snapshot instead of retaining another max-iteration history.
+  result.ks_diagnostic = std::move(native.dft_diagnostic);
   return result;
 }
 
@@ -373,16 +377,18 @@ class KsPreparedBatch final : public PreparedBatch {
       }
     }
 
-    const auto finish = [&](std::size_t i, const scf::ScfResult& native) {
+    const auto finish = [&](std::size_t i, scf::ScfResult native) {
       auto& result = results[i];
-      result.calculation = adapt_result(native, backend_);
-      result.status = native.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
-      if (native.converged && warm_enabled_ && warm_updates_) {
+      result.calculation = adapt_result(std::move(native), backend_);
+      const auto& calculation = result.calculation;
+      result.status =
+          calculation.convergence.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
+      if (calculation.convergence.converged && warm_enabled_ && warm_updates_) {
         auto& state = candidates[i];
-        state.energy = native.energy;
-        state.energy_change = native.energy_change;
-        state.density_rms = native.density_rms;
-        state.iterations = native.iterations;
+        state.energy = calculation.energy;
+        state.energy_change = calculation.convergence.energy_change;
+        state.density_rms = calculation.convergence.residual_rms;
+        state.iterations = calculation.convergence.iterations;
         items_[i].warm = std::move(state);
         items_[i].resident_warm = true;
       }
@@ -397,7 +403,12 @@ class KsPreparedBatch final : public PreparedBatch {
         if (!ready[i] ||
             (attempt && (!result.warm_start_used || result.status == VIBEQC_STATUS_SUCCESS)))
           continue;
-        if (attempt) result.warm_start_fallback = true;
+        if (attempt) {
+          result.warm_start_fallback = true;
+          // Release the failed attempt's exported history before starting another
+          // solve, preserving the two-history resource bound.
+          result.calculation.ks_diagnostic.reset();
+        }
         auto& item = items_[i];
         const bool reuse = !attempt && result.warm_start_used;
         const auto* seed = reuse && !item.resident_warm ? &item.warm->density : nullptr;

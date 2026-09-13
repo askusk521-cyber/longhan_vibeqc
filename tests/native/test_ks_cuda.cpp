@@ -138,6 +138,11 @@ void run_hydroxyl(bool pbe) {
     require(plan.transfers().occupation_stabilized_proposals > 0,
             "CUDA stationary cycle did not apply the CPU-compatible proposal policy");
   }
+  const auto stabilized_rows = std::count_if(
+      history.begin(), history.end(), [](const auto& item) { return item.occupation_stabilized; });
+  require(static_cast<std::uint64_t>(stabilized_rows) ==
+              plan.transfers().occupation_stabilized_proposals,
+          "CUDA history did not record every stabilized occupation proposal");
   for (const auto& item : history)
     require(std::abs(item.electrons[0] - 5) < 1e-10 && std::abs(item.electrons[1] - 4) < 1e-10,
             "occupation stabilization changed the requested spin populations");

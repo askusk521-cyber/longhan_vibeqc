@@ -517,6 +517,49 @@ typedef struct vibeqc_scf_diagnostic {
   double physical_residual_rms;
 } vibeqc_scf_diagnostic;
 
+/** A physical KS iteration before any optional final RKS validation rebuild.
+ * The first energy_change is +infinity because no preceding energy exists.
+ * Density change and residual are maxima of the spin RMS values (RKS has one
+ * total-density matrix), distinct from the joined-spin legacy result RMS. */
+typedef struct vibeqc_ks_iteration {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t iteration;
+  int32_t occupation_stabilized;
+  double nuclear_energy;
+  double one_electron_energy;
+  double hartree_energy;
+  double xc_energy;
+  double energy_change;
+  double density_change_max;
+  double physical_residual_max;
+  double electrons[2];
+} vibeqc_ks_iteration;
+
+/** Completed KS state, copied without extending legacy result-array strides.
+ * Electron counts are Tr(D_s S), not integrated grid densities. Final terms
+ * refer to the returned physical state; CPU RKS's post-loop validation can
+ * make them differ from the last iteration. All energies are in Hartree. */
+typedef struct vibeqc_ks_diagnostic {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t scf_domain_version;
+  uint32_t required_ao_order;
+  uint32_t history_count;
+  int32_t initial_density_used;
+  uint64_t occupations[2];
+  uint64_t grid_points;
+  uint64_t tile_points;
+  uint64_t fock_builds;
+  double electrons[2];
+  double nuclear_energy;
+  double one_electron_energy;
+  double hartree_energy;
+  double xc_energy;
+  double density_change_max;
+  double physical_residual_max;
+} vibeqc_ks_diagnostic;
+
 /** Optional per-system coordinates for a prepared ragged batch execution. */
 typedef struct vibeqc_batch_input_descriptor {
   uint32_t struct_size;
@@ -720,6 +763,18 @@ VIBEQC_API vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculat
 VIBEQC_API vibeqc_status vibeqc_calculation_get_scf_diagnostic(
     const vibeqc_calculation* calculation, vibeqc_scf_diagnostic* out);
 
+/** Query completed KS state and optionally copy its entire iteration history.
+ * NULL history/zero capacity queries summary or availability only. To copy
+ * history, allocate at least out->history_count initialized descriptors and
+ * query again. Every supplied descriptor must have its current size/ABI.
+ * Validation failures leave all outputs untouched. NOT_IMPLEMENTED means no
+ * completed KS record: unsupported method, not executed, or failed evaluation.
+ * Caller serializes all execution/query calls on the prepared owner. */
+VIBEQC_API vibeqc_status vibeqc_calculation_get_ks_diagnostic(const vibeqc_calculation* calculation,
+                                                              vibeqc_ks_diagnostic* out,
+                                                              vibeqc_ks_iteration* history,
+                                                              uint32_t history_capacity);
+
 /**
  * Read the precision policy that resolved for a prepared run. Both the
  * availability query (a NULL \p out) and the copy-out are gated on whether a
@@ -861,6 +916,14 @@ VIBEQC_API vibeqc_status vibeqc_batch_clear_warm_starts(vibeqc_batch* batch);
  */
 VIBEQC_API vibeqc_status vibeqc_batch_get_scf_diagnostic(const vibeqc_batch* batch, uint32_t index,
                                                          vibeqc_scf_diagnostic* out);
+
+/** Input-ordered counterpart of vibeqc_calculation_get_ks_diagnostic. Invalid
+ * or numerically failed items have no record; valid nonconverged items retain
+ * their actual history. Every replay invalidates records from its predecessor. */
+VIBEQC_API vibeqc_status vibeqc_batch_get_ks_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                                        vibeqc_ks_diagnostic* out,
+                                                        vibeqc_ks_iteration* history,
+                                                        uint32_t history_capacity);
 
 /**
  * Enable or disable replacement of retained warm-start densities.
