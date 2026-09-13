@@ -18,7 +18,7 @@ namespace vibeqc::dft {
 class PreparedCudaXcPlan {
  public:
   PreparedCudaXcPlan(const AoBasis& basis, int device_id, int compute_capability_major,
-                     int compute_capability_minor, bool pbe, std::size_t tile_points = 256);
+                     int compute_capability_minor, bool pbe, std::size_t tile_points = 4096);
   ~PreparedCudaXcPlan();
   PreparedCudaXcPlan(const PreparedCudaXcPlan&) = delete;
   PreparedCudaXcPlan& operator=(const PreparedCudaXcPlan&) = delete;
