@@ -11,6 +11,7 @@ def test_h2_energy_and_force_invariance():
     assert abs(result.energy - (-1.11671432506255)) < 2.0e-9
     assert np.max(np.abs(result.forces.sum(axis=0))) < 2.0e-10
     assert result.executed_backend == "cpu_reference"
+    assert result.physical_residual_rms is None
 
 
 def test_precision_provenance_reports_the_policy_that_actually_ran():
@@ -160,6 +161,13 @@ def test_method_capabilities_report_families_and_properties():
     assert not pbe.supports_batch
     assert pbe.supported_properties == frozenset(("energy",))
 
+    for name in ("lda-uks", "pbe-uks"):
+        uks = method_capabilities(name)
+        assert uks.family == "density_functional"
+        assert uks.available
+        assert not uks.supports_batch
+        assert uks.supported_properties == frozenset(("energy",))
+
 
 def test_lda_rks_public_contract_is_cpu_energy_only():
     calculator = Calculator(method="lda-rks", basis="sto-3g", device="cpu")
@@ -191,6 +199,73 @@ def test_pbe_rks_public_contract_is_cpu_energy_only():
         )
     with pytest.raises(NotImplementedError, match="prepared batches"):
         calculator.prepare_batch([["He", (0.0, 0.0, 0.0)]])
+
+
+@pytest.mark.parametrize("method", ("lda-uks", "pbe-uks"))
+def test_uks_public_contract_is_cpu_energy_only(method):
+    atoms = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
+    calculator = Calculator(method=method, basis="sto-3g", device="cpu")
+    result = calculator.singlepoint(atoms, charge=-1, multiplicity=2)
+
+    assert result.converged
+    assert result.forces is None
+    assert result.executed_backend == "cpu_reference"
+    assert np.isfinite(result.density_rms)
+    assert np.isfinite(result.physical_residual_rms)
+    assert result.density_rms != result.physical_residual_rms
+    with pytest.raises(ValueError, match="does not support properties.*forces"):
+        calculator.singlepoint(
+            atoms,
+            charge=-1,
+            multiplicity=2,
+            properties=("energy", "forces"),
+        )
+    with pytest.raises(NotImplementedError, match="prepared batches"):
+        calculator.prepare_batch([atoms], charges=[-1], multiplicities=[2])
+
+
+@pytest.mark.parametrize("method", ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks"))
+def test_ks_separate_physical_residual_is_published(method):
+    """A true zero commutator is available, not confused with a missing value."""
+    uks = method.endswith("uks")
+    result = Calculator(method=method, basis="sto-3g", device="cpu").singlepoint(
+        [("He", (0.0, 0.0, 0.0))],
+        charge=1 if uks else 0,
+        multiplicity=2 if uks else 1,
+    )
+    assert result.converged
+    assert result.physical_residual_rms == 0.0
+    assert result.density_rms < 1e-8
+
+
+def test_ks_older_library_without_scf_getter(monkeypatch):
+    """Python keeps the legacy result usable when the additive symbol is absent."""
+    calculator = Calculator(method="lda-rks", basis="sto-3g", device="cpu")
+    library = calculator._library
+
+    class LegacyLibrary:
+        def __getattr__(self, name):
+            if name == "vibeqc_calculation_get_scf_diagnostic":
+                raise AttributeError(name)
+            return getattr(library, name)
+
+    monkeypatch.setattr(calculator, "_library", LegacyLibrary())
+    result = calculator.singlepoint([("He", (0.0, 0.0, 0.0))])
+    assert result.converged
+    assert result.physical_residual_rms is None
+
+
+@pytest.mark.parametrize("method", ("lda-uks", "pbe-uks"))
+@pytest.mark.parametrize(
+    ("charge", "multiplicity"),
+    ((0, 2), (0, 4)),
+    ids=("parity", "spin-excess"),
+)
+def test_uks_rejects_invalid_spin_occupations(method, charge, multiplicity):
+    atoms = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
+    calculator = Calculator(method=method, basis="sto-3g", device="cpu")
+    with pytest.raises(RuntimeError, match="integer nonnegative spin occupations"):
+        calculator.singlepoint(atoms, charge=charge, multiplicity=multiplicity)
 
 
 @pytest.mark.parametrize(

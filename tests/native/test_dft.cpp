@@ -173,6 +173,83 @@ int main() {
       for (std::size_t i = 0; i < reference.potential.size(); ++i)
         require(std::abs(lda_uks.potential[spin][i] - reference.potential[i]) < 2.0e-12,
                 "polarized LDA equal-spin potential differs from RKS");
+    const auto pbe_uks =
+        vibeqc::dft::integrate_pbe_uks_with_tail(basis, grid, alpha_density, beta_density, 7);
+    require(std::abs(pbe_uks.energy - pbe.energy) < 2.0e-12 &&
+                std::abs(pbe_uks.electrons[0] - 0.5 * pbe.electrons) < 2.0e-12 &&
+                std::abs(pbe_uks.electrons[1] - 0.5 * pbe.electrons) < 2.0e-12,
+            "polarized PBE equal-spin energy or electron split differs from RKS");
+    for (std::size_t spin = 0; spin < 2; ++spin)
+      for (std::size_t i = 0; i < pbe.potential.size(); ++i)
+        require(std::abs(pbe_uks.potential[spin][i] - pbe.potential[i]) < 2.0e-11,
+                "polarized PBE equal-spin potential differs from RKS");
+    for (std::size_t spin = 0; spin < 2; ++spin) {
+      for (double step : {1.0e-5, 3.0e-6}) {
+        auto plus_alpha = alpha_density, minus_alpha = alpha_density;
+        auto plus_beta = beta_density, minus_beta = beta_density;
+        auto& plus = spin == 0 ? plus_alpha : plus_beta;
+        auto& minus = spin == 0 ? minus_alpha : minus_beta;
+        for (std::size_t i = 0; i < direction.size(); ++i) {
+          plus[i] += step * direction[i];
+          minus[i] -= step * direction[i];
+        }
+        const double finite_difference =
+            (vibeqc::dft::integrate_pbe_uks_with_tail(basis, grid, plus_alpha, plus_beta, 9)
+                 .energy -
+             vibeqc::dft::integrate_pbe_uks_with_tail(basis, grid, minus_alpha, minus_beta, 9)
+                 .energy) /
+            (2.0 * step);
+        double trace = 0.0;
+        for (std::size_t i = 0; i < direction.size(); ++i)
+          trace += pbe_uks.potential[spin][i] * direction[i];
+        require(std::abs(finite_difference - trace) < 2.0e-6,
+                "polarized PBE potential violates delta E = Tr(V_s delta D_s)");
+      }
+    }
+    const auto fully_polarized_lda =
+        vibeqc::dft::integrate_lda_xc_pw_uks(basis, default_grid, reference_density, zero, 113);
+    const auto fully_polarized_pbe =
+        vibeqc::dft::integrate_pbe_uks_with_tail(basis, default_grid, reference_density, zero, 113);
+    // A vanishing minority density must approach the same functional as an
+    // exactly empty spin. The former PBE-to-LDA dispatch caused a finite jump
+    // here, despite both spin densities and gradients varying continuously.
+    const auto polarized_small =
+        vibeqc::dft::integrate_pbe_uks_with_tail(basis, grid, density, zero, 7);
+    for (double fraction : {1e-15, 1e-12, 0.999e-10, 1.001e-10}) {
+      auto minority = density;
+      for (double& value : minority) value *= fraction;
+      const auto nearby =
+          vibeqc::dft::integrate_pbe_uks_with_tail(basis, grid, density, minority, 7);
+      require(std::abs(nearby.energy - polarized_small.energy) < 1e-8,
+              "PBE energy jumps between empty and nearly empty spin densities");
+      for (std::size_t i = 0; i < density.size(); ++i)
+        require(std::abs(nearby.potential[0][i] - polarized_small.potential[0][i]) < 1e-8,
+                "PBE majority-spin potential jumps across the minority-spin boundary");
+    }
+    for (const auto* integral : {&fully_polarized_lda, &fully_polarized_pbe}) {
+      require(std::isfinite(integral->energy) &&
+                  std::all_of(integral->potential[0].begin(), integral->potential[0].end(),
+                              [](double value) { return std::isfinite(value); }) &&
+                  std::all_of(integral->potential[1].begin(), integral->potential[1].end(),
+                              [](double value) { return std::isfinite(value); }),
+              "polarized XC tail is nonfinite at complete spin polarization");
+    }
+    for (double step : {1.0e-5, 3.0e-6}) {
+      auto plus = reference_density, minus = reference_density;
+      for (std::size_t i = 0; i < direction.size(); ++i) {
+        plus[i] += step * direction[i];
+        minus[i] -= step * direction[i];
+      }
+      const double finite_difference =
+          (vibeqc::dft::integrate_pbe_uks_with_tail(basis, default_grid, plus, zero, 113).energy -
+           vibeqc::dft::integrate_pbe_uks_with_tail(basis, default_grid, minus, zero, 113).energy) /
+          (2.0 * step);
+      double trace = 0.0;
+      for (std::size_t i = 0; i < direction.size(); ++i)
+        trace += fully_polarized_pbe.potential[0][i] * direction[i];
+      require(std::abs(finite_difference - trace) < 2.0e-6,
+              "fully polarized PBE active-spin potential violates delta E = Tr(Va delta Da)");
+    }
     for (double step : {1.0e-4, 3.0e-5}) {
       std::vector<double> plus = density, minus = density;
       for (std::size_t i = 0; i < density.size(); ++i) {
