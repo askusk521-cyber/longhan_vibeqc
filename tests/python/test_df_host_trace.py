@@ -74,10 +74,10 @@ def test_partial_or_mistimed_host_records_cannot_pass(key, value):
 def test_native_solver_calls_include_warm_preparation_and_finalization(
     tmp_path, monkeypatch, method, device
 ):
-    """Baseline call counts come from executed leaves, including warm overhead.
+    """Actual leaves detect reintroduced warm guesses, retaining other solves.
 
-    Later ablations intentionally change the CUDA warm count expectations;
-    removing the trace hook itself must never satisfy a zero-call gate.
+    Overlap/finalization calls remain until their own measured ablations;
+    removing the trace hook itself must never satisfy the zero-core-call gate.
     """
     if device == "cuda" and os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1":
         pytest.skip("requires an explicitly Slurm-allocated GPU")
@@ -109,15 +109,31 @@ def test_native_solver_calls_include_warm_preparation_and_finalization(
         summary = aggregate_host(records)
         by_reason = summary["eigensolves_by_reason"]
         assert by_reason["overlap"]["calls"] == 2
-        assert by_reason["core_guess"]["calls"] == 2
+        assert by_reason.get("core_guess", {}).get("calls", 0) == 0
+        assert (
+            sum(
+                row["name"] == "initial_density"
+                for record in records
+                for row in record["regions"]
+            )
+            == 2
+        )
         if device == "cuda":
             assert by_reason["final_fock"]["calls"] == (2 if method == "rhf" else 4)
             assert not by_reason.get("fallback", {}).get("calls", 0)
             leaves = summary["reference_eigensolves"]
-            assert {row["item"] for row in leaves if row["reason"] == "core_guess"} == {
+            assert {row["item"] for row in leaves if row["reason"] == "overlap"} == {
                 0,
                 1,
             }
         before = path.read_bytes()
         batch.execute(strict=True, properties=("energy",))
         assert path.read_bytes() == before
+        if device == "cuda":
+            eager_path = tmp_path / "eager.host.jsonl"
+            monkeypatch.setenv("VIBEQC_DF_HOST_TRACE", str(eager_path))
+            monkeypatch.setenv("VIBEQC_DF_EAGER_CORE_GUESS", "1")
+            eager = batch.execute(strict=True, properties=("energy",))
+            eager_components = aggregate_host(read_host_trace(eager_path))
+            assert eager_components["eigensolves_by_reason"]["core_guess"]["calls"] == 2
+            assert eager.energies == pytest.approx(warm.energies, abs=1e-10)

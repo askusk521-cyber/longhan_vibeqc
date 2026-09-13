@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -63,6 +64,16 @@ using solver::Diis;
 using solver::run_rhf_host_plan;
 using solver::run_uhf_host_plan;
 using solver::validate_seed;
+
+/** Restore discarded warm core frames only for #206's causal ablation.
+ * Supplied D and all SCF controls stay identical. Normal execution leaves
+ * this unset and never requests an orbital frame it will not consume. */
+initial_guess::InitialOrbitalRequest df_initial_orbital_request() {
+  const char* eager = std::getenv("VIBEQC_DF_EAGER_CORE_GUESS");
+  return eager && eager[0] == '1' && eager[1] == '\0'
+             ? initial_guess::InitialOrbitalRequest::RequireCoreFrame
+             : initial_guess::InitialOrbitalRequest::ColdDensityOnly;
+}
 
 /** Assemble immutable DF state from already-evaluated one- and three-center data. */
 DensityFittingScfData assemble_density_fitting_data(integrals::IntegralData one_electron,
@@ -1415,9 +1426,12 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
     throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
   }
   const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
-  EigenResult orbitals;
-  Matrix density = prepare_initial_density(system, data.one_electron, orthogonalizer, occupied,
-                                           initial_density, orbitals);
+  std::optional<EigenResult> initial_orbitals;
+  Matrix density =
+      prepare_initial_density(system, data.one_electron, orthogonalizer, occupied, initial_density,
+                              initial_orbitals, df_initial_orbital_request());
+  // Device SCF consumes D/X only; fallback computes its own first Fock frame.
+  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
   ScfResult result;
   result.initial_density_used = initial_density != nullptr;
   const CudaDensityFittingPlanPtr plan = make_cuda_density_fitting_plan(
@@ -1521,11 +1535,12 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
     throw std::runtime_error("basis has fewer orbitals than required UHF spin occupations");
   }
   const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
-  EigenResult alpha_orbitals;
-  EigenResult beta_orbitals;
-  auto [alpha_density, beta_density] =
-      prepare_initial_uhf_density(data.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
-                                  initial_density, alpha_orbitals, beta_orbitals);
+  std::optional<EigenResult> initial_alpha, initial_beta;
+  auto [alpha_density, beta_density] = prepare_initial_uhf_density(
+      data.one_electron, orthogonalizer, alpha_occupied, beta_occupied, initial_density,
+      initial_alpha, initial_beta, df_initial_orbital_request());
+  EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
+  EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
   ScfResult result;
   result.initial_density_used = initial_density != nullptr;
   const CudaDensityFittingPlanPtr plan = make_cuda_density_fitting_plan(
@@ -1740,15 +1755,15 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
       const std::size_t occupied = static_cast<std::size_t>(systems[source].electron_count / 2);
       const Matrix orthogonalizer =
           symmetric_orthogonalizer(prepared.one_electron.overlap, prepared.one_electron.nbf);
-      EigenResult initial_orbitals;
-      Matrix density =
-          prepare_initial_density(systems[source], prepared.one_electron, orthogonalizer, occupied,
-                                  initial_densities[source], initial_orbitals);
+      std::optional<EigenResult> initial_orbitals;
+      Matrix density = prepare_initial_density(systems[source], prepared.one_electron,
+                                               orthogonalizer, occupied, initial_densities[source],
+                                               initial_orbitals, df_initial_orbital_request());
       source_indices.push_back(source);
       data.push_back(std::move(prepared));
       orthogonalizers.push_back(orthogonalizer);
       densities.push_back(std::move(density));
-      orbitals.push_back(std::move(initial_orbitals));
+      orbitals.push_back(std::move(initial_orbitals).value_or(EigenResult{}));
       diis.emplace_back(options.diis_history);
       previous_energies.push_back(std::numeric_limits<double>::infinity());
       outputs[source].scf.initial_density_used = initial_densities[source] != nullptr;
@@ -2126,18 +2141,19 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
       }
       const Matrix orthogonalizer =
           symmetric_orthogonalizer(prepared.one_electron.overlap, prepared.one_electron.nbf);
-      EigenResult initial_alpha_orbitals;
-      EigenResult initial_beta_orbitals;
+      std::optional<EigenResult> initial_alpha_orbitals;
+      std::optional<EigenResult> initial_beta_orbitals;
       auto [alpha_density, beta_density] = prepare_initial_uhf_density(
           prepared.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
-          initial_densities[source], initial_alpha_orbitals, initial_beta_orbitals);
+          initial_densities[source], initial_alpha_orbitals, initial_beta_orbitals,
+          df_initial_orbital_request());
       source_indices.push_back(source);
       data.push_back(std::move(prepared));
       orthogonalizers.push_back(orthogonalizer);
       alpha_densities.push_back(std::move(alpha_density));
       beta_densities.push_back(std::move(beta_density));
-      alpha_orbitals.push_back(std::move(initial_alpha_orbitals));
-      beta_orbitals.push_back(std::move(initial_beta_orbitals));
+      alpha_orbitals.push_back(std::move(initial_alpha_orbitals).value_or(EigenResult{}));
+      beta_orbitals.push_back(std::move(initial_beta_orbitals).value_or(EigenResult{}));
       diis.emplace_back(options.diis_history);
       previous_energies.push_back(std::numeric_limits<double>::infinity());
       outputs[source].scf.initial_density_used = initial_densities[source] != nullptr;

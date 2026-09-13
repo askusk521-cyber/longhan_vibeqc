@@ -1,0 +1,229 @@
+{
+  "domains": {
+    "energy": {
+      "changed-geometry": {
+        "baseline_over_candidate": 1.2295285105851175,
+        "iteration_branches": [
+          [
+            22
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.4096792549826205,
+          "candidate": 0.3332002889364958
+        },
+        "samples": 10
+      },
+      "cold-start": {
+        "baseline_over_candidate": 0.9989671379865676,
+        "iteration_branches": [
+          [
+            34
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.4435483440756798,
+          "candidate": 0.444006941979751
+        },
+        "samples": 10
+      },
+      "energy-only": {
+        "baseline_over_candidate": 1.4584548151356784,
+        "iteration_branches": [
+          [
+            2
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.23341754893772304,
+          "candidate": 0.1600444158539176
+        },
+        "samples": 10
+      },
+      "unchanged-geometry": {
+        "baseline_over_candidate": 1.460472590134174,
+        "iteration_branches": [
+          [
+            2
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.23356816894374788,
+          "candidate": 0.1599264310207218
+        },
+        "samples": 10
+      }
+    },
+    "force": {
+      "changed-geometry": {
+        "baseline_over_candidate": 1.0891232424424941,
+        "iteration_branches": [
+          [
+            22
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.9640419720672071,
+          "candidate": 0.8851541629992425
+        },
+        "samples": 10
+      },
+      "cold-start": {
+        "baseline_over_candidate": 1.000225786728119,
+        "iteration_branches": [
+          [
+            34
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 1.0046613349113613,
+          "candidate": 1.0044345469214022
+        },
+        "samples": 10
+      },
+      "energy-plus-force": {
+        "baseline_over_candidate": 1.0985891730129345,
+        "iteration_branches": [
+          [
+            2
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.7811378848273307,
+          "candidate": 0.711037304950878
+        },
+        "samples": 10
+      },
+      "unchanged-geometry": {
+        "baseline_over_candidate": 1.1104033505026472,
+        "iteration_branches": [
+          [
+            2
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.7894262550398707,
+          "candidate": 0.7109364850912243
+        },
+        "samples": 10
+      }
+    },
+    "profiled": {
+      "changed-geometry": {
+        "baseline_over_candidate": 1.2290309594183264,
+        "core_guess_counts": {
+          "baseline": [
+            1
+          ],
+          "candidate": [
+            0
+          ]
+        },
+        "iteration_branches": [
+          [
+            22
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.4101017389912158,
+          "candidate": 0.33367893286049366
+        },
+        "samples": 10
+      },
+      "cold-start": {
+        "baseline_over_candidate": 0.9986682413610645,
+        "core_guess_counts": {
+          "baseline": [
+            1
+          ],
+          "candidate": [
+            1
+          ]
+        },
+        "iteration_branches": [
+          [
+            34
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.4435678001027554,
+          "candidate": 0.44415931310504675
+        },
+        "samples": 10
+      },
+      "energy-only": {
+        "baseline_over_candidate": 1.4563451722130119,
+        "core_guess_counts": {
+          "baseline": [
+            1
+          ],
+          "candidate": [
+            0
+          ]
+        },
+        "iteration_branches": [
+          [
+            2
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.23365536704659462,
+          "candidate": 0.16043955204077065
+        },
+        "samples": 10
+      },
+      "unchanged-geometry": {
+        "baseline_over_candidate": 1.4574884467947422,
+        "core_guess_counts": {
+          "baseline": [
+            1
+          ],
+          "candidate": [
+            0
+          ]
+        },
+        "iteration_branches": [
+          [
+            2
+          ]
+        ],
+        "iteration_retry_matched": true,
+        "median_seconds": {
+          "baseline": 0.2336878019850701,
+          "candidate": 0.16033595497719944
+        },
+        "samples": 10
+      }
+    }
+  },
+  "limitations": [
+    "This first ablation covers 96 AO, batch1, RHF spherical, 1GiB DF allowance. Larger/batch4/constrained and full #308 scientific/performance acceptance remain required.",
+    "The eager control restores only the discarded core solve in the same binary; it is not a different SCF initial density.",
+    "Cold samples have no meaningful gain. The overall all-workload timing assessment is not-run; warm/changed components exceed its noise floor individually.",
+    "The branch-validation guard was added after measurement and checked against every retained sample; the exact earlier measured runner is preserved in the source patch."
+  ],
+  "native_source_identity": "28fd5fd88c842e527350c2ca9db5abb17ce082391a6aaca0fe0cddfba1801329",
+  "scope": "Lazy warm core guesses only; overlap caching, device provider integration and final-state reuse remain outstanding.",
+  "validation": {
+    "additional_cpu_caller_passed": 109,
+    "benchmark_protocol_passed": 99,
+    "cpu_native_passed": 25,
+    "cpu_python_cuda_skipped": 16,
+    "cpu_python_passed": 64,
+    "gpu_python_passed": 39,
+    "memcheck_errors": 0,
+    "memcheck_gpu_cases_passed": 2,
+    "memcheck_leaked_bytes": 0
+  }
+}

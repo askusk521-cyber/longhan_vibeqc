@@ -21,14 +21,24 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-from _cases import benchmark_cases
-from _support import (
-    benchmark_gate_failures,
-    cuda_accelerator_metadata,
-    environment_metadata,
-    write_result,
-)
 from vibeqc import Calculator
+
+try:  # Keep both direct CLI execution and shared benchmark-module imports.
+    from _cases import benchmark_cases
+    from _support import (
+        benchmark_gate_failures,
+        cuda_accelerator_metadata,
+        environment_metadata,
+        write_result,
+    )
+except ModuleNotFoundError:
+    from benchmarks._cases import benchmark_cases
+    from benchmarks._support import (
+        benchmark_gate_failures,
+        cuda_accelerator_metadata,
+        environment_metadata,
+        write_result,
+    )
 
 VIBEQC_ENGINE = "vibeqc"
 GPU4PYSCF_ENGINE = "gpu4pyscf"

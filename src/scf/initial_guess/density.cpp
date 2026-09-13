@@ -79,18 +79,21 @@ void normalize_spin_density(Matrix& density, const Matrix& overlap, std::size_t 
 std::pair<Matrix, Matrix> prepare_initial_uhf_density(
     const integrals::IntegralData& ints, const Matrix& orthogonalizer, std::size_t alpha_occupied,
     std::size_t beta_occupied, const std::vector<double>* initial_density,
-    EigenResult& alpha_orbitals, EigenResult& beta_orbitals) {
+    std::optional<EigenResult>& alpha_orbitals, std::optional<EigenResult>& beta_orbitals,
+    InitialOrbitalRequest request) {
   const std::size_t n = ints.nbf;
   const std::size_t matrix_size = n * n;
   scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
   scf::reference::observation::Scope trace("initial_density", n);
-  alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
-  beta_orbitals = alpha_orbitals;
+  alpha_orbitals.reset();
+  beta_orbitals.reset();
   if (initial_density == nullptr) {
-    mix_open_shell_frontier_orbitals(beta_orbitals.vectors, n, alpha_occupied, beta_occupied);
+    alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+    beta_orbitals = alpha_orbitals;
+    mix_open_shell_frontier_orbitals(beta_orbitals->vectors, n, alpha_occupied, beta_occupied);
     return {
-        density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0),
-        density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0),
+        density_from_orbitals(alpha_orbitals->vectors, n, alpha_occupied, 1.0),
+        density_from_orbitals(beta_orbitals->vectors, n, beta_occupied, 1.0),
     };
   }
   if (initial_density->size() != 2 * matrix_size ||
@@ -103,18 +106,26 @@ std::pair<Matrix, Matrix> prepare_initial_uhf_density(
   Matrix beta(initial_density->begin() + matrix_size, initial_density->end());
   normalize_spin_density(alpha, ints.overlap, n, alpha_occupied);
   normalize_spin_density(beta, ints.overlap, n, beta_occupied);
+  if (request == InitialOrbitalRequest::RequireCoreFrame) {
+    // A requested warm frame follows the historical unperturbed convention.
+    alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+    beta_orbitals = alpha_orbitals;
+  }
   return {std::move(alpha), std::move(beta)};
 }
 
 Matrix prepare_initial_density(const core::System& system, const integrals::IntegralData& ints,
                                const Matrix& orthogonalizer, std::size_t occupied,
-                               const std::vector<double>* initial_density, EigenResult& orbitals) {
+                               const std::vector<double>* initial_density,
+                               std::optional<EigenResult>& orbitals,
+                               InitialOrbitalRequest request) {
   const std::size_t n = ints.nbf;
   scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
   scf::reference::observation::Scope trace("initial_density", n);
-  orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+  orbitals.reset();
   if (initial_density == nullptr) {
-    return density_from_orbitals(orbitals.vectors, n, occupied);
+    orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+    return density_from_orbitals(orbitals->vectors, n, occupied);
   }
   if (initial_density->size() != n * n ||
       !std::all_of(initial_density->begin(), initial_density->end(),
@@ -144,6 +155,8 @@ Matrix prepare_initial_density(const core::System& system, const integrals::Inte
   }
   const double trace_scale = static_cast<double>(system.electron_count) / electron_trace;
   for (double& value : density) value *= trace_scale;
+  if (request == InitialOrbitalRequest::RequireCoreFrame)
+    orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
   return density;
 }
 

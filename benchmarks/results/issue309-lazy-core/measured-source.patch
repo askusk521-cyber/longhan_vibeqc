@@ -1,0 +1,679 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8dd741a..01cf66c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -773,6 +773,11 @@ if(VIBEQC_BUILD_TESTS)
+   # The Windows shared-library ABI intentionally exports only the public C
+   # surface; this internal contract target requires private C++ symbols.
+   if(NOT WIN32)
++    add_executable(vibeqc_initial_density_tests tests/native/test_initial_density.cpp)
++    target_link_libraries(vibeqc_initial_density_tests PRIVATE vibeqc)
++    target_include_directories(vibeqc_initial_density_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
++    add_test(NAME vibeqc_initial_density_tests COMMAND vibeqc_initial_density_tests)
++
+     add_executable(vibeqc_mp2_contract_tests tests/native/test_mp2_contract.cpp)
+     target_link_libraries(vibeqc_mp2_contract_tests PRIVATE vibeqc)
+     target_include_directories(vibeqc_mp2_contract_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+diff --git a/benchmarks/df_host_workloads.py b/benchmarks/df_host_workloads.py
+index 17b6a3b..2262877 100644
+--- a/benchmarks/df_host_workloads.py
++++ b/benchmarks/df_host_workloads.py
+@@ -1,6 +1,8 @@
+ """Host-eigensolve diagnostic workloads used by the existing #206 matrix CLI.
+ 
+-The A/B configurations are identical protocol controls. Separate clean and
++By default A/B configurations are identical protocol controls. The explicit
++eager-core ablation restores discarded warm frames in the baseline selection.
++Separate clean and
+ profiled invocations retain setup, destruction and each changed-geometry call;
+ no relative performance or external-engine parity is inferred from this probe.
+ """
+@@ -22,7 +24,7 @@ from benchmarks.df_component_ledger import (
+ )
+ from benchmarks.issue206_df_force_probe import _source_metadata
+ from benchmarks.validation_gate import _cuda
+-from tools.vibeqc_validation.performance import measure_interleaved
++from tools.vibeqc_validation.performance import assess_comparison, measure_interleaved
+ from tools.vibeqc_validation.schema import canonical_hash
+ 
+ 
+@@ -35,6 +37,7 @@ def host_workloads(
+     memory_budget_bytes,
+     energy_only,
+     trace_directory=None,
++    eager_core_ablation=False,
+ ):
+     """Measure one source-bound cold/replay/rebuild domain without hiding setup.
+ 
+@@ -53,6 +56,10 @@ def host_workloads(
+         raise ValueError(
+             "provide trace_directory explicitly; ambient profiling is not clean timing"
+         )
++    if os.environ.get("VIBEQC_DF_EAGER_CORE_GUESS"):
++        raise ValueError(
++            "use eager_core_ablation explicitly; ambient guess policy is ambiguous"
++        )
+     library = Path(library).resolve(strict=True)
+     source = _source_metadata(library)
+     device, synchronize = _cuda()
+@@ -74,6 +81,7 @@ def host_workloads(
+         "screening_tolerance": 1e-12,
+         "metric_relative_threshold": 1e-10,
+         "memory_budget_bytes": memory_budget_bytes,
++        "eager_core_ablation": eager_core_ablation,
+     }
+     input_hash = canonical_hash(inputs)
+     calculator = Calculator(
+@@ -102,6 +110,9 @@ def host_workloads(
+     def measured(workload, evaluate):
+         def sample(_selection):
+             nonlocal sequence
++            # Both selections replay the same frozen density on one plan.
++            # This diagnostic request only restores the previously discarded
++            # warm core frame; its executed solves remain visible in the trace.
+             path = None
+             if trace_directory is not None:
+                 path = trace_directory / f"{sequence:04d}-{workload}.jsonl"
+@@ -110,13 +121,39 @@ def host_workloads(
+                 os.environ["VIBEQC_DF_HOST_TRACE"] = str(path.resolve())
+             sequence += 1
+             try:
++                if eager_core_ablation and _selection == "baseline":
++                    os.environ["VIBEQC_DF_EAGER_CORE_GUESS"] = "1"
+                 result = evaluate()
+             finally:
++                if eager_core_ablation:
++                    os.environ.pop("VIBEQC_DF_EAGER_CORE_GUESS", None)
+                 if path is not None:
+                     os.environ.pop("VIBEQC_DF_HOST_TRACE")
+             if path is not None:
++                components = aggregate_host(read_host_trace(path))
++                if eager_core_ablation:
++                    expected = (
++                        batch_size
++                        if _selection == "baseline" or workload == "cold-start"
++                        else 0
++                    )
++                    actual = (
++                        components["eigensolves_by_reason"]
++                        .get("core_guess", {})
++                        .get("calls", 0)
++                    )
++                    if (
++                        actual != expected
++                        or components["exclusive_phases"]
++                        .get("initial_density", {})
++                        .get("calls", 0)
++                        != batch_size
++                    ):
++                        raise RuntimeError(
++                            "eager/lazy ablation did not execute its declared core-guess policy"
++                        )
+                 result["host_components"] = {
+-                    **aggregate_host(read_host_trace(path)),
++                    **components,
+                     "raw_trace": trace_identity(path),
+                 }
+             return result
+@@ -235,7 +272,12 @@ def host_workloads(
+         "samples": rows,
+         "prepared_setup_seconds": setup_seconds,
+         "prepared_destruction_seconds": destruction_seconds,
+-        "comparison": "identical native configurations as an ABBA protocol control; no speedup claim",
++        "comparison": "eager core frame versus lazy warm initialization on one native library"
++        if eager_core_ablation
++        else "identical native configurations as an ABBA protocol control; no speedup claim",
++        "timing_assessment": assess_comparison(rows)
++        if eager_core_ablation and trace_directory is None
++        else None,
+         "limitations": [
+             "This probe records actual host solves; complete device work/traffic requires the separate CUDA/Nsight ledger.",
+             "Reported legacy Fock counts can omit finalizer work; actual reference-eigensolve leaves remain complete within traced scopes.",
+diff --git a/benchmarks/issue206_df_matrix.py b/benchmarks/issue206_df_matrix.py
+index 0c24306..b577122 100644
+--- a/benchmarks/issue206_df_matrix.py
++++ b/benchmarks/issue206_df_matrix.py
+@@ -274,6 +274,11 @@ def main() -> None:
+         action="store_true",
+         help="run the #308 native host-eigensolve protocol control within #206",
+     )
++    parser.add_argument(
++        "--eager-core-ablation",
++        action="store_true",
++        help="pair restored eager core guesses with lazy warm preparation on one binary",
++    )
+     parser.add_argument(
+         "--host-trace-dir",
+         type=Path,
+@@ -305,6 +310,8 @@ def main() -> None:
+ 
+     if args.host_trace_dir and not args.host_workloads:
+         parser.error("--host-trace-dir requires --host-workloads")
++    if args.eager_core_ablation and not args.host_workloads:
++        parser.error("--eager-core-ablation requires --host-workloads")
+     if args.host_workloads and args.repeats < 5:
+         parser.error("host workload controls require at least five paired samples")
+     cases = _matrix(args.case)
+@@ -335,7 +342,9 @@ def main() -> None:
+         payload["execution"]["benchmark"] = "issue206_df_matrix.py --host-workloads"
+         payload["execution"]["profiled"] = args.host_trace_dir is not None
+         payload["matched_contract"]["comparison"] = (
+-            "identical native ABBA protocol control; no external parity or speedup claim"
++            "eager core frame versus lazy warm initialization; no external parity claim"
++            if args.eager_core_ablation
++            else "identical native ABBA protocol control; no external parity or speedup claim"
+         )
+     _write(manifest_path, payload)
+     if args.run and args.host_workloads:
+@@ -355,6 +364,7 @@ def main() -> None:
+                     repeats=args.repeats,
+                     memory_budget_bytes=args.memory_budget_bytes,
+                     energy_only=args.energy_only,
++                    eager_core_ablation=args.eager_core_ablation,
+                     trace_directory=None
+                     if args.host_trace_dir is None
+                     else args.host_trace_dir.resolve() / stem,
+diff --git a/docs/df_component_trace.md b/docs/df_component_trace.md
+index 1683d5e..fb76969 100644
+--- a/docs/df_component_trace.md
++++ b/docs/df_component_trace.md
+@@ -84,6 +84,15 @@ not a speedup or an external-engine parity result. Complete traffic/device
+ work still comes from the separate CUDA/Nsight ledger; the original matched
+ DF-versus-DF matrix remains the owner of parity acceptance.
+ 
++For the lazy-initial-density slice, add `--eager-core-ablation` to the host
++workload invocation. The baseline selection explicitly requests the old warm
++core frame through `VIBEQC_DF_EAGER_CORE_GUESS=1`; the candidate consumes the
++same frozen density without that unused solve. Cold density, overlap and
++finalization are identical. Actual leaf counts must distinguish the selections
++in a separate traced run. Clean interleaved endpoint timings own any savings
++claim; the runner rejects an ambient eager-guess flag. This private diagnostic
++control is not a different physical initial guess or a fallback policy.
++
+ The default `--memory-budget-bytes 0` preserves the original probe's host
+ resident compatibility route. A positive value, for example `268435456`,
+ selects the existing bounded generated-source execution. Record and compare
+diff --git a/src/dft/rks.cpp b/src/dft/rks.cpp
+index c441bdd..2fde866 100644
+--- a/src/dft/rks.cpp
++++ b/src/dft/rks.cpp
+@@ -177,9 +177,12 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
+   if (occupied > n) throw std::runtime_error("basis has fewer orbitals than occupied pairs");
+   const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
+-  EigenResult orbitals;
+-  Matrix density =
+-      prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density, orbitals);
++  std::optional<EigenResult> initial_orbitals;
++  Matrix density = prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density,
++                                           initial_orbitals);
++  // Only a cold seed carries a core frame. Warm consumers solve their first
++  // target Fock before reading orbitals; RKS packs its initial factor cold-only.
++  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
+   if (options.strict_initial_density && initial_density) {
+     validate_seed(ints.overlap, *initial_density, n, {static_cast<unsigned>(system.electron_count)},
+                   2.0);
+@@ -344,11 +347,12 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+   if (alpha_occupied > n || beta_occupied > n)
+     throw std::runtime_error("basis has fewer orbitals than required UKS spin occupations");
+   const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
+-  EigenResult alpha_orbitals;
+-  EigenResult beta_orbitals;
++  std::optional<EigenResult> initial_alpha, initial_beta;
+   auto [alpha_density, beta_density] =
+       prepare_initial_uhf_density(ints, orthogonalizer, alpha_occupied, beta_occupied,
+-                                  initial_density, alpha_orbitals, beta_orbitals);
++                                  initial_density, initial_alpha, initial_beta);
++  EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
++  EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
+   if (options.strict_initial_density && initial_density) {
+     validate_seed(ints.overlap, *initial_density, n,
+                   {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)},
+diff --git a/src/scf/initial_guess/density.cpp b/src/scf/initial_guess/density.cpp
+index 62c9f6a..04e52af 100644
+--- a/src/scf/initial_guess/density.cpp
++++ b/src/scf/initial_guess/density.cpp
+@@ -79,18 +79,21 @@ void normalize_spin_density(Matrix& density, const Matrix& overlap, std::size_t
+ std::pair<Matrix, Matrix> prepare_initial_uhf_density(
+     const integrals::IntegralData& ints, const Matrix& orthogonalizer, std::size_t alpha_occupied,
+     std::size_t beta_occupied, const std::vector<double>* initial_density,
+-    EigenResult& alpha_orbitals, EigenResult& beta_orbitals) {
++    std::optional<EigenResult>& alpha_orbitals, std::optional<EigenResult>& beta_orbitals,
++    InitialOrbitalRequest request) {
+   const std::size_t n = ints.nbf;
+   const std::size_t matrix_size = n * n;
+   scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
+   scf::reference::observation::Scope trace("initial_density", n);
+-  alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+-  beta_orbitals = alpha_orbitals;
++  alpha_orbitals.reset();
++  beta_orbitals.reset();
+   if (initial_density == nullptr) {
+-    mix_open_shell_frontier_orbitals(beta_orbitals.vectors, n, alpha_occupied, beta_occupied);
++    alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
++    beta_orbitals = alpha_orbitals;
++    mix_open_shell_frontier_orbitals(beta_orbitals->vectors, n, alpha_occupied, beta_occupied);
+     return {
+-        density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0),
+-        density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0),
++        density_from_orbitals(alpha_orbitals->vectors, n, alpha_occupied, 1.0),
++        density_from_orbitals(beta_orbitals->vectors, n, beta_occupied, 1.0),
+     };
+   }
+   if (initial_density->size() != 2 * matrix_size ||
+@@ -103,18 +106,26 @@ std::pair<Matrix, Matrix> prepare_initial_uhf_density(
+   Matrix beta(initial_density->begin() + matrix_size, initial_density->end());
+   normalize_spin_density(alpha, ints.overlap, n, alpha_occupied);
+   normalize_spin_density(beta, ints.overlap, n, beta_occupied);
++  if (request == InitialOrbitalRequest::RequireCoreFrame) {
++    // A requested warm frame follows the historical unperturbed convention.
++    alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
++    beta_orbitals = alpha_orbitals;
++  }
+   return {std::move(alpha), std::move(beta)};
+ }
+ 
+ Matrix prepare_initial_density(const core::System& system, const integrals::IntegralData& ints,
+                                const Matrix& orthogonalizer, std::size_t occupied,
+-                               const std::vector<double>* initial_density, EigenResult& orbitals) {
++                               const std::vector<double>* initial_density,
++                               std::optional<EigenResult>& orbitals,
++                               InitialOrbitalRequest request) {
+   const std::size_t n = ints.nbf;
+   scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
+   scf::reference::observation::Scope trace("initial_density", n);
+-  orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
++  orbitals.reset();
+   if (initial_density == nullptr) {
+-    return density_from_orbitals(orbitals.vectors, n, occupied);
++    orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
++    return density_from_orbitals(orbitals->vectors, n, occupied);
+   }
+   if (initial_density->size() != n * n ||
+       !std::all_of(initial_density->begin(), initial_density->end(),
+@@ -144,6 +155,8 @@ Matrix prepare_initial_density(const core::System& system, const integrals::Inte
+   }
+   const double trace_scale = static_cast<double>(system.electron_count) / electron_trace;
+   for (double& value : density) value *= trace_scale;
++  if (request == InitialOrbitalRequest::RequireCoreFrame)
++    orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
+   return density;
+ }
+ 
+diff --git a/src/scf/initial_guess/density.hpp b/src/scf/initial_guess/density.hpp
+index 543d9ff..d55c4c5 100644
+--- a/src/scf/initial_guess/density.hpp
++++ b/src/scf/initial_guess/density.hpp
+@@ -1,6 +1,7 @@
+ #ifndef VIBEQC_SCF_INITIAL_GUESS_DENSITY_HPP
+ #define VIBEQC_SCF_INITIAL_GUESS_DENSITY_HPP
+ 
++#include <optional>
+ #include <utility>
+ 
+ #include "scf/reference/linalg.hpp"
+@@ -17,6 +18,10 @@ namespace vibeqc::scf::initial_guess {
+ using reference::EigenResult;
+ using reference::Matrix;
+ 
++/** Iterative callers need a core frame only to construct a cold density.
++ * A noniterative consumer must explicitly request a frame for supplied D. */
++enum class InitialOrbitalRequest { ColdDensityOnly, RequireCoreFrame };
++
+ /** Resolve integral alpha/beta occupations from a validated electron/spin state. */
+ std::pair<std::size_t, std::size_t> spin_occupations(const core::System& system);
+ /** Apply the historical UHF frontier perturbation only to an open-shell seed.
+@@ -29,17 +34,23 @@ void mix_open_shell_frontier_orbitals(Matrix& beta_coefficients, std::size_t n,
+ void normalize_spin_density(Matrix& density, const Matrix& overlap, std::size_t n,
+                             std::size_t target_electrons);
+ /** Prepare a restricted core guess or a finite, normalized warm density.
+- * Returned orbitals are the core-Hamiltonian frame, including for warm starts;
+- * the solver must recompute the target Fock/orbitals before publishing results.
++ * Supplied density is validated/normalized without reading hcore. Its optional
++ * core frame is empty unless explicitly requested; a cold density always has
++ * a frame. The output is cleared even when validation fails, so a retry cannot
++ * expose a previous call's orbitals. Neither frame represents a physical final
++ * state; the solver must evaluate its target Fock before publishing results.
+  */
+-Matrix prepare_initial_density(const core::System& system, const integrals::IntegralData& ints,
+-                               const Matrix& orthogonalizer, std::size_t occupied,
+-                               const std::vector<double>* initial_density, EigenResult& orbitals);
++Matrix prepare_initial_density(
++    const core::System& system, const integrals::IntegralData& ints, const Matrix& orthogonalizer,
++    std::size_t occupied, const std::vector<double>* initial_density,
++    std::optional<EigenResult>& orbitals,
++    InitialOrbitalRequest request = InitialOrbitalRequest::ColdDensityOnly);
+ /** Prepare independent unit-occupation spin guesses with the same warm-state contract. */
+ std::pair<Matrix, Matrix> prepare_initial_uhf_density(
+     const integrals::IntegralData& ints, const Matrix& orthogonalizer, std::size_t alpha_occupied,
+     std::size_t beta_occupied, const std::vector<double>* initial_density,
+-    EigenResult& alpha_orbitals, EigenResult& beta_orbitals);
++    std::optional<EigenResult>& alpha_orbitals, std::optional<EigenResult>& beta_orbitals,
++    InitialOrbitalRequest request = InitialOrbitalRequest::ColdDensityOnly);
+ 
+ }  // namespace vibeqc::scf::initial_guess
+ #endif
+diff --git a/src/scf/rhf.cpp b/src/scf/rhf.cpp
+index d435537..e7cb11a 100644
+--- a/src/scf/rhf.cpp
++++ b/src/scf/rhf.cpp
+@@ -3,6 +3,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdint>
++#include <cstdlib>
+ #include <limits>
+ #include <memory>
+ #include <numeric>
+@@ -64,6 +65,16 @@ using solver::run_rhf_host_plan;
+ using solver::run_uhf_host_plan;
+ using solver::validate_seed;
+ 
++/** Restore discarded warm core frames only for #206's causal ablation.
++ * Supplied D and all SCF controls stay identical. Normal execution leaves
++ * this unset and never requests an orbital frame it will not consume. */
++initial_guess::InitialOrbitalRequest df_initial_orbital_request() {
++  const char* eager = std::getenv("VIBEQC_DF_EAGER_CORE_GUESS");
++  return eager && eager[0] == '1' && eager[1] == '\0'
++             ? initial_guess::InitialOrbitalRequest::RequireCoreFrame
++             : initial_guess::InitialOrbitalRequest::ColdDensityOnly;
++}
++
+ /** Assemble immutable DF state from already-evaluated one- and three-center data. */
+ DensityFittingScfData assemble_density_fitting_data(integrals::IntegralData one_electron,
+                                                     integrals::DensityFittingIntegralData raw,
+@@ -1415,9 +1426,12 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
+     throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
+   }
+   const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
+-  EigenResult orbitals;
+-  Matrix density = prepare_initial_density(system, data.one_electron, orthogonalizer, occupied,
+-                                           initial_density, orbitals);
++  std::optional<EigenResult> initial_orbitals;
++  Matrix density =
++      prepare_initial_density(system, data.one_electron, orthogonalizer, occupied, initial_density,
++                              initial_orbitals, df_initial_orbital_request());
++  // Device SCF consumes D/X only; fallback computes its own first Fock frame.
++  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
+   ScfResult result;
+   result.initial_density_used = initial_density != nullptr;
+   const CudaDensityFittingPlanPtr plan = make_cuda_density_fitting_plan(
+@@ -1521,11 +1535,12 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
+     throw std::runtime_error("basis has fewer orbitals than required UHF spin occupations");
+   }
+   const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
+-  EigenResult alpha_orbitals;
+-  EigenResult beta_orbitals;
+-  auto [alpha_density, beta_density] =
+-      prepare_initial_uhf_density(data.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
+-                                  initial_density, alpha_orbitals, beta_orbitals);
++  std::optional<EigenResult> initial_alpha, initial_beta;
++  auto [alpha_density, beta_density] = prepare_initial_uhf_density(
++      data.one_electron, orthogonalizer, alpha_occupied, beta_occupied, initial_density,
++      initial_alpha, initial_beta, df_initial_orbital_request());
++  EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
++  EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
+   ScfResult result;
+   result.initial_density_used = initial_density != nullptr;
+   const CudaDensityFittingPlanPtr plan = make_cuda_density_fitting_plan(
+@@ -1740,15 +1755,15 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
+       const std::size_t occupied = static_cast<std::size_t>(systems[source].electron_count / 2);
+       const Matrix orthogonalizer =
+           symmetric_orthogonalizer(prepared.one_electron.overlap, prepared.one_electron.nbf);
+-      EigenResult initial_orbitals;
+-      Matrix density =
+-          prepare_initial_density(systems[source], prepared.one_electron, orthogonalizer, occupied,
+-                                  initial_densities[source], initial_orbitals);
++      std::optional<EigenResult> initial_orbitals;
++      Matrix density = prepare_initial_density(systems[source], prepared.one_electron,
++                                               orthogonalizer, occupied, initial_densities[source],
++                                               initial_orbitals, df_initial_orbital_request());
+       source_indices.push_back(source);
+       data.push_back(std::move(prepared));
+       orthogonalizers.push_back(orthogonalizer);
+       densities.push_back(std::move(density));
+-      orbitals.push_back(std::move(initial_orbitals));
++      orbitals.push_back(std::move(initial_orbitals).value_or(EigenResult{}));
+       diis.emplace_back(options.diis_history);
+       previous_energies.push_back(std::numeric_limits<double>::infinity());
+       outputs[source].scf.initial_density_used = initial_densities[source] != nullptr;
+@@ -2126,18 +2141,19 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
+       }
+       const Matrix orthogonalizer =
+           symmetric_orthogonalizer(prepared.one_electron.overlap, prepared.one_electron.nbf);
+-      EigenResult initial_alpha_orbitals;
+-      EigenResult initial_beta_orbitals;
++      std::optional<EigenResult> initial_alpha_orbitals;
++      std::optional<EigenResult> initial_beta_orbitals;
+       auto [alpha_density, beta_density] = prepare_initial_uhf_density(
+           prepared.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
+-          initial_densities[source], initial_alpha_orbitals, initial_beta_orbitals);
++          initial_densities[source], initial_alpha_orbitals, initial_beta_orbitals,
++          df_initial_orbital_request());
+       source_indices.push_back(source);
+       data.push_back(std::move(prepared));
+       orthogonalizers.push_back(orthogonalizer);
+       alpha_densities.push_back(std::move(alpha_density));
+       beta_densities.push_back(std::move(beta_density));
+-      alpha_orbitals.push_back(std::move(initial_alpha_orbitals));
+-      beta_orbitals.push_back(std::move(initial_beta_orbitals));
++      alpha_orbitals.push_back(std::move(initial_alpha_orbitals).value_or(EigenResult{}));
++      beta_orbitals.push_back(std::move(initial_beta_orbitals).value_or(EigenResult{}));
+       diis.emplace_back(options.diis_history);
+       previous_energies.push_back(std::numeric_limits<double>::infinity());
+       outputs[source].scf.initial_density_used = initial_densities[source] != nullptr;
+diff --git a/src/scf/solver/mean_field_driver.cpp b/src/scf/solver/mean_field_driver.cpp
+index 3416f31..6550c57 100644
+--- a/src/scf/solver/mean_field_driver.cpp
++++ b/src/scf/solver/mean_field_driver.cpp
+@@ -106,9 +106,12 @@ ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& option
+     throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
+   }
+   const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
+-  EigenResult orbitals;
+-  Matrix density =
+-      prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density, orbitals);
++  std::optional<EigenResult> initial_orbitals;
++  Matrix density = prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density,
++                                           initial_orbitals);
++  // Only a cold seed carries a core frame. Warm consumers solve their first
++  // target Fock before reading orbitals; RKS packs its initial factor cold-only.
++  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
+   if (options.strict_initial_density && initial_density) {
+     validate_seed(ints.overlap, *initial_density, n, {static_cast<unsigned>(system.electron_count)},
+                   2.0);
+@@ -184,11 +187,12 @@ ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& option
+     throw std::runtime_error("basis has fewer orbitals than required UHF spin occupations");
+   }
+   const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
+-  EigenResult alpha_orbitals;
+-  EigenResult beta_orbitals;
++  std::optional<EigenResult> initial_alpha, initial_beta;
+   auto [alpha_density, beta_density] =
+       prepare_initial_uhf_density(ints, orthogonalizer, alpha_occupied, beta_occupied,
+-                                  initial_density, alpha_orbitals, beta_orbitals);
++                                  initial_density, initial_alpha, initial_beta);
++  EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
++  EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
+   if (options.strict_initial_density && initial_density) {
+     validate_seed(ints.overlap, *initial_density, n,
+                   {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)},
+diff --git a/tests/native/test_initial_density.cpp b/tests/native/test_initial_density.cpp
+new file mode 100644
+index 0000000..b528cc9
+--- /dev/null
++++ b/tests/native/test_initial_density.cpp
+@@ -0,0 +1,121 @@
++#include <algorithm>
++#include <cmath>
++#include <iostream>
++#include <limits>
++#include <optional>
++#include <stdexcept>
++#include <string_view>
++
++#include "core/types.hpp"
++#include "integrals/s_integrals.hpp"
++#include "scf/initial_guess/density.hpp"
++#include "scf/reference/mean_field.hpp"
++#include "scf/reference/observation.hpp"
++
++namespace {
++using namespace vibeqc;
++using namespace scf::initial_guess;
++using namespace scf::reference;
++
++unsigned solves{};
++std::size_t begin(const char* name, std::size_t) noexcept {
++  if (std::string_view(name) == "reference_eigensolve") ++solves;
++  return 0;
++}
++void end(std::size_t, int) noexcept {}
++const observation::Observer observer{begin, end};
++
++void require(bool condition, const char* message) {
++  if (!condition) throw std::runtime_error(message);
++}
++void close(const Matrix& actual, const Matrix& expected) {
++  require(actual.size() == expected.size(), "matrix shape changed");
++  for (std::size_t i = 0; i < actual.size(); ++i)
++    require(std::isfinite(actual[i]) && std::abs(actual[i] - expected[i]) < 1e-13,
++            "initial-density convention changed");
++}
++template <class Function>
++void invalid(Function&& function) {
++  try {
++    function();
++  } catch (const std::invalid_argument&) {
++    return;
++  }
++  throw std::runtime_error("invalid initial density was accepted");
++}
++
++void check_initial_density_contract() {
++  // Diagonal, nonidentity S gives analytically known eigenpairs. Expected
++  // densities below are independent of the production preparation helpers.
++  integrals::IntegralData ints;
++  ints.nbf = 3;
++  ints.overlap = {2, 0, 0, 0, 1, 0, 0, 0, .5};
++  ints.hcore = {-2, 0, 0, 0, -.5, 0, 0, 0, .25};
++  const Matrix x{std::sqrt(.5), 0, 0, 0, 1, 0, 0, 0, std::sqrt(2.)};
++  core::System system;
++  system.electron_count = 2;
++  std::optional<EigenResult> a, b;
++  solves = 0;
++  const auto cold = prepare_initial_density(system, ints, x, 1, nullptr, a);
++  require(solves == 1 && a, "cold RHF must construct its core frame once");
++  close(cold, {1, 0, 0, 0, 0, 0, 0, 0, 0});
++  const auto [alpha, beta] = prepare_initial_uhf_density(ints, x, 2, 1, nullptr, a, b);
++  require(solves == 2 && a && b, "cold UHF must share one core solve");
++  close(alpha, {.5, 0, 0, 0, 1, 0, 0, 0, 0});
++  // Historical 45-degree beta HOMO/LUMO mixing remains a cold-only choice.
++  close(beta, {.25, std::sqrt(.125), 0, std::sqrt(.125), .5, 0, 0, 0, 0});
++
++  const Matrix hcore = ints.hcore;
++  std::fill(ints.hcore.begin(), ints.hcore.end(), std::numeric_limits<double>::quiet_NaN());
++  const Matrix raw{2, .2, 0, .4, 0, 0, 0, 0, 0};
++  solves = 0;
++  close(prepare_initial_density(system, ints, x, 1, &raw, a), {1, .15, 0, .15, 0, 0, 0, 0, 0});
++  require(solves == 0 && !a, "warm RHF must not compute or retain a core frame");
++  Matrix spin = raw;
++  spin.insert(spin.end(), raw.begin(), raw.end());
++  auto [warm_alpha, warm_beta] = prepare_initial_uhf_density(ints, x, 2, 0, &spin, a, b);
++  close(warm_alpha, {1, .15, 0, .15, 0, 0, 0, 0, 0});
++  close(warm_beta, Matrix(9, 0));
++  require(solves == 0 && !a && !b, "warm empty-spin UHF must clear both core frames");
++
++  // A consumer needing orbitals requests them explicitly, after validating D.
++  ints.hcore = hcore;
++  prepare_initial_uhf_density(ints, x, 2, 1, &spin, a, b, InitialOrbitalRequest::RequireCoreFrame);
++  require(solves == 1 && a && b, "explicit warm frame request did not solve");
++  close(a->vectors, b->vectors);
++  close(density_from_orbitals(b->vectors, 3, 1, 1), {.5, 0, 0, 0, 0, 0, 0, 0, 0});
++  prepare_initial_density(system, ints, x, 1, &raw, a, InitialOrbitalRequest::RequireCoreFrame);
++  require(solves == 2 && a, "explicit RHF warm frame request did not solve");
++
++  for (const Matrix bad :
++       {Matrix(2, 1), Matrix(9, 0), Matrix(9, std::numeric_limits<double>::infinity())}) {
++    a = EigenResult{{1}, {1}};
++    solves = 0;
++    invalid([&] { prepare_initial_density(system, ints, x, 1, &bad, a); });
++    require(solves == 0 && !a, "failed RHF validation leaked a frame or solved hcore");
++  }
++  for (const Matrix bad :
++       {Matrix(2, 1), Matrix(18, 0), Matrix(18, std::numeric_limits<double>::quiet_NaN())}) {
++    a = b = EigenResult{{1}, {1}};
++    solves = 0;
++    invalid([&] { prepare_initial_uhf_density(ints, x, 2, 1, &bad, a, b); });
++    require(solves == 0 && !a && !b, "failed UHF validation leaked a frame or solved hcore");
++  }
++  // A failed item cannot poison a subsequent independent cold request.
++  prepare_initial_density(system, ints, x, 1, nullptr, a);
++  require(solves == 1 && a, "cold retry did not rebuild a valid frame");
++}
++}  // namespace
++
++int main() {
++  observation::active = &observer;
++  try {
++    check_initial_density_contract();
++    observation::active = nullptr;
++    return 0;
++  } catch (const std::exception& error) {
++    observation::active = nullptr;
++    std::cerr << error.what() << '\n';
++    return 1;
++  }
++}
+diff --git a/tests/python/test_df_host_trace.py b/tests/python/test_df_host_trace.py
+index 49a775e..e70ef72 100644
+--- a/tests/python/test_df_host_trace.py
++++ b/tests/python/test_df_host_trace.py
+@@ -74,10 +74,10 @@ def test_partial_or_mistimed_host_records_cannot_pass(key, value):
+ def test_native_solver_calls_include_warm_preparation_and_finalization(
+     tmp_path, monkeypatch, method, device
+ ):
+-    """Baseline call counts come from executed leaves, including warm overhead.
++    """Actual leaves detect reintroduced warm guesses, retaining other solves.
+ 
+-    Later ablations intentionally change the CUDA warm count expectations;
+-    removing the trace hook itself must never satisfy a zero-call gate.
++    Overlap/finalization calls remain until their own measured ablations;
++    removing the trace hook itself must never satisfy the zero-core-call gate.
+     """
+     if device == "cuda" and os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1":
+         pytest.skip("requires an explicitly Slurm-allocated GPU")
+@@ -109,15 +109,31 @@ def test_native_solver_calls_include_warm_preparation_and_finalization(
+         summary = aggregate_host(records)
+         by_reason = summary["eigensolves_by_reason"]
+         assert by_reason["overlap"]["calls"] == 2
+-        assert by_reason["core_guess"]["calls"] == 2
++        assert by_reason.get("core_guess", {}).get("calls", 0) == 0
++        assert (
++            sum(
++                row["name"] == "initial_density"
++                for record in records
++                for row in record["regions"]
++            )
++            == 2
++        )
+         if device == "cuda":
+             assert by_reason["final_fock"]["calls"] == (2 if method == "rhf" else 4)
+             assert not by_reason.get("fallback", {}).get("calls", 0)
+             leaves = summary["reference_eigensolves"]
+-            assert {row["item"] for row in leaves if row["reason"] == "core_guess"} == {
++            assert {row["item"] for row in leaves if row["reason"] == "overlap"} == {
+                 0,
+                 1,
+             }
+         before = path.read_bytes()
+         batch.execute(strict=True, properties=("energy",))
+         assert path.read_bytes() == before
++        if device == "cuda":
++            eager_path = tmp_path / "eager.host.jsonl"
++            monkeypatch.setenv("VIBEQC_DF_HOST_TRACE", str(eager_path))
++            monkeypatch.setenv("VIBEQC_DF_EAGER_CORE_GUESS", "1")
++            eager = batch.execute(strict=True, properties=("energy",))
++            eager_components = aggregate_host(read_host_trace(eager_path))
++            assert eager_components["eigensolves_by_reason"]["core_guess"]["calls"] == 2
++            assert eager.energies == pytest.approx(warm.energies, abs=1e-10)
