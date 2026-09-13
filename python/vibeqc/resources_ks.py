@@ -1,0 +1,416 @@
+"""Complete numeric-capacity planning for native semilocal prepared KS owners.
+
+The dry run resolves shell metadata and integer shapes, never quadrature,
+integrals, density matrices, eigensolvers or a CUDA execution context. CPU
+workspace bounds cover the existing dense reference route. CUDA device state
+uses allocator-owned layout queries and the common #202 direct-J boundary.
+All estimates compose through the existing #203 ResourcePlan and one budget.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import json
+import math
+import os
+from dataclasses import asdict, replace
+
+from .basis import BasisSet
+from .basis_capabilities import require_basis
+from .calculator import Atom, _snapshot_basis
+from .elements import electron_state
+from .resources import (
+    ResourceBudget,
+    ResourceCandidate,
+    ResourceEstimate,
+    ResourceIdentity,
+    ResourceRequest,
+    byte_product,
+    checked_bytes,
+    plan_resources,
+)
+from .resources_hf import _basis_record, _cuda_library_identity, _ecp_workspace
+
+# The public KS adapter currently has immutable GridSpec-v1 defaults. A future
+# grid option must change both this identity and the native prepared binding.
+_GRID = {
+    "version": 1,
+    "radial_points": 48,
+    "angular_polar": 16,
+    "angular_azimuth": 32,
+    "partition_iterations": 3,
+    "coincident_tolerance": 1e-12,
+}
+_TILE = 256
+_METHODS = ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks")
+
+
+def _item_host_inventory(item, *, diis_history, max_iterations, pbe, backend):
+    """Bound numeric and LP64 value metadata by actual execution lifetimes.
+
+    Every plan retains its host grid, basis, warm/source metadata and provider.
+    Preparation and CPU SCF are serialized across items; CUDA SCF state and
+    histories coexist for all active streams. A geometry rebuild destroys its
+    old owner before allocating the new one, retaining only its last-good seed.
+    """
+    orbital = item["orbital"]
+    a, n, c = item["atoms"], orbital["nbf"], orbital["cartesian_nbf"]
+    s, p, spins = orbital["shells"], orbital["primitives"], item["spins"]
+    n2, c2 = byte_product(n, n), byte_product(c, c)
+    points = item["grid_points"]
+    packed = 3 * a + 2 * p + 16 * n
+    # One owned grid has xyz/weights/owner. Source-system copies, AO records,
+    # descriptors and plan objects have a conservative LP64 value allowance.
+    metadata = 4096 + 512 * (a + s + p + n + c + orbital.get("ecp_terms", 0))
+    grid = byte_product(36, points)
+    basis = byte_product(8, packed)
+    warm_and_matrices = byte_product(8, n2, 4 + 4 * spins) + 8 * 3 * a * 4
+    # 128 bytes covers ScfIteration (checked by native inventory v1); the
+    # factor two includes vector growth or the temporary returned CUDA history.
+    history = byte_product(256, max_iterations)
+    provider = byte_product(8, 2 * n2 + (n2 * n2 if backend == "cpu" else 0))
+    # The provider retains S/H; do not count those again as a second owner.
+    retained = metadata + grid + basis + warm_and_matrices + history + provider
+    quadrature = 16 * (_GRID["radial_points"] + _GRID["angular_polar"]) + 8 * a
+    matrix_work = byte_product(8, spins, n2, 128 + 2 * (diis_history + 1))
+    matrix_work += byte_product(16, diis_history + 1, diis_history + 1)
+    xc_tile = byte_product(8, _TILE, n, 4 if pbe else 1) + byte_product(8, spins, n2)
+    if backend == "cpu":
+        # Value-only Jet objects retain no derivative arrays. Raw Cartesian
+        # Jet integrals coexist with unpacked and spherical transform buffers.
+        l = orbital["maximum_angular"]
+        hermite = 6 * (l + 3) ** 2 * (2 * l + 4)
+        recurrence = 64 * ((4 * l + 1) ** 4 + hermite + 256 + a)
+        integrals = byte_product(64, 2 * c2 + byte_product(c2, c2))
+        integrals += max(recurrence, 32 * (c2 * c2 + n2 * n2 + c * n + n2))
+        setup = integrals + quadrature + basis
+    else:
+        pairs = s * (s + 1) // 2
+        # Common HostBatch packing retains primitive/shell-pair metadata and
+        # may form PSSS task descriptors. Bound vector growth, source copies,
+        # AO transforms and Cartesian one-electron downloads without packing.
+        setup = 2048 * (1 + a + s + p + n + c + pairs + pairs * pairs)
+        setup += 64 * (c2 + n2 + n * c) + quadrature + basis
+    setup += _ecp_workspace(item)
+    return {
+        key: checked_bytes(value, f"KS {key}")
+        for key, value in {
+            "metadata": metadata,
+            "grid": grid,
+            "basis": basis,
+            "warm_and_matrices": warm_and_matrices,
+            "history": history,
+            "provider": provider,
+            "retained": retained,
+            "setup_workspace": setup,
+            "scf_workspace": matrix_work + xc_tile,
+        }.items()
+    }
+
+
+def _cuda_item_inventory(library, item, *, diis_history, pbe):
+    query = getattr(library, "vibeqc_resource_ks_cuda_v1", None)
+    if query is None:
+        raise NotImplementedError(
+            "native library has no KS CUDA allocation inventory v1"
+        )
+    orbital = item["orbital"]
+    args = (
+        orbital["nbf"],
+        item["atoms"],
+        orbital["shells"],
+        orbital["primitives"],
+        item["grid_points"],
+        diis_history,
+        item["spins"],
+        int(pbe),
+        _TILE,
+    )
+    if any(value > 2 ** (8 * ctypes.sizeof(ctypes.c_size_t)) - 1 for value in args):
+        raise ValueError("KS resource shape exceeds the host size_t ABI")
+    query.argtypes = [ctypes.c_size_t] * 9 + [
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.c_size_t,
+    ]
+    query.restype = ctypes.c_int
+    output = (ctypes.c_uint64 * 3)()
+    if query(*args, output, len(output)):
+        raise NotImplementedError(
+            "KS CUDA inventory requires a CUDA build and valid launch/DIIS dimensions"
+        )
+    n, a, s, p = (
+        orbital["cartesian_nbf"],
+        item["atoms"],
+        orbital["shells"],
+        orbital["primitives"],
+    )
+    pairs = s * (s + 1) // 2
+    # The existing one-electron exporter uploads Cartesian metadata, shell/AO
+    # pair indices and S/H/nuclear output, then frees them before preparing J.
+    # This bound includes every explicit device buffer of that value-only path.
+    setup = byte_product(64, 1 + a + s + p + n + pairs + n * n)
+    setup = max(setup, _ecp_workspace(item))
+    return {
+        "state": checked_bytes(int(output[0])),
+        "xc": checked_bytes(int(output[1])),
+        "coulomb": checked_bytes(int(output[2])),
+        "setup": checked_bytes(setup),
+    }
+
+
+def ks_resource_request(
+    systems,
+    *,
+    method="pbe-rks",
+    basis="sto-3g",
+    backend="cpu",
+    basis_representation=None,
+    charges=None,
+    multiplicities=None,
+    diis_history=8,
+    max_iterations=100,
+    energy_tolerance=1e-10,
+    density_tolerance=1e-8,
+    screening_tolerance=1e-12,
+    device_id=0,
+    library=None,
+    name="ks",
+    first_phase=0,
+    last_phase=0,
+):
+    """Resolve one complete energy-only KS request for the shared global planner."""
+    if method not in _METHODS or backend not in ("cpu", "cuda"):
+        raise NotImplementedError(
+            "KS planning supports native CPU/CUDA LDA/PBE RKS/UKS energies"
+        )
+    systems = tuple(tuple(Atom.from_value(a) for a in atoms) for atoms in systems)
+    if not systems or any(not atoms for atoms in systems):
+        raise ValueError("KS resource planning requires nonempty systems")
+    charges = (0,) * len(systems) if charges is None else tuple(charges)
+    multiplicities = (
+        (1,) * len(systems) if multiplicities is None else tuple(multiplicities)
+    )
+    if len(charges) != len(systems) or len(multiplicities) != len(systems):
+        raise ValueError("charges and multiplicities must match the KS batch")
+    for label, value in (
+        ("DIIS history", diis_history),
+        ("maximum iterations", max_iterations),
+        ("device", device_id),
+    ):
+        checked_bytes(value, label)
+    # Match descriptor defaults, including explicitly supplied zero controls.
+    diis_history, max_iterations = diis_history or 8, max_iterations or 100
+    for value in (energy_tolerance, density_tolerance, screening_tolerance):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("KS numerical tolerances must be positive finite")
+    selected = _snapshot_basis(basis, basis_representation)
+    pbe, unrestricted = method.startswith("pbe"), method.endswith("uks")
+    items = []
+    for atoms, charge, multiplicity in zip(
+        systems, charges, multiplicities, strict=True
+    ):
+        electrons = electron_state(
+            atoms,
+            charge=charge,
+            multiplicity=multiplicity,
+            element_metadata=selected.by_element
+            if isinstance(selected, BasisSet)
+            else {},
+        )
+        if not unrestricted and (
+            multiplicity != 1 or electrons.nalpha != electrons.nbeta
+        ):
+            raise ValueError("RKS requires a closed-shell singlet")
+        orbital = _basis_record(
+            atoms,
+            selected,
+            basis_representation,
+            backend,
+            charge,
+            multiplicity,
+            "orbital",
+            derivative_order=0,
+        )
+        if (
+            not electrons.nalpha
+            or max(electrons.nalpha, electrons.nbeta) > orbital["nbf"]
+        ):
+            raise ValueError("KS spin populations do not fit the AO space")
+        require_basis(
+            selected,
+            atoms,
+            backend=backend,
+            operator="ao",
+            derivative_order=int(pbe),
+            representation=orbital["representation"],
+            role="orbital",
+        )
+        items.append(
+            {
+                "atoms": len(atoms),
+                "orbital": orbital,
+                "electrons": asdict(electrons),
+                "spins": 2 if unrestricted else 1,
+                "grid_points": byte_product(
+                    len(atoms),
+                    _GRID["radial_points"],
+                    _GRID["angular_polar"],
+                    _GRID["angular_azimuth"],
+                ),
+            }
+        )
+    controls = {
+        "diis_history": diis_history,
+        "max_iterations": max_iterations,
+        "energy_tolerance": energy_tolerance,
+        "density_tolerance": density_tolerance,
+        "screening_tolerance": screening_tolerance,
+        "grid": _GRID,
+        "tile_points": _TILE,
+        "functional": "PBE_X+PBE_C" if pbe else "LDA_X+LDA_C_PW",
+        "xc_policy": "xc-scf-domain-v1",
+        "outputs": "energy",
+        "inventory_version": 1,
+        "schedule": "ordinary-stream-round-robin"
+        if backend == "cuda"
+        else "serialized-native",
+    }
+    if backend == "cuda":
+        controls.update(
+            device_id=device_id,
+            one_electron_mapping=os.environ.get("VIBEQC_ONE_ELECTRON_VALUE_MAPPING"),
+        )
+    identity = ResourceIdentity(
+        method,
+        "native-ks-direct-v1",
+        backend,
+        "fp64",
+        json.dumps({"items": items}),
+        ("energy",),
+        json.dumps(controls, sort_keys=True),
+    )
+    exclusions = (
+        "caller-owned inputs and previously retained explicit output/snapshot objects",
+        "Python objects, allocator bookkeeping, arenas and page rounding",
+    )
+    if backend == "cuda":
+        exclusions += (
+            "CUDA driver/context/modules, compiler-managed stacks and pool/page retention",
+        )
+    host = [
+        _item_host_inventory(
+            item,
+            diis_history=diis_history,
+            max_iterations=max_iterations,
+            pbe=pbe,
+            backend=backend,
+        )
+        for item in items
+    ]
+    estimates = []
+    for key in (
+        "metadata",
+        "grid",
+        "basis",
+        "warm_and_matrices",
+        "history",
+        "provider",
+    ):
+        estimates.append(
+            ResourceEstimate(
+                f"all KS host {key}",
+                checked_bytes(sum(x[key] for x in host)),
+                "pageable",
+                first_phase,
+                last_phase,
+                kind="persistent",
+            )
+        )
+    estimates.append(
+        ResourceEstimate(
+            "serialized KS setup/SCF/XC host workspace",
+            max(max(x["setup_workspace"], x["scf_workspace"]) for x in host),
+            "pageable",
+            first_phase,
+            last_phase,
+        )
+    )
+    device = []
+    try:
+        if backend == "cuda" and library is None:
+            from . import _native
+
+            library = _native.load_library(device="cpu")
+        if library is not None:
+            version = getattr(library, "vibeqc_ks_resource_inventory_version_v1", None)
+            if version is not None:
+                version.argtypes, version.restype = [], ctypes.c_int
+            if version is None or version() != 1:
+                raise NotImplementedError(
+                    "native library does not implement KS allocation inventory v1"
+                )
+        if backend == "cuda":
+            identity = replace(
+                identity,
+                schedule=json.dumps(
+                    {**controls, **_cuda_library_identity(library)}, sort_keys=True
+                ),
+            )
+            device = [
+                _cuda_item_inventory(library, item, diis_history=diis_history, pbe=pbe)
+                for item in items
+            ]
+            for key in ("state", "xc", "coulomb"):
+                estimates.append(
+                    ResourceEstimate(
+                        f"all KS device {key}",
+                        checked_bytes(sum(x[key] for x in device)),
+                        f"device:{device_id}",
+                        first_phase,
+                        last_phase,
+                        kind="persistent",
+                    )
+                )
+            # At most one owner is rebuilt at a time. Its retired allocation
+            # need not coexist with its one-electron setup temporary.
+            extra = max(
+                max(0, x["setup"] - sum(x[k] for k in ("state", "xc", "coulomb")))
+                for x in device
+            )
+            estimates.append(
+                ResourceEstimate(
+                    "KS one-electron setup excess over retired owner",
+                    extra,
+                    f"device:{device_id}",
+                    first_phase,
+                    last_phase,
+                )
+            )
+    except (NotImplementedError, RuntimeError, OSError) as error:
+        return ResourceRequest(
+            name, identity, (), exclusions, unsupported_reason=str(error)
+        )
+    candidate = ResourceCandidate(
+        f"{backend}-ks-resident",
+        "resident",
+        tuple(estimates),
+        decisions=(
+            ("batch_execution", controls["schedule"]),
+            ("cpu_worker_limit", "1"),
+            ("item_host_inventory", json.dumps(host, sort_keys=True)),
+            ("item_device_inventory", json.dumps(device, sort_keys=True)),
+            (
+                "preparation",
+                "included in common observation and persistent device ledger",
+            ),
+        ),
+    )
+    return ResourceRequest(name, identity, (candidate,), exclusions)
+
+
+def estimate_ks_resources(systems, *, budget=None, **options):
+    """Plan native KS energy capacity without creating scientific arrays."""
+    return plan_resources(
+        (ks_resource_request(systems, **options),),
+        ResourceBudget() if budget is None else budget,
+    )

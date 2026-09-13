@@ -157,10 +157,11 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   const auto retained_capacity = [&] {
     return runtime::add_capacity(
         runtime::add_capacity(plan.cpu_observation_capacity(), diis.numeric_capacity()),
-        runtime::add_capacity(factor ? factor->numeric_capacity_bytes() : 0,
-                              runtime::vector_capacities(
-                                  orthogonalizer, density, orbitals.values, orbitals.vectors,
-                                  basis.packed, grid.points(), grid.weights(), grid.owners())));
+        runtime::add_capacity(
+            factor ? factor->numeric_capacity_bytes() : 0,
+            runtime::vector_capacities(orthogonalizer, density, orbitals.values, orbitals.vectors,
+                                       basis.packed, grid.points(), grid.weights(), grid.owners(),
+                                       ks.history)));
   };
   const auto make_current_factor = [&](std::size_t extra_live_bytes = 0) {
     // Only an actual unmixed eigensolver state advances both generations.

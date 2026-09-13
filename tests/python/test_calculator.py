@@ -182,8 +182,8 @@ def test_lda_rks_public_contract_is_cpu_energy_only():
         )
     with calculator.prepare_batch([[("He", (0.0, 0.0, 0.0))]]) as batch:
         assert batch.execute(strict=True).items[0].forces is None
-    with pytest.raises(NotImplementedError, match="Hartree-Fock methods only"):
-        calculator.estimate_resources([[("He", (0.0, 0.0, 0.0))]])
+    plan = calculator.estimate_resources([[("He", (0.0, 0.0, 0.0))]])
+    assert plan.status == "feasible" and plan.requests[0].name == "ks"
 
 
 def test_pbe_rks_public_contract_is_cpu_energy_only():

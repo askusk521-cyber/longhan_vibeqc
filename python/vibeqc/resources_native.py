@@ -5,6 +5,48 @@ import ctypes
 from .resources import ResourceAllocationError, _account
 
 
+def observe_method_call(
+    library, plan, ledger, callback, *, owner, phase="observation", previous=None
+):
+    """Bind the same prepared owner around setup and each synchronous replay.
+
+    Preparation can allocate persistent scientific buffers. Its evidence must
+    survive subsequent execution scopes and failures, while each replay resets
+    the ledger peak to the buffers still owned by the prepared calculation.
+    """
+    from .resources import CpuResourceObservation
+
+    observed = CpuResourceObservation(library, cpu_workers=1, ledger=ledger)
+    diagnostics = dict(previous or {})
+    diagnostics.update(plan=plan.to_dict(), owner=owner, phase=phase)
+
+    def evidence():
+        record = observed.to_dict()
+        if owner == "ks":
+            record["cuda_scope"] = (
+                "common direct-J provider arena samples; complete explicit KS device capacities are in device_ledger"
+            )
+            record["scope"] = (
+                "explicit KS grid/basis/provider/SCF capacities with retained fleet and warm buffers"
+            )
+            record["excludes"] = [
+                "unsampled setup/XC/recurrence/eigensolver temporaries",
+                "object metadata and runtime overhead",
+            ]
+        return record
+
+    try:
+        with observed:
+            status = callback()
+        diagnostics[phase] = evidence()
+        observed.verify(plan)
+    except Exception as error:
+        diagnostics[phase] = evidence()
+        error.resource_diagnostics = diagnostics
+        raise
+    return status, diagnostics
+
+
 def check_resource_status(library, status, diagnostics):
     """Keep resource evidence on failed native calls without guessing OOM space.
 
@@ -19,12 +61,12 @@ def check_resource_status(library, status, diagnostics):
     except RuntimeError as error:
         failure = error
         if status == _native.STATUS_OUT_OF_MEMORY:
-            observation = diagnostics.get("observation", {})
+            observation = diagnostics.get(diagnostics.get("phase", "observation"), {})
             ledger = observation.get("device_ledger")
             backend = next(
                 r["identity"]["backend"]
                 for r in diagnostics["plan"]["requests"]
-                if r["name"] == "hf"
+                if r["name"] == diagnostics.get("owner", "hf")
             )
             space = (
                 "host"
@@ -56,6 +98,7 @@ class NativeDeviceLedger:
 
     def __init__(self, library, plan, *, owner="hf"):
         plan.require_feasible()
+        self.owner = owner
         request = next(r for r in plan.requests if r.name == owner)
         if request.identity.backend != "cuda":
             raise ValueError("native device ledger requires a CUDA request")
@@ -66,7 +109,7 @@ class NativeDeviceLedger:
         }
         if len(devices) != 1:
             raise NotImplementedError(
-                "one native HF owner must use one visible CUDA device"
+                "one native prepared owner must use one visible CUDA device"
             )
         self.device = int(devices.pop().split(":")[1])
         numeric = tuple(
@@ -112,7 +155,8 @@ class NativeDeviceLedger:
             "peak_bytes": values[1],
             "allocations": values[2],
             "rejected_allocations": values[3],
-            "scope": "owned HF CUDA buffer capacities; excludes driver/graph/pool and library-internal allocations",
+            "owner": self.owner,
+            "scope": "owned CUDA buffer capacities; excludes driver/graph/pool and library-internal allocations",
         }
 
     def close(self):

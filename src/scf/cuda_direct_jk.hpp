@@ -22,6 +22,14 @@ struct CudaDirectJkDiagnostic {
   const char* schedule{"generic-contracted-eri-public-ao"};
 };
 
+/** Exact explicit device capacity for homogeneous public-AO items. Atom,
+ * shell and primitive counts are totals across the batch. Shape-only query:
+ * no host packing, density allocation, CUDA initialization or free-memory probe.
+ */
+std::size_t cuda_direct_jk_device_bytes(std::size_t batch, std::size_t nao, std::size_t atoms,
+                                        std::size_t shells, std::size_t primitives,
+                                        unsigned derivative_order);
+
 /** Bind normalized, homogeneous public AO dimensions and coordinate counts.
  * Each item retains its own shell/geometry metadata. A geometry or basis change
  * requires a new plan. A positive budget bounds explicit device allocations;

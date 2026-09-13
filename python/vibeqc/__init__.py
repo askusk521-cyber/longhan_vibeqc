@@ -57,6 +57,7 @@ from .resources import (
     plan_resources,
 )
 from .resources_hf import estimate_hf_resources
+from .resources_ks import estimate_ks_resources
 
 __all__ = [
     "AccuracyAssessment",
@@ -110,6 +111,7 @@ __all__ = [
     "cross_overlap",
     "electron_state",
     "estimate_hf_resources",
+    "estimate_ks_resources",
     "import_bse",
     "load_basis",
     "method_capabilities",

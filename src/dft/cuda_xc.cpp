@@ -37,18 +37,20 @@ CudaXcLayout cuda_xc_layout(const AoBasis& basis, const MolecularGrid& grid, boo
   if (basis.nao != grid_basis.nao || basis.natom != grid_basis.natom ||
       basis.nprimitive != grid_basis.nprimitive || basis.packed != grid_basis.packed)
     throw std::invalid_argument("CUDA XC grid/basis identity mismatch");
-  if (!tile_points || tile_points > INT_MAX || !grid.point_count() || basis.nao > INT_MAX)
-    throw std::invalid_argument("invalid CUDA XC tile or basis dimension");
-  CudaXcLayout out{basis.natom,
-                   basis.nprimitive,
-                   basis.nao,
-                   grid.point_count(),
-                   std::min(tile_points, grid.point_count()),
-                   unrestricted ? 2U : 1U,
-                   pbe ? 4U : 1U,
-                   basis.packed.size(),
-                   0,
-                   pbe};
+  return cuda_xc_layout_shape(basis.natom, basis.nprimitive, basis.nao, grid.point_count(), pbe,
+                              unrestricted, tile_points);
+}
+
+CudaXcLayout cuda_xc_layout_shape(std::size_t atoms, std::size_t primitives, std::size_t nao,
+                                  std::size_t points, bool pbe, bool unrestricted,
+                                  std::size_t tile_points) {
+  if (!atoms || !primitives || !nao || !points || !tile_points || tile_points > INT_MAX ||
+      atoms > INT_MAX || primitives > INT_MAX || nao > INT_MAX)
+    throw std::invalid_argument("invalid CUDA XC resource shape");
+  const auto packed = add(add(multiply(3, atoms), multiply(2, primitives)), multiply(16, nao));
+  CudaXcLayout out{
+      atoms,         primitives, nao, points, std::min(tile_points, points), unrestricted ? 2U : 1U,
+      pbe ? 4U : 1U, packed,     0,   pbe};
   std::size_t elements = add(out.packed_elements, multiply(4, out.npoint));
   const auto panel = multiply(out.tile_points, out.nao);
   elements = add(elements, multiply(out.jets + out.spins, panel));

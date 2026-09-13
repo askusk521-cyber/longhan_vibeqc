@@ -10,6 +10,7 @@
 #include "dft/ao_grid.hpp"
 #include "dft/grid.hpp"
 #include "molecule/basis.hpp"
+#include "runtime/resource_usage.hpp"
 #include "scf/fock_prepared.hpp"
 #include "scf/initial_guess/density.hpp"
 #include "scf/mean_field.hpp"
@@ -17,6 +18,7 @@
 
 #if VIBEQC_HAS_CUDA
 #include "dft/cuda_ks.hpp"
+#include "scf/cuda_direct_jk.hpp"
 #endif
 
 namespace vibeqc::methods::detail {
@@ -98,6 +100,21 @@ Result adapt_result(const scf::ScfResult& native, vibeqc_backend backend) {
   return result;
 }
 
+/** The method's global ledger supplies the budget. Size the common direct
+ * source explicitly so its standalone default cap is not a second KS limit. */
+std::size_t ks_provider_bytes(const core::System& system, vibeqc_backend backend) {
+#if VIBEQC_HAS_CUDA
+  if (backend == VIBEQC_BACKEND_CUDA) {
+    std::size_t primitives = 0;
+    for (const auto& shell : system.shells)
+      primitives = runtime::add_capacity(primitives, shell.primitives.size());
+    return scf::cuda_direct_jk_device_bytes(1, molecule::ao_count(system), system.atoms.size(),
+                                            system.shells.size(), primitives, 0);
+  }
+#endif
+  return 0;
+}
+
 class KsPreparedCalculation final : public PreparedCalculation {
  public:
   KsPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
@@ -107,7 +124,8 @@ class KsPreparedCalculation final : public PreparedCalculation {
         method_(method),
         options_(std::move(options)),
         backend_(backend),
-        fock_(system_, nullptr, *options_.resolved_fock_build, device),
+        fock_(system_, nullptr, *options_.resolved_fock_build, device,
+              ks_provider_bytes(system_, backend)),
         basis_(system_),
         grid_(system_) {
 #if VIBEQC_HAS_CUDA
@@ -116,11 +134,25 @@ class KsPreparedCalculation final : public PreparedCalculation {
           fock_, basis_, grid_, options_,
           method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS);
 #endif
+    runtime::sample_cpu_capacity(host_numeric_capacity());
   }
 
   std::size_t atom_count() const noexcept override { return system_.atoms.size(); }
   const Capabilities& capabilities() const noexcept override { return capabilities_; }
   const core::System& system() const noexcept { return system_; }
+
+  /** Explicit retained vectors; object metadata and transient setup are not
+   * inferred from this lower-bound observation. Grid/basis buffers are owned. */
+  std::size_t host_numeric_capacity() const noexcept {
+    auto bytes =
+        runtime::add_capacity(fock_.cpu_observation_capacity(),
+                              runtime::vector_capacities(basis_.packed, grid_.points(),
+                                                         grid_.weights(), grid_.owners(), warm_));
+#if VIBEQC_HAS_CUDA
+    if (cuda_) bytes = runtime::add_capacity(bytes, cuda_->resources().retained_host_numeric_bytes);
+#endif
+    return bytes;
+  }
 
   /** Explicit output/rebuild export. Ordinary CUDA replays keep this on device. */
   std::vector<double> warm_density() {
@@ -168,6 +200,9 @@ class KsPreparedCalculation final : public PreparedCalculation {
 #endif
     const auto* seed =
         initial_density ? initial_density : (reuse_warm && !warm_.empty() ? &warm_ : nullptr);
+    // The CPU driver already samples its provider/grid. Add only the retained
+    // last-good density, which coexists with its current/proposed densities.
+    runtime::CpuRetainedCapacity retained_warm(runtime::vector_bytes(warm_));
     scf::ScfResult native;
     if (method_ == VIBEQC_METHOD_LDA_UKS || method_ == VIBEQC_METHOD_PBE_UKS)
       native = scf::run_uks(fock_, basis_, grid_, options_, method_ == VIBEQC_METHOD_PBE_UKS, seed);
@@ -247,7 +282,10 @@ class KsPreparedBatch final : public PreparedBatch {
         device_(device),
         warm_enabled_(warm_enabled),
         items_(systems_.size()) {
-    for (std::size_t i = 0; i < size(); ++i) items_[i].plan = make_plan(systems_[i]);
+    for (std::size_t i = 0; i < size(); ++i) {
+      runtime::CpuRetainedCapacity neighbors(host_numeric_capacity());
+      items_[i].plan = make_plan(systems_[i]);
+    }
   }
 
   std::size_t size() const noexcept override { return systems_.size(); }
@@ -330,6 +368,7 @@ class KsPreparedBatch final : public PreparedBatch {
             continue;
           }
 #endif
+          runtime::CpuRetainedCapacity neighbors(host_numeric_capacity(i));
           finish(i,
                  item.plan->run(seed, reuse && item.resident_warm, warm_enabled_ && warm_updates_));
         } catch (...) {
@@ -366,6 +405,7 @@ class KsPreparedBatch final : public PreparedBatch {
       }
 #endif
     }
+    runtime::sample_cpu_capacity(host_numeric_capacity());
     return results;
   }
 
@@ -440,6 +480,21 @@ class KsPreparedBatch final : public PreparedBatch {
   }
 
  private:
+  /** All other owners remain alive while one CPU item executes. The selected
+   * item's externally materialized seed is also distinct from its plan. */
+  std::size_t host_numeric_capacity(std::size_t exclude_plan = SIZE_MAX) const noexcept {
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+      const auto& item = items_[i];
+      if (item.plan && i != exclude_plan)
+        bytes = runtime::add_capacity(bytes, item.plan->host_numeric_capacity());
+      if (item.warm)
+        bytes = runtime::add_capacity(
+            bytes, runtime::vector_capacities(item.warm->density, item.warm->coordinates));
+    }
+    return bytes;
+  }
+
   struct Item {
     std::unique_ptr<KsPreparedCalculation> plan;
     // Density is materialized only for explicit output, import, or rebuilding

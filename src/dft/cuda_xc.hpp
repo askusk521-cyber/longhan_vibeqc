@@ -26,6 +26,12 @@ struct CudaXcLayout {
 CudaXcLayout cuda_xc_layout(const AoBasis& basis, const MolecularGrid& grid, bool pbe,
                             bool unrestricted, std::size_t tile_points = 256);
 
+/** Metadata-only counterpart of the same layout: does not construct a grid,
+ * normalize basis data, initialize CUDA or allocate any numerical buffer. */
+CudaXcLayout cuda_xc_layout_shape(std::size_t atoms, std::size_t primitives, std::size_t nao,
+                                  std::size_t points, bool pbe, bool unrestricted,
+                                  std::size_t tile_points = 256);
+
 struct CudaXcTransfers {
   std::uint64_t setup_h2d_bytes{}, output_d2h_bytes{}, synchronizations{}, evaluations{};
 };

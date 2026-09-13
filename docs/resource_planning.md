@@ -77,21 +77,57 @@ candidates and need not be simultaneously attainable.
 | CPU density fitting | Fleet state as above | Also includes the current implementation's four-center ERIs/derivatives, raw metric/three-center derivatives, transformed factors and analytic metric response |
 | Small CUDA direct RHF/UHF | Sum of every retained bucket arena | Exact production arena layout, plus a single-item arena for existing cold numerical recovery alongside warm caches; conservative host topology/staging bound |
 | Small CUDA density fitting | Sum of all bucket J/K caches and solver workspace allowances | Maximum serialized setup/force workspace, source metadata uploads and a cold numerical recovery reservation; native tile planner supplies actual tile dimensions |
+| CPU LDA/PBE RKS/UKS | All grids, packed bases, conventional integral providers, warm densities and diagnostic histories | Serialized value-only integral preparation and SCF/XC/DIIS workspace |
+| CUDA LDA/PBE RKS/UKS | Sum of every native stream's exact state/XC/direct-J arenas, host grids/bases and histories | Serialized host/one-electron setup; the replaced item's old owner retires before the new owner allocates |
 | TensorIR CUDA | Native arena, input/output storage, host staging and library allowance | Existing TensorIR liveness, tiling and recomputation alternatives; full inputs/outputs remain resident |
 
 Budgeted CPU execution explicitly uses one native worker, including multi-item
 buckets. Workspace therefore scales with the largest item and retained state
-with the fleet. CUDA buckets execute serially but retain all their caches.
+with the fleet. HF CUDA buckets execute serially but retain all their caches.
+KS CUDA batches enqueue all active streams before collecting scalar results;
+their persistent states and workspaces are all included in the same plan.
 Geometry updates preserve resource topology identity when dimensions remain
 compatible; scientific warm-state and integral-cache invalidation still apply.
 
-CUDA direct inventory v1 supports at most 16 public AOs and DIIS history 64.
+HF CUDA direct inventory v1 supports at most 16 public AOs and DIIS history 64.
 CUDA DF additionally limits auxiliary AOs to 128. Larger shapes, missing native
 inventory queries and optional profiling/graph-eigensolver overrides report
 unsupported. Explicit auxiliary templates must be compatible across a fleet,
-matching the existing native batch contract. DFT/grid, response and correlated
-providers can implement `ResourceRequest`; these methods do not yet have
-execution adapters in this inventory.
+matching the existing native batch contract. Response and correlated providers
+can implement `ResourceRequest`; these methods do not yet have execution
+adapters in this inventory.
+
+### Semilocal KS energies
+
+`estimate_ks_resources(systems, method="pbe-rks", ...)` resolves the same
+energy-only LDA/PBE RKS/UKS controls as `Calculator.estimate_resources`. The CLI
+also accepts these four method names. CPU estimation requires no native library;
+CUDA estimation uses allocation-owned shape queries without constructing a
+context, quadrature, AO matrix, integral or eigensolver. Native KS inventory v1
+supports the ordinary-stream solver above 16 AOs and up to 64 DIIS entries,
+subject to checked native launch dimensions. It declares the current immutable
+GridSpec-v1 (48 radial, 16 polar, 32 azimuth), 256-point tile, functional/domain
+policy, basis/charge/spin, numerical controls, backend and CUDA binary identity.
+Geometry changes preserve the resource shape; model changes require a new plan.
+
+The host inventory includes 36 bytes per quadrature point, packed AO metadata,
+all prepared owners and warm snapshots, iteration records, and conservative
+value-only Cartesian/Jet/recurrence, eigensolver, DIIS and XC workspace bounds.
+CUDA state/XC and #202 direct-J device capacities come from the allocator's
+own checked layouts. One-electron device setup is conservatively bounded and
+charged only for its excess over the owner it replaces. KS passes the exact
+direct-J source size to #202 rather than inheriting its standalone default cap.
+The public method has one global budget and no separate XC or J user budget.
+
+KS binds its ledger during **preparation and execution**, retaining separate
+`preparation` and `observation` evidence. All scientific device allocations
+are charged before returning a prepared object. Replays retain charges and
+geometry rebuilds release old buffers first. Preparation/execute failures keep
+their available evidence. CPU observations remain partial capacity samples;
+they include retained fleet/grid/basis/warm buffers but do not measure every
+setup, recurrence, XC-tile or eigensolver temporary. They are never reported
+as a complete allocator peak. Python objects, allocator bookkeeping, CUDA
+driver/modules/stacks and runtime retention are explicitly excluded.
 
 CUDA DF offers resident and source-regeneration choices. A positive explicit
 DF sub-budget retains the native source mode; otherwise the planner may choose
@@ -158,7 +194,7 @@ alternatives and explicitly prepare a new calculation. This boundary prevents
 replaying successful neighbors or silently changing a partially executed fleet.
 
 The native device ledger charges actual owned CUDA buffer capacities, enforces
-the selected HF owner's numeric capacity, retains charges across warm calls,
+the selected HF or KS owner's numeric capacity, retains charges across warm calls,
 and releases charges with native cache destruction. A shared global budget
 also reserves TensorIR's separate allocations. The ledger excludes CUDA
 context/modules, graphs, stacks, pool/page retention and library internals.

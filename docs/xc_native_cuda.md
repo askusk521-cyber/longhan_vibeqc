@@ -5,7 +5,9 @@ component for #162. It consumes current device density matrices and returns
 device XC energy/electron totals, potential matrices and a numerical-error
 flag. `dft/cuda_ks.hpp` composes it into native ordinary-stream SCF; the
 registered method adapter exposes CPU/CUDA single-system and native prepared
-ragged energy execution. Full public resource planning remains separate work.
+ragged energy execution. The public #203 method resource plan accounts for
+preparation and execution with one persistent ledger; see
+[resource planning](resource_planning.md).
 
 ## Ownership and data movement
 
@@ -132,7 +134,8 @@ against two independently converged PySCF guesses on the identical grid.
 geometry rebuilds, per-item failures, frozen/cleared/imported seeds, ABI
 diagnostics and method-specific derivative requirements. The combined batch
 and independent SCF modules pass all 45 cases on the CPU/CUDA build with a
-Slurm-allocated RTX 5090. These checks remain distinct from complete method
-resource planning and the full workload evidence required by #162.
+Slurm-allocated RTX 5090. Resource budget boundaries and ledger lifetime are
+separately covered by `tests/python/test_ks_resources.py`; the full workload
+evidence required by #162 remains a separate acceptance gate.
 The five CUDA batch cases also pass Compute Sanitizer memcheck with full leak
 checking: zero errors and zero bytes leaked.

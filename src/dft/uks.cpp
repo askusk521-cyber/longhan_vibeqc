@@ -7,6 +7,7 @@
 #include "dft/ao_grid.hpp"
 #include "dft/grid.hpp"
 #include "dft/xc.hpp"
+#include "runtime/resource_usage.hpp"
 #include "scf/fock_prepared.hpp"
 #include "scf/initial_guess/density.hpp"
 #include "scf/mean_field.hpp"
@@ -129,6 +130,14 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                                   density_change,
                                   diagnostic.physical_residual,
                                   {dot(alpha, ints.overlap), dot(beta, ints.overlap)}});
+    // Sample actual coexisting capacities. Recurrence, XC tile and solver
+    // temporaries have already retired here and remain outside this sample.
+    runtime::sample_cpu_capacity(runtime::add_capacity(
+        runtime::add_capacity(plan.cpu_observation_capacity(), diis.numeric_capacity()),
+        runtime::vector_capacities(basis.packed, grid.points(), grid.weights(), grid.owners(), x,
+                                   alpha, beta, ca.values, ca.vectors, cb.values, cb.vectors,
+                                   physical.fock.alpha, physical.fock.beta, ra, rb, effective.first,
+                                   effective.second, next_a, next_b, diagnostic.history)));
     // Preserve #305's stationary occupation-cycle fix when routing its public
     // wrappers through this driver. Only subsequent proposals are shifted;
     // every physical gate and the integer-occupation density stay unchanged.

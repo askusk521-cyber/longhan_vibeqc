@@ -4,6 +4,31 @@ This is an intermediate record. **Issue #162 is not complete.** The original
 RKS/UKS CPU/CUDA prepared-execution scope and both issue addenda remain the
 acceptance contract. Gradients are #163; DF is not advertised by this work.
 
+PR #306 publishes the validated resident XC/SCF and native ragged batch
+commits `05951fb` and `afad4e4`. Its next stage adds the public #203 KS resource
+request/CLI, allocation-owned CUDA shape queries and one persistent ledger
+covering both prepare and execute. CPU budgets include all retained grids,
+bases, providers and warm states plus serialized setup/SCF workspace. Device
+budgets sum all concurrent item arenas; geometry rebuilds retire old owners
+before allocation. Failures retain their preparation or execution evidence.
+
+Resource-stage validation on 2026-09-14: 25/25 native CPU tests; 83 selected
+Python resource/calculator/batch/HF tests passed, with 3 optional skips;
+10 CUDA ownership tests passed. The existing C++ heap audit, extended through
+the native KS method adapter, passed ten HF/KS cases including >16-AO water,
+cold/replay/changed/restored geometry and complete release after destruction.
+On the Slurm RTX 5090, four native tests and 24 KS/HF CUDA resource cases
+passed. Six CUDA KS resource cases also passed Compute Sanitizer memcheck
+in 124.79 s with zero errors and zero bytes leaked. These capacity checks
+do not replace the full #138 numerical/workload evidence gate.
+
+```bash
+PYTHONPATH=python:. VIBEQC_LIBRARY=$PWD/build/cpu/libvibeqc.so \
+  OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 .venv/bin/python \
+  benchmarks/resource-planning/cpu_inventory.py --build build/cpu \
+  --include-ks --output /tmp/ks-cpu-resources.json
+```
+
 PR #305 is merged as `15d6936390723edf9e9eb0c91fecde4390490573`.
 Implementation `05951fb` is integrated onto that actual squash commit. It retains
 all CPU corrections: stable extreme-spin/gradient point algebra, evaluated
@@ -174,8 +199,8 @@ record. They do not establish the earlier unconstrained or CUDA traces.
 
 ## Remaining work against the full issue
 
-1. Complete the method-level #203 resource plan around the now-validated
-   native single-system XC/SCF owners and their exact arena requests.
+1. Preserve the implemented method-level #203 resource contract as richer
+   model options/diagnostics are added; bind new capacities and identities.
 2. Extend larger-solver SCF coverage to independent open-shell and replay/failure
    cases; water/def2-SVP CPU/CUDA closed-shell endpoints now pass.
 3. Include the now-tested native CPU/CUDA ragged batch paths in the full
@@ -189,17 +214,11 @@ record. They do not establish the earlier unconstrained or CUDA traces.
    components, actual backend and transfers. The merged additive SCF query
    already exposes distinct density-update and physical RMS; richer KS
    occupations/history/components/transport remain to be published.
-6. Integrate #203 resource ownership and planning for J, grid, XC, matrices,
-   DIIS, diagnostics and host staging. Public DFT still rejects resource
-   budgets; no second independent user memory budget may be introduced.
-   Both public single and batch KS owners currently allocate during prepare,
-   before the existing Python execution-only observation scope. Extend the
-   common observation/ledger to include preparation before enabling DFT budgets.
-   The CUDA direct J source's exact device shape is six AO matrices plus its
-   metadata/error scalar; its HostBatch packing has additional temporary
-   metadata that must be counted. Host quadrature is 36 bytes per point plus
-   source metadata and Gauss-Legendre/partition workspace. State and XC dry-run
-   APIs must resolve shapes without allocating the quadrature or AO matrices.
+6. Publish permanent source-bound resource evidence alongside the final #138
+   workload records. Public KS budgets now include prepare/execute observation,
+   all J/grid/XC/state/DIIS owners and host setup bounds. The standalone CPU
+   heap audit includes recurrence/eigensolver temporaries; CUDA ledger tests
+   verify exact persistent capacities, prepare failure, rebuild and release.
 7. Validate CPU/CUDA fixed-density E/V and full RKS/UKS endpoints, failure
    isolation, numerical state, replay, changed geometry and distinct guesses.
    Retain all HF gates. Run every real-GPU test/sanitizer/benchmark through
@@ -210,8 +229,8 @@ record. They do not establish the earlier unconstrained or CUDA traces.
    including host quadrature and final outputs in complete timings.
    The shared entry point is `benchmarks/validation_gate.py`, with protocol
    helpers in `tools/vibeqc_validation/{schema,performance,fixtures}.py`.
-9. Publish a reviewable PR with exact required AI attribution, complete the
-   issue requirement-by-requirement audit, and only then claim completion.
+9. Keep staged results in PR #306 with exact required AI attribution, complete
+   review/CI and the requirement-by-requirement audit before claiming completion.
 
 Workspace: `/home/jzzeng/codes/vibeqc-issue-162`, branch
 `codex/issue-162-completion`, starting from upstream `e32c6d4`. The user's

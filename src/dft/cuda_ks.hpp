@@ -28,6 +28,10 @@ struct CudaKsTransfers {
   std::uint64_t synchronizations{}, iterations{};
 };
 
+/** Exact state-arena size from the allocator's own typed layout. This query
+ * performs no CUDA call and allocates no matrices or other numeric buffers. */
+std::size_t cuda_ks_state_bytes(std::size_t nao, unsigned spins, unsigned diis_history);
+
 /** Native ordinary-stream LDA/PBE RKS/UKS trajectory. The borrowed common
  * Fock plan must outlive it. Model/grid/functional identity is immutable;
  * changing it requires a new owner. Initial guesses/normalization and grid

@@ -42,22 +42,8 @@ std::size_t sum(std::size_t a, std::size_t b) {
     throw std::overflow_error("CUDA KS storage overflow");
   return a + b;
 }
-}  // namespace
-
-struct CudaKsPlan::Impl {
-  const scf::PreparedFockPlan& provider;
-  scf::ScfOptions options;
-  scf::CudaDirectJkPlan* direct{};
-  cudaStream_t stream{};
-  int device{};
-  std::size_t n{}, matrix{}, elements{};
-  unsigned spins{}, history{};
-  std::array<std::size_t, 2> occupations{};
-  std::vector<double> orthogonalizer, cold_density;
-  CudaKsResources resource;
-  CudaKsTransfers movement;
-  void *arena{}, *xc_arena{};
-  std::unique_ptr<CudaXcPlan> xc;
+/** Numeric arena view shared by allocation and metadata-only planning. */
+struct KsStateStorage {
   double *hcore{}, *overlap{}, *x{}, *j{}, *density{}, *proposal{}, *warm{}, *fock{}, *residual{},
       *tmp1{}, *tmp2{}, *effective{}, *fock_history{}, *residual_history{}, *gram{}, *weights{},
       *eigenvalues{};
@@ -66,22 +52,10 @@ struct CudaKsPlan::Impl {
   std::uint32_t *history_count{}, *history_head{};
   int *solver_info{}, *jk_error{};
   cuda_ks_detail::Scalars* scalars{};
-  scf::ScfResult output;
-  bool is_active{}, is_pending{}, is_failed{}, warm_ready{}, started{};
-  bool warm_updates{true};
-  std::uint64_t generation{};
-  double previous_energy{std::numeric_limits<double>::infinity()};
-
-  void current_device() const {
-    // Prepared owners select their bound device on every entry, as the common
-    // Fock provider does. Another context may have changed this thread's device
-    // between calls; borrowed XC views still enforce their own device identity.
-    check(cudaSetDevice(device));
-  }
-
   /** The dry run and actual partition share one checked, typed layout. All
    * persistent and phase-local numeric buffers are explicitly charged. */
-  std::size_t partition(void* storage) {
+  std::size_t partition(std::size_t n, unsigned spins, unsigned history, void* storage) {
+    const auto matrix = product(n, n), elements = product(spins, matrix);
     std::size_t bytes = 0;
     const auto reserve = [&](auto*& pointer, std::size_t count) {
       using T = std::remove_pointer_t<std::remove_reference_t<decltype(pointer)>>;
@@ -107,6 +81,43 @@ struct CudaKsPlan::Impl {
     reserve(jk_error, 1);
     reserve(scalars, 1);
     return bytes;
+  }
+};
+}  // namespace
+
+std::size_t cuda_ks_state_bytes(std::size_t n, unsigned spins, unsigned history) {
+  if (!n || n > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+      (spins != 1 && spins != 2) || history > 64)
+    throw std::invalid_argument("invalid CUDA KS resource shape");
+  KsStateStorage layout;
+  return layout.partition(n, spins, std::max(1U, history), nullptr);
+}
+
+struct CudaKsPlan::Impl : KsStateStorage {
+  const scf::PreparedFockPlan& provider;
+  scf::ScfOptions options;
+  scf::CudaDirectJkPlan* direct{};
+  cudaStream_t stream{};
+  int device{};
+  std::size_t n{}, matrix{}, elements{};
+  unsigned spins{}, history{};
+  std::array<std::size_t, 2> occupations{};
+  std::vector<double> orthogonalizer, cold_density;
+  CudaKsResources resource;
+  CudaKsTransfers movement;
+  void *arena{}, *xc_arena{};
+  std::unique_ptr<CudaXcPlan> xc;
+  scf::ScfResult output;
+  bool is_active{}, is_pending{}, is_failed{}, warm_ready{}, started{};
+  bool warm_updates{true};
+  std::uint64_t generation{};
+  double previous_energy{std::numeric_limits<double>::infinity()};
+
+  void current_device() const {
+    // Prepared owners select their bound device on every entry, as the common
+    // Fock provider does. Another context may have changed this thread's device
+    // between calls; borrowed XC views still enforce their own device identity.
+    check(cudaSetDevice(device));
   }
 
   std::vector<double> seed(const std::vector<double>* input) const {
@@ -170,7 +181,7 @@ struct CudaKsPlan::Impl {
     current_device();
     orthogonalizer = scf::reference::symmetric_orthogonalizer(provider.one_electron().overlap, n);
     cold_density = seed(nullptr);
-    resource.state_device_bytes = partition(nullptr);
+    resource.state_device_bytes = partition(n, spins, history, nullptr);
     resource.xc_device_bytes = cuda_xc_layout(basis, grid, pbe, spins == 2, tile).device_bytes;
     resource.provider_device_bytes = provider.diagnostic().device_bytes;
     output.dft_diagnostic.history.reserve(options.max_iterations);
@@ -179,7 +190,7 @@ struct CudaKsPlan::Impl {
         output.dft_diagnostic.history.capacity() * sizeof(ScfIteration);
     try {
       check(runtime::resource_cuda_malloc(&arena, resource.state_device_bytes));
-      partition(arena);
+      partition(n, spins, history, arena);
       check(runtime::resource_cuda_malloc(&xc_arena, resource.xc_device_bytes));
       check(cudaMemsetAsync(arena, 0, resource.state_device_bytes, stream));
       const auto upload = [&](void* destination, const void* source, std::size_t bytes) {

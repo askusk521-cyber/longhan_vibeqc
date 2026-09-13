@@ -1,4 +1,4 @@
-"""Audit complete native CPU C++ heap peaks against the common HF inventory.
+"""Audit complete native CPU C++ heap peaks against common HF/KS inventories.
 
 Run with a CPU library: PYTHONPATH=python:. python this_file.py --build build
 --output /tmp/cpu-resources.json. The helper instruments requested new/delete
@@ -22,14 +22,17 @@ H2 = [(1, (0, 0, -0.7)), (1, (0, 0, 0.7))]
 WATER = [(8, (0, 0, 0)), (1, (1.43, 0, 1.11)), (1, (-1.43, 0, 1.11))]
 
 
-def payload(calculator, systems, *, unrestricted, fitted):
+def payload(calculator, systems, *, unrestricted, fitted, multiplicities=None):
     """Serialize actual resolved primitives before the native measurement scope."""
     lines = [f"{len(systems)} {int(unrestricted)} {int(fitted)}"]
-    for system in systems:
+    multiplicities = [1] * len(systems) if multiplicities is None else multiplicities
+    for system, multiplicity in zip(systems, multiplicities, strict=True):
         atoms = tuple(Atom.from_value(atom) for atom in system)
         shells = calculator._shells_for_atoms(atoms)
-        state = electron_state(atoms)
-        lines.append(f"{len(atoms)} {len(shells)} 0 1 {state.electron_count}")
+        state = electron_state(atoms, multiplicity=multiplicity)
+        lines.append(
+            f"{len(atoms)} {len(shells)} 0 {multiplicity} {state.electron_count}"
+        )
         lines.extend(
             " ".join(str(v) for v in (atom.atomic_number, *atom.position))
             for atom in atoms
@@ -48,6 +51,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--include-ks",
+        action="store_true",
+        help="also audit native KS preparation, replay and geometry rebuilds",
+    )
     args = parser.parse_args()
     build = args.build.resolve()
     cache = (build / "CMakeCache.txt").read_text()
@@ -64,6 +72,27 @@ def main():
         ("ragged-ri-rhf", [H2, WATER, H2], "sto-3g", "rhf", True),
         ("h2-ri-uhf", [H2], "def2-svp", "uhf", True),
     ]
+    if args.include_ks:
+        for functional in ("lda", "pbe"):
+            cases.extend(
+                [
+                    (
+                        f"ragged-{functional}-rks",
+                        [H2, WATER, H2],
+                        "sto-3g",
+                        f"{functional}-rks",
+                        False,
+                    ),
+                    (
+                        f"ragged-{functional}-uks",
+                        [[(3, (0, 0, 0))], [(1, (0, 0, 0))]],
+                        "sto-3g",
+                        f"{functional}-uks",
+                        False,
+                    ),
+                ]
+            )
+        cases.append(("water-pbe-rks-def2-svp", [WATER], "def2-svp", "pbe-rks", False))
     with tempfile.TemporaryDirectory(prefix="vibeqc-resource-probe-") as temporary:
         executable = Path(temporary) / "probe"
         command = [
@@ -88,18 +117,31 @@ def main():
                 "density_fitting": "cpu" if fitted else "none",
             }
             calculator = Calculator(**options)
-            plan = estimate_hf_resources(systems, **options).require_feasible()
+            ks = method.endswith(("rks", "uks"))
+            multiplicities = [2 if method.endswith("uks") else 1] * len(systems)
+            plan = (
+                calculator.estimate_resources(systems, multiplicities=multiplicities)
+                if ks
+                else estimate_hf_resources(systems, **options)
+            ).require_feasible()
             result = subprocess.run(
-                [str(executable)],
+                [str(executable)] + ([method] if ks else []),
                 input=payload(
-                    calculator, systems, unrestricted=method == "uhf", fitted=fitted
+                    calculator,
+                    systems,
+                    unrestricted=method == "uhf",
+                    fitted=fitted,
+                    multiplicities=multiplicities,
                 ),
                 text=True,
                 capture_output=True,
                 check=True,
             )
             measured = json.loads(result.stdout)
-            expected = [calculator.singlepoint(atoms).energy for atoms in systems]
+            expected = [
+                calculator.singlepoint(atoms, multiplicity=multiplicity).energy
+                for atoms, multiplicity in zip(systems, multiplicities, strict=True)
+            ]
             maximum_error = max(
                 abs(a - b) for a, b in zip(measured["energies"], expected, strict=True)
             )
@@ -130,7 +172,7 @@ def main():
                 "platform": platform.platform(),
                 "library_sha256": file_hash(library),
                 "compiler": subprocess.check_output([compiler, "--version"], text=True),
-                "scope": "requested native C++ heap bytes during preparation and two serialized fleet solves; excludes caller inputs, malloc bookkeeping and page/runtime retention",
+                "scope": "requested native C++ heap bytes during preparation and two serialized HF solves or four native KS cold/replay/changed/restored solves; excludes caller inputs, malloc bookkeeping and page/runtime retention",
                 "records": records,
             },
             indent=2,

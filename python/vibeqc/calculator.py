@@ -495,10 +495,6 @@ class Calculator:
                 raise NotImplementedError(
                     "DFT accuracy-model identities are not implemented yet"
                 )
-            if resource_budget is not None:
-                raise NotImplementedError(
-                    "DFT resource planning is not implemented yet"
-                )
 
     @property
     def profile_diagnostics(self) -> dict:
@@ -530,7 +526,7 @@ class Calculator:
         self, auxiliary_basis: ctypes.c_void_p | None = None, *, resource_plan=None
     ) -> _native.MethodDescriptor:
         df_budget = self._density_fitting_memory_budget_bytes
-        if resource_plan is not None:
+        if resource_plan is not None and self._method in _HF_METHODS:
             request = next(r for r in resource_plan.requests if r.name == "hf")
             chosen = dict(resource_plan.selections)["hf"]
             candidate = next(c for c in request.candidates if c.name == chosen)
@@ -950,7 +946,26 @@ class Calculator:
         return system
 
     def _resource_request(self, systems, *, charges=None, multiplicities=None):
-        """Resolve this calculator's exact active HF controls without executing."""
+        """Resolve this calculator's active scientific controls without executing."""
+        if self._capabilities.family == "density_functional":
+            from .resources_ks import ks_resource_request
+
+            return ks_resource_request(
+                systems,
+                charges=charges,
+                multiplicities=multiplicities,
+                method=self._method_name,
+                basis=self._basis,
+                backend=self._device_name,
+                basis_representation=self._representation_name,
+                diis_history=self._diis_history,
+                max_iterations=self._max_iterations,
+                energy_tolerance=self._energy_tolerance,
+                density_tolerance=self._density_tolerance,
+                screening_tolerance=self._screening_tolerance,
+                device_id=self._device_id,
+                library=self._library,
+            )
         if self._method == _native.METHOD_MP2:
             raise NotImplementedError(
                 "resource planning is not implemented for canonical MP2"
@@ -1140,6 +1155,7 @@ class Calculator:
         auxiliary_system = ctypes.c_void_p()
         calculation = ctypes.c_void_p()
         ledger = None
+        resource_diagnostics = None
         try:
             if (
                 resource_plan is not None
@@ -1147,7 +1163,9 @@ class Calculator:
             ):
                 from .resources_native import NativeDeviceLedger
 
-                ledger = NativeDeviceLedger(self._library, resource_plan)
+                ledger = NativeDeviceLedger(
+                    self._library, resource_plan, owner=resource_plan.requests[0].name
+                )
             system = self._create_native_system(
                 context, native_atoms, charge, multiplicity
             )
@@ -1163,16 +1181,30 @@ class Calculator:
                 auxiliary_system if auxiliary_system.value else None,
                 resource_plan=resource_plan,
             )
-            _native.check(
-                self._library,
-                self._library.vibeqc_calculation_prepare(
+
+            def prepare():
+                return self._library.vibeqc_calculation_prepare(
                     context,
                     system,
                     ctypes.byref(method_descriptor),
                     ctypes.byref(calculation),
-                ),
-                context=context,
-            )
+                )
+
+            if resource_plan is None:
+                _native.check(self._library, prepare(), context=context)
+            else:
+                from .resources_native import check_resource_status, observe_method_call
+
+                status, resource_diagnostics = observe_method_call(
+                    self._library,
+                    resource_plan,
+                    ledger,
+                    prepare,
+                    owner=resource_plan.requests[0].name,
+                    phase="preparation",
+                )
+                if status != _native.STATUS_SUCCESS:
+                    check_resource_status(self._library, status, resource_diagnostics)
             force_storage = (
                 (ctypes.c_double * (3 * len(native_atoms)))()
                 if compute_forces
@@ -1190,25 +1222,21 @@ class Calculator:
                 0,
                 _native.BACKEND_CPU_REFERENCE,
             )
-            resource_diagnostics = None
             if resource_plan is None:
                 status = self._library.vibeqc_calculation_execute(
                     calculation, ctypes.byref(result_descriptor)
                 )
             else:
-                from .resources import CpuResourceObservation
-
-                with CpuResourceObservation(
-                    self._library, cpu_workers=1, ledger=ledger
-                ) as observed:
-                    status = self._library.vibeqc_calculation_execute(
+                status, resource_diagnostics = observe_method_call(
+                    self._library,
+                    resource_plan,
+                    ledger,
+                    lambda: self._library.vibeqc_calculation_execute(
                         calculation, ctypes.byref(result_descriptor)
-                    )
-                resource_diagnostics = {
-                    "plan": resource_plan.to_dict(),
-                    "observation": observed.to_dict(),
-                }
-                observed.verify(resource_plan)
+                    ),
+                    owner=resource_plan.requests[0].name,
+                    previous=resource_diagnostics,
+                )
             try:
                 if resource_diagnostics is None:
                     _native.check(self._library, status, context=context)

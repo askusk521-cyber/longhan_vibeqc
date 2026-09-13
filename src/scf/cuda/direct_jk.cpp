@@ -125,6 +125,35 @@ void direct_jk_upload_density(CudaDirectJkPlan& plan, const std::vector<double>&
 }
 }  // namespace
 
+std::size_t cuda_direct_jk_device_bytes(std::size_t batch, std::size_t nao, std::size_t atoms,
+                                        std::size_t shells, std::size_t primitives,
+                                        unsigned derivative_order) {
+  direct_jk_require(batch && nao && atoms && shells && primitives && derivative_order <= 1,
+                    "invalid direct J/K resource shape");
+  std::size_t bytes = sizeof(int);
+  const auto add = [&](std::size_t count, std::size_t width) {
+    const auto term = direct_jk_product(count, width);
+    if (!checked_add(bytes, term, bytes)) throw std::bad_alloc();
+  };
+  const auto aos = direct_jk_product(batch, nao);
+  const auto matrices = direct_jk_product(aos, nao);
+  direct_jk_require(matrices <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
+                        atoms <= static_cast<std::size_t>(std::numeric_limits<int>::max()) / 3,
+                    "direct J/K resource shape exceeds launch dimensions");
+  // These are the VIBEQC_DIRECT_METADATA fields, with the packer's fixed
+  // three-term public AO expansion. No Cartesian quartet task table uploads.
+  add(batch, sizeof(std::int64_t));
+  add(1, sizeof(std::int64_t));  // terminal atom offset
+  add(atoms, sizeof(std::int32_t) + 3 * sizeof(double));
+  add(shells, sizeof(std::int32_t) + sizeof(std::uint8_t) + sizeof(std::int64_t));
+  add(1, sizeof(std::int64_t));  // terminal primitive offset
+  add(aos, sizeof(std::int32_t) + 10 * sizeof(std::uint8_t) + 3 * sizeof(double));
+  add(primitives, 2 * sizeof(double));
+  add(matrices, 6 * sizeof(double));
+  if (derivative_order) add(atoms, 3 * sizeof(double));
+  return bytes;
+}
+
 vibeqc_status create_cuda_direct_jk_plan(int device_id, const std::vector<core::System>& systems,
                                          unsigned derivative_order, double screening_tolerance,
                                          std::size_t budget, CudaDirectJkPlan** output,
@@ -200,6 +229,11 @@ vibeqc_status create_cuda_direct_jk_plan(int device_id, const std::vector<core::
         !checked_add(required, sizeof(int), required) ||
         !checked_add(required, metadata, required) || required > budget)
       throw std::bad_alloc();
+    direct_jk_require(
+        required == cuda_direct_jk_device_bytes(systems.size(), host.nbf,
+                                                host.atomic_numbers.size(), host.shell_atoms.size(),
+                                                host.primitive_exponents.size(), derivative_order),
+        "direct J/K allocation inventory drifted from packed storage");
     direct_jk_check(cudaSetDevice(device_id));
     auto plan = std::make_unique<CudaDirectJkPlan>();
     plan->device_id = device_id;

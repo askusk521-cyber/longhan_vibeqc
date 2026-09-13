@@ -398,7 +398,7 @@ class PreparedBatch:
                 owned = {r.name: r for r in resource_plan.requests}
                 if owned.get(request.name) != request:
                     raise ValueError(
-                        "prepared HF inputs differ from the global resource plan"
+                        f"prepared {request.name.upper()} inputs differ from the global resource plan"
                     )
                 if (
                     calculator._resource_budget is not None
@@ -412,7 +412,7 @@ class PreparedBatch:
                 from .resources_native import NativeDeviceLedger
 
                 self._resource_ledger = NativeDeviceLedger(
-                    self._library, self.resource_plan
+                    self._library, self.resource_plan, owner=request.name
                 )
             if request.identity.backend == "cuda" and (
                 shell_class_profiling or inactive_eigensolver_profiling
@@ -474,17 +474,31 @@ class PreparedBatch:
                 flags |= _native.BATCH_ENABLE_SHELL_CLASS_PROFILING
             if inactive_eigensolver_profiling:
                 flags |= _native.BATCH_ENABLE_INACTIVE_EIGENSOLVER_PROFILING
-            _native.check(
-                self._library,
-                self._library.vibeqc_batch_prepare(
+
+            def prepare():
+                return self._library.vibeqc_batch_prepare(
                     self._context,
                     handle_array,
                     count,
                     ctypes.byref(method),
                     flags,
                     ctypes.byref(self._batch),
-                ),
-            )
+                )
+
+            if self.resource_plan is None:
+                _native.check(self._library, prepare())
+            else:
+                from .resources_native import check_resource_status, observe_method_call
+
+                status, self.resource_diagnostics = observe_method_call(
+                    self._library,
+                    self.resource_plan,
+                    self._resource_ledger,
+                    prepare,
+                    owner=request.name,
+                    phase="preparation",
+                )
+                check_resource_status(self._library, status, self.resource_diagnostics)
         except Exception:
             self.close()
             raise
@@ -639,7 +653,7 @@ class PreparedBatch:
                 count,
             )
         else:
-            from .resources import CpuResourceObservation
+            from .resources_native import observe_method_call
 
             current = self._calculator._resource_request(
                 self._systems,
@@ -650,19 +664,18 @@ class PreparedBatch:
                 r for r in self.resource_plan.requests if r.name == current.name
             ):
                 raise ValueError(
-                    "HF resource inputs or execution schedule changed after preparation"
+                    f"{current.name.upper()} resource inputs or execution schedule changed after preparation"
                 )
-            with CpuResourceObservation(
-                self._library, cpu_workers=1, ledger=self._resource_ledger
-            ) as observed:
-                status = self._library.vibeqc_batch_execute(
+            status, self.resource_diagnostics = observe_method_call(
+                self._library,
+                self.resource_plan,
+                self._resource_ledger,
+                lambda: self._library.vibeqc_batch_execute(
                     self._batch, inputs_pointer, input_count, output_array, count
-                )
-            self.resource_diagnostics = {
-                "plan": self.resource_plan.to_dict(),
-                "observation": observed.to_dict(),
-            }
-            observed.verify(self.resource_plan)
+                ),
+                owner=current.name,
+                previous=self.resource_diagnostics,
+            )
         if self.resource_diagnostics is None:
             _native.check(self._library, status)
         else:

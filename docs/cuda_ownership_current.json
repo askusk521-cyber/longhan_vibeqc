@@ -91,20 +91,20 @@
       "subsystem": "xc"
     },
     {
-      "bytes": 3810,
+      "bytes": 4209,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 63,
+        "runtime": 66,
         "scientific": 0
       },
       "path": "src/dft/cuda_xc.hpp",
-      "physical_lines": 94,
+      "physical_lines": 100,
       "reason": "Borrowed arena, device-buffer/stream result and density-generation contracts with an exact resource request; no scientific equations.",
       "regions": [],
       "role": "runtime",
-      "sha256": "8e4f17ef0aad5ff6e8c717028d60fac238952660a21bb207163d8928e3ad551b",
+      "sha256": "43619d809f06c927d2615a5be7e03cd36816bfc2dd74a47ca28b405c79e471c7",
       "subsystem": "xc"
     },
     {
@@ -3170,8 +3170,15 @@
   ],
   "generated": [
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 1687,
+          "code_lines": 36,
+          "path": "generated/generated_one_electron_policy.cuh",
+          "sha256": "1b14c7b270eb4f910954877ce8e5e1a8edac24d45fef6e5ab9d94b0b6c8486f5"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "one_electron_value_policy",
       "outputs": [
         "generated/generated_one_electron_policy.cuh"
@@ -3179,8 +3186,15 @@
       "owner": "python/vibeqc_compiler/integral/one_electron_policy_cuda.py"
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 3100551,
+          "code_lines": 84286,
+          "path": "generated/generated_one_electron_values.cuh",
+          "sha256": "8bf6520e91fe350a18728609a2235b4569284fb75d5491ff505a865c6752f84d"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "one_electron_values",
       "outputs": [
         "generated/generated_one_electron_values.cuh"
@@ -3188,8 +3202,15 @@
       "owner": "python/vibeqc_compiler/integral/one_electron_cuda.py"
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 7647656,
+          "code_lines": 207007,
+          "path": "generated/generated_one_electron_derivatives.cuh",
+          "sha256": "ca1986d56310dfb90fa21c2824da3ff722715372f6a103d8801cadc2661022af"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "one_electron_derivatives",
       "outputs": [
         "generated/generated_one_electron_derivatives.cuh"
@@ -3197,8 +3218,15 @@
       "owner": "python/vibeqc_compiler/integral/one_electron_derivatives_cuda.py"
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 488615,
+          "code_lines": 6078,
+          "path": "generated/df_values.cuh",
+          "sha256": "4815279a8631f59110e410a116ce4791b24cc12f23c621df565539caefa5a8ad"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "df_values",
       "outputs": [
         "generated/df_values.cuh"
@@ -3206,8 +3234,15 @@
       "owner": "python/vibeqc_compiler/integral/df_cuda.py"
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 715689,
+          "code_lines": 21976,
+          "path": "generated/generated_df_derivatives.cuh",
+          "sha256": "47065f8272f4f1fbe042a2976f539a4e4e4e3f5679315e727ea465f4d94e26da"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "df_derivatives",
       "outputs": [
         "generated/generated_df_derivatives.cuh"
@@ -3215,8 +3250,15 @@
       "owner": "python/vibeqc_compiler/integral/df_derivatives_cuda.py"
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 6976,
+          "code_lines": 140,
+          "path": "generated/weighted_eri.cuh",
+          "sha256": "3a320765b77e53391d5a0fcfa81d40e714de3a77ef2ead0934dacce0b534270c"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "weighted_eri",
       "outputs": [
         "generated/weighted_eri.cuh"
@@ -3225,7 +3267,7 @@
     },
     {
       "files": [],
-      "measurement": "not materialized",
+      "measurement": "explicit build",
       "name": "aot_integrals",
       "outputs": [
         "generated/production_shell_kernels/**/*.cu",
@@ -3236,7 +3278,7 @@
     },
     {
       "files": [],
-      "measurement": "not materialized",
+      "measurement": "explicit build",
       "name": "jit_tensor",
       "outputs": [],
       "owner": "python/vibeqc_compiler/tensor",
@@ -3244,7 +3286,7 @@
     },
     {
       "files": [],
-      "measurement": "not materialized",
+      "measurement": "explicit build",
       "name": "jit_xc",
       "outputs": [],
       "owner": "python/vibeqc_compiler/xc",
@@ -3252,7 +3294,7 @@
     },
     {
       "files": [],
-      "measurement": "not materialized",
+      "measurement": "explicit build",
       "name": "jit_dft",
       "outputs": [],
       "owner": "python/vibeqc_compiler/dft",
@@ -3260,15 +3302,22 @@
     },
     {
       "files": [],
-      "measurement": "not materialized",
+      "measurement": "explicit build",
       "name": "jit_integral",
       "outputs": [],
       "owner": "python/vibeqc_compiler/integral",
       "scope": "JIT families are catalogued here but not counted by the CMake-build report. Their per-artifact provenance distinguishes generated source from copies of native runtime; report those through the existing artifact tools."
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 4542,
+          "code_lines": 174,
+          "path": "generated/generated_grid_policy.cu",
+          "sha256": "952d12fd6dd58e7b7121b1193aeae39e5157686bea7a3e68c12cf7c5e87d252c"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "ao_grid_policy",
       "outputs": [
         "generated/generated_grid_policy.cu"
@@ -3277,8 +3326,27 @@
       "scope": "Shared CMake/JIT through-f/order-three AO polynomials and requested spin-density bilinears/sigma. dft/feature_policy.py also emits those bilinears for the native CPU RKS C consumer; CUDA dense/local traversal remains unchanged."
     },
     {
-      "files": [],
-      "measurement": "not materialized",
+      "files": [
+        {
+          "bytes": 1602,
+          "code_lines": 27,
+          "path": "generated/generated_df_policy.cuh",
+          "sha256": "0a6389d7c326c5a162e4768d2535433445ccb32a345ad95957191fe6a5289b20"
+        },
+        {
+          "bytes": 1611,
+          "code_lines": 32,
+          "path": "generated/generated_df_derivative_policy.cuh",
+          "sha256": "beb7ee985095e7ace0d466be897e4dadbbd5adcbe80fbacca55e2d64dcbbd30b"
+        },
+        {
+          "bytes": 407,
+          "code_lines": 9,
+          "path": "generated/generated_df_derivative_schedule.cuh",
+          "sha256": "5caba2a73da662358777f7640b91d5f77710b22f4ac38a8c401225f6472e89af"
+        }
+      ],
+      "measurement": "explicit build",
       "name": "df_policies",
       "outputs": [
         "generated/generated_df_policy.cuh",
@@ -3288,12 +3356,12 @@
       "owner": "python/vibeqc_compiler/integral/df_policy.py"
     }
   ],
-  "generated_bytes": 0,
+  "generated_bytes": 11969336,
   "maintained_code_lines": {
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 9018,
+    "runtime": 9021,
     "scientific": 10579
   },
   "migration_ledger": {
@@ -3517,7 +3585,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 236,
+      "runtime": 239,
       "scientific": 363
     }
   },
