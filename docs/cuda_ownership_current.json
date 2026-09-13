@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10136,
+  "all_handwritten_scientific_lines": 10222,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -216,6 +216,23 @@
       "regions": [],
       "role": "runtime",
       "sha256": "3ad5447f497d40eacda6c3a92a5136b3d9ff6cd5a50399757812365e5d73c0df",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 3331,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 50,
+        "scientific": 0
+      },
+      "path": "src/runtime/cuda_component_trace.hpp",
+      "physical_lines": 87,
+      "reason": "Opt-in CUDA event/NVTX profiling and logical work accounting; no scientific equations or provider ownership.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "2ea1dcfb29eb9279d357f87872583b7da838215f266d688dc9c28b45db7e0529",
       "subsystem": "runtime"
     },
     {
@@ -467,20 +484,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 21259,
+      "bytes": 24156,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 391
+        "scientific": 432
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 407,
+      "physical_lines": 448,
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned.",
       "regions": [],
       "role": "scientific",
-      "sha256": "4e1bd2bd139d717dd6fb0b0894bef1c3edd76640bbd8676bf5db0d65378e3cd2",
+      "sha256": "519824e7ce9a968d8dd6bf2cfa3b8abb5ae6c84605f81dc08600f01d3d3859e9",
       "subsystem": "df_derivatives"
     },
     {
@@ -562,37 +579,37 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 2281,
+      "bytes": 2769,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 45,
+        "runtime": 50,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_plan_internal.hpp",
-      "physical_lines": 63,
+      "physical_lines": 73,
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": [],
       "role": "runtime",
-      "sha256": "d8cf4633cac0a1ad7a235ab94c3cba6c119c1e472448e39b361bba33824a82e2",
+      "sha256": "8380809d258809e71854e97496ac1d584101fcffea313b8006729cba2926005f",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 10810,
+      "bytes": 12815,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 189
+        "scientific": 217
       },
       "path": "src/scf/cuda/df_response_weights.cu",
-      "physical_lines": 214,
+      "physical_lines": 248,
       "reason": "Native HF density response contractions and spectral Frechet map, moved to bounded device execution for #205. Conservatively scientific method arithmetic; primitive values and derivatives still use the #142/#143 generated interfaces.",
       "regions": [],
       "role": "scientific",
-      "sha256": "a913e5be73636d9a4249729658e6eba19d82361ff0b539f4845ef3a634bb72af",
+      "sha256": "fa90a9e65fddf6763c1ca02bafc9b0ee02b00bd85b727bbd590e9c75e5915d03",
       "subsystem": "df_derivatives"
     },
     {
@@ -630,22 +647,22 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 14971,
+      "bytes": 17869,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 179,
+        "runtime": 220,
         "scientific": 74
       },
       "path": "src/scf/cuda/df_scf_kernels.cu",
-      "physical_lines": 269,
+      "physical_lines": 314,
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": [
         {
           "code_lines": 74,
-          "first_line": 18,
-          "last_line": 96,
+          "first_line": 63,
+          "last_line": 141,
           "reason": "Existing RHF/UHF Fock, density and energy equations, preserved independently of host replay control.",
           "role": "scientific",
           "start": "__global__ void assemble_rhf_fock_kernel",
@@ -653,24 +670,24 @@
         }
       ],
       "role": "runtime",
-      "sha256": "48a375ebba17098e545815f30af8290a3a2e3d92dbe164c5ed27d48dd84078e8",
+      "sha256": "56f32cb1664ad110343d4bba0a41fc6057f9b9bf37e9318094bc07fea7b997f4",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 4084,
+      "bytes": 5531,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 44,
+        "runtime": 55,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_scf_kernels.hpp",
-      "physical_lines": 64,
+      "physical_lines": 85,
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": [],
       "role": "runtime",
-      "sha256": "57403256749de96a0c0a96c24837cc330892e159a26c32db29cb7fc41f846c3c",
+      "sha256": "44d39b4027dbb62fdfed7c48f553ca82b7ba3d1937313f0c265ab29217b86e2c",
       "subsystem": "scf_tensor"
     },
     {
@@ -2463,20 +2480,20 @@
       "subsystem": "one_electron_derivatives"
     },
     {
-      "bytes": 10971,
+      "bytes": 12469,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 221
+        "scientific": 238
       },
       "path": "src/scf/cuda/one_electron_gradient_bridge.cu",
-      "physical_lines": 239,
+      "physical_lines": 259,
       "reason": "Density/energy-weighted-density and gradient task bridge around generated derivatives.",
       "regions": [],
       "role": "scientific",
-      "sha256": "11c248401e8fe3948fecfc1bb754d992631b4728ce0d56c4cd748c5058bcc39c",
+      "sha256": "f1aeaf7a593696e020d2b8fde2d852024ec22167f933d855fcb27c96dd76cae5",
       "subsystem": "one_electron_derivatives"
     },
     {
@@ -3154,8 +3171,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8617,
-    "scientific": 9980
+    "runtime": 8724,
+    "scientific": 10066
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3314,7 +3331,7 @@
       "oracle": 0,
       "performance_exception": 0,
       "runtime": 87,
-      "scientific": 598
+      "scientific": 667
     },
     "df_values": {
       "fallback": 0,
@@ -3349,7 +3366,7 @@
       "oracle": 0,
       "performance_exception": 156,
       "runtime": 0,
-      "scientific": 1260
+      "scientific": 1277
     },
     "one_electron_values": {
       "fallback": 0,
@@ -3362,14 +3379,14 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4152,
+      "runtime": 4202,
       "scientific": 5
     },
     "scf_tensor": {
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 1912,
+      "runtime": 1969,
       "scientific": 418
     },
     "xc": {

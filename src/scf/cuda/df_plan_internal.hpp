@@ -8,11 +8,21 @@
 
 namespace vibeqc::scf {
 
+namespace cuda_df {
+std::uint64_t next_factor_basis_identity() noexcept;
+}
+
 /** Private storage owner shared by DF setup, J/K and response adapters.
  * Public callers retain the existing opaque handle. The integral source and
  * forward eigensystem have exactly one owner; execution functions borrow them.
  */
 struct CudaDensityFittingJkPlan {
+  // Process-unique lifetime token binds orbital factors to this immutable
+  // geometry/basis/metric source; dimensions and recycled addresses cannot.
+  std::uint64_t factor_basis_identity{cuda_df::next_factor_basis_identity()};
+  // Frozen at creation: lazy SCF factors may only use a plan that reserved
+  // their capacity. High-level caches rebuild when the policy changes.
+  bool occupied_scf_reserved{};
   int device_id{-1};
   double metric_relative_threshold{};
   std::size_t batch_size{};
@@ -46,9 +56,9 @@ struct CudaDensityFittingJkPlan {
   double* metric_eigenvectors{};
   double* metric_eigenvalues{};
   std::vector<std::uint8_t> metric_response_valid;
-  // Partial auxiliary tiles normally use host-backed raw values.  A source-
-  // backed plan instead regenerates the requested transformed tile directly
-  // on the device; X is shared by J/K and the spectral force response.
+  // Partial tiles stream values; full tiles permit source-backed residency.
+  // The source and its metric policy are immutable for this plan's lifetime.
+  // X is shared by materialization/J/K and the spectral force response.
   bool streamed{};
   CudaDensityFittingIntegralSource* integral_source{};
   double* inverse_square_roots{};

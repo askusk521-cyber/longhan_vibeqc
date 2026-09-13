@@ -48,7 +48,11 @@ enum {
   VIBEQC_METHOD_UHF = 2,
   VIBEQC_METHOD_WB97M_V = 3,
   VIBEQC_METHOD_RCCSD_T = 4,
-  VIBEQC_METHOD_MP2 = 5
+  VIBEQC_METHOD_MP2 = 5,
+  VIBEQC_METHOD_LDA_RKS = 6,
+  VIBEQC_METHOD_PBE_RKS = 7,
+  VIBEQC_METHOD_LDA_UKS = 8,
+  VIBEQC_METHOD_PBE_UKS = 9
 };
 
 /** Broad algorithm family used for capability discovery and dispatch. */
@@ -816,6 +820,9 @@ VIBEQC_API vibeqc_status vibeqc_batch_set_warm_start_updates(vibeqc_batch* batch
  * means the batch was structurally valid; inspect each result.status for its
  * scientific outcome. `inputs` may be NULL with input_count=0 to reuse all
  * prepared geometries, otherwise it must contain one descriptor per system.
+ * When every result has forces=NULL and force_count=0, execute energy only.
+ * If any item requests forces, retain the whole-fleet force schedule and copy
+ * only requested outputs. Output selection applies to this replay alone.
  */
 VIBEQC_API vibeqc_status vibeqc_batch_execute(vibeqc_batch* batch,
                                               const vibeqc_batch_input_descriptor* inputs,
