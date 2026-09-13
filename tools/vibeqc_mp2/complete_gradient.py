@@ -238,7 +238,8 @@ def complete_gradient_validation(
                 device_id=device_id,
             )
         return CompleteGradientValidation(
-            float(reference.energy + correlation_energy),
+            # The exported reference total already includes nuclear repulsion.
+            float(reference.reference_energy + correlation_energy),
             correlation_energy,
             immutable(gradient),
             response.residual_norm,

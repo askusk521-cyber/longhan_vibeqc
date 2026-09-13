@@ -247,6 +247,70 @@ def test_df_provider_close_serializes_cache_clear():
         assert provider._closed and not provider._cache and provider._retained == 0
 
 
+@pytest.mark.parametrize("density_fitted", [False, True])
+def test_complete_gradient_facade_publishes_native_total_on_cpu(
+    density_fitted, monkeypatch
+):
+    """Exercise result publication in CPU CI with real small-system oracles.
+
+    Only CUDA boundaries are replaced; reference export, MP2 providers,
+    response, relaxed weights and result assembly still execute. The separate
+    GPU endpoint test checks the actual derivative consumers.
+    """
+    import tools.vibeqc_mp2.complete_gradient as facade
+
+    meta, arrays = load_fixture("h2")
+    arguments = source_arguments(meta)
+    native_export = facade.export_rhf
+
+    def cpu_export(source, **kwargs):
+        return native_export(source, **{**kwargs, "backend": "cpu"})
+
+    def conventional_oracle(reference, source, weights, *_, **kwargs):
+        return dense_molecular_gradient_oracle(reference, source, weights), {}
+
+    def ri_oracle(reference, source, metric, weights, *_, **kwargs):
+        return dense_ri_molecular_gradient_oracle(
+            reference, source, metric, weights
+        ), {}
+
+    monkeypatch.setattr(facade, "export_rhf", cpu_export)
+    monkeypatch.setattr(
+        facade,
+        "CudaDFJKBackend",
+        lambda *_, **kwargs: DenseAOResponseBackend(arrays["df_ao"]),
+    )
+    monkeypatch.setattr(
+        facade, "fused_cuda_conventional_molecular_gradient", conventional_oracle
+    )
+    monkeypatch.setattr(facade, "fused_cuda_ri_molecular_gradient", ri_oracle)
+    calculator_descriptor = SimpleNamespace(_device_name="cuda", _device_id=0)
+    with NativeSource(**arguments) as source:
+        result = facade.complete_gradient_validation(
+            source,
+            calculator_descriptor,
+            calculator_descriptor if density_fitted else None,
+            density_fitted=density_fitted,
+        )
+    calculator = Calculator(
+        method="mp2",
+        basis=arguments["basis"],
+        auxiliary_basis=arguments["auxiliary_basis"] if density_fitted else None,
+        basis_representation=arguments["representation"],
+        density_fitting="cpu" if density_fitted else "none",
+    )
+    public = calculator.singlepoint(arguments["atoms"])
+    assert result.total_energy == pytest.approx(public.energy, abs=1e-9, rel=0)
+    assert result.correlation_energy == pytest.approx(
+        public.correlation.opposite_spin_energy + public.correlation.same_spin_energy,
+        abs=1e-11,
+        rel=0,
+    )
+    assert result.gradient.shape == (len(arguments["atoms"]), 3)
+    assert np.isfinite(result.gradient).all() and not result.gradient.flags.writeable
+    assert result.response_residual < 1e-9
+
+
 @pytest.mark.skipif(
     os.environ.get("VIBEQC_MP2_CUDA_TEST") != "1",
     reason="requires explicitly allocated CUDA device and native library",
