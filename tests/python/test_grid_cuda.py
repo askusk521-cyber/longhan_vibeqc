@@ -144,7 +144,8 @@ def test_shared_posthf_runtime_after_cache_extraction():
 
     artifact = compile_posthf(
         CudaCompilerAdapter(
-            Path("/group/software/cuda-12.9.1/bin/nvcc"), cuda_target_info("sm_120")
+            Path(os.environ.get("VIBEQC_NVCC", "/group/software/cuda-12.9.1/bin/nvcc")),
+            cuda_target_info(os.environ.get("VIBEQC_GRID_CUDA_ARCH", "sm_120")),
         ),
         Path("/tmp/dft160-posthf-cache"),
     )
