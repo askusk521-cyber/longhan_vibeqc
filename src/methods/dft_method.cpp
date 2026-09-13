@@ -1,13 +1,21 @@
 #include "methods/dft_method.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
+#include <map>
 #include <memory>
+#include <new>
+#include <optional>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include "dft/ao_grid.hpp"
 #include "dft/cuda_xc.hpp"
 #include "dft/grid.hpp"
+#include "molecule/basis.hpp"
 #include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
@@ -26,6 +34,42 @@ bool is_supported_dft(vibeqc_method method) noexcept {
 bool field_present(const vibeqc_method_descriptor& descriptor, std::size_t offset,
                    std::size_t width) noexcept {
   return descriptor.struct_size >= offset && descriptor.struct_size - offset >= width;
+}
+
+bool valid_coordinates(const std::vector<double>& coordinates, std::size_t atom_count) {
+  return coordinates.size() == 3 * atom_count &&
+         std::all_of(coordinates.begin(), coordinates.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
+std::vector<double> coordinates_of(const core::System& system) {
+  std::vector<double> result;
+  result.reserve(3 * system.atoms.size());
+  for (const auto& atom : system.atoms)
+    result.insert(result.end(), atom.position.begin(), atom.position.end());
+  return result;
+}
+
+void apply_coordinates(core::System& system, const std::vector<double>& coordinates) {
+  for (std::size_t atom = 0; atom < system.atoms.size(); ++atom)
+    std::copy_n(coordinates.begin() + static_cast<std::ptrdiff_t>(3 * atom), 3,
+                system.atoms[atom].position.begin());
+}
+
+vibeqc_status exception_status() {
+  try {
+    throw;
+  } catch (const MethodError& error) {
+    return error.status();
+  } catch (const std::bad_alloc&) {
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const std::invalid_argument&) {
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  } catch (const std::exception&) {
+    return VIBEQC_STATUS_NUMERICAL_FAILURE;
+  } catch (...) {
+    return VIBEQC_STATUS_INTERNAL_ERROR;
+  }
 }
 
 scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor,
@@ -114,7 +158,7 @@ class DftPreparedCalculation final : public PreparedCalculation {
   std::size_t atom_count() const noexcept override { return system_.atoms.size(); }
   const Capabilities& capabilities() const noexcept override { return capabilities_; }
 
-  Result execute(bool compute_forces) override {
+  scf::ScfResult solve(bool compute_forces, const std::vector<double>* initial_density = nullptr) {
     const bool pbe = method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS;
     const bool uks = is_uks(method_);
     const char* method_name = pbe ? "PBE" : "LDA";
@@ -125,24 +169,24 @@ class DftPreparedCalculation final : public PreparedCalculation {
     }
     if (backend_ == VIBEQC_BACKEND_CUDA) {
       if (method_ == VIBEQC_METHOD_PBE_RKS)
-        return adapt_result(scf::run_pbe_rks_cuda(fock_, basis_, grid_, *cuda_xc_, options_),
-                            backend_);
+        return scf::run_pbe_rks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
       if (method_ == VIBEQC_METHOD_LDA_UKS)
-        return adapt_result(scf::run_lda_uks_cuda(fock_, basis_, grid_, *cuda_xc_, options_),
-                            backend_);
+        return scf::run_lda_uks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
       if (method_ == VIBEQC_METHOD_PBE_UKS)
-        return adapt_result(scf::run_pbe_uks_cuda(fock_, basis_, grid_, *cuda_xc_, options_),
-                            backend_);
-      return adapt_result(scf::run_lda_rks_cuda(fock_, basis_, grid_, *cuda_xc_, options_),
-                          backend_);
+        return scf::run_pbe_uks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
+      return scf::run_lda_rks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
     }
     if (method_ == VIBEQC_METHOD_PBE_RKS)
-      return adapt_result(scf::run_pbe_rks(fock_, basis_, grid_, options_), backend_);
+      return scf::run_pbe_rks(fock_, basis_, grid_, options_, initial_density);
     if (method_ == VIBEQC_METHOD_LDA_UKS)
-      return adapt_result(scf::run_lda_uks(fock_, basis_, grid_, options_), backend_);
+      return scf::run_lda_uks(fock_, basis_, grid_, options_, initial_density);
     if (method_ == VIBEQC_METHOD_PBE_UKS)
-      return adapt_result(scf::run_pbe_uks(fock_, basis_, grid_, options_), backend_);
-    return adapt_result(scf::run_lda_rks(fock_, basis_, grid_, options_), backend_);
+      return scf::run_pbe_uks(fock_, basis_, grid_, options_, initial_density);
+    return scf::run_lda_rks(fock_, basis_, grid_, options_, initial_density);
+  }
+
+  Result execute(bool compute_forces) override {
+    return adapt_result(solve(compute_forces), backend_);
   }
 
  private:
@@ -155,6 +199,189 @@ class DftPreparedCalculation final : public PreparedCalculation {
   dft::AoBasis basis_;
   dft::MolecularGrid grid_;
   std::unique_ptr<dft::PreparedCudaXcPlan> cuda_xc_;
+};
+
+class DftPreparedBatch final : public PreparedBatch {
+ public:
+  DftPreparedBatch(Capabilities capabilities, core::ContextState& context,
+                   std::vector<core::System> systems, vibeqc_method method, scf::ScfOptions options,
+                   vibeqc_batch_flags flags)
+      : capabilities_(capabilities),
+        context_(&context),
+        method_(method),
+        options_(std::move(options)),
+        warm_starts_enabled_((flags & VIBEQC_BATCH_ENABLE_WARM_STARTS) != 0) {
+    constexpr vibeqc_batch_flags supported = VIBEQC_BATCH_ENABLE_WARM_STARTS;
+    if ((flags & ~supported) != 0)
+      throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unsupported DFT batch flag");
+    items_.reserve(systems.size());
+    std::map<std::tuple<std::size_t, int, unsigned, std::size_t>, std::size_t> buckets;
+    for (auto& system : systems) {
+      std::size_t primitives = 0;
+      for (const auto& shell : system.shells) primitives += shell.primitives.size();
+      const auto key = std::tuple{molecule::ao_count(system), system.electron_count,
+                                  system.multiplicity, primitives};
+      const auto [entry, inserted] = buckets.emplace(key, buckets.size());
+      (void)inserted;
+      Item item;
+      item.system = std::move(system);
+      item.bucket_id = entry->second;
+      items_.push_back(std::move(item));
+    }
+  }
+
+  std::size_t size() const noexcept override { return items_.size(); }
+
+  std::vector<BatchItemResult> execute(const Coordinates& coordinates,
+                                       bool compute_forces = true) override {
+    if (!coordinates.empty() && coordinates.size() != items_.size())
+      throw std::invalid_argument("DFT batch coordinate list does not match system count");
+    std::vector<BatchItemResult> results(items_.size());
+    for (std::size_t index = 0; index < items_.size(); ++index) {
+      auto& item = items_[index];
+      auto& output = results[index];
+      output.bucket_id = item.bucket_id;
+      output.calculation.executed_backend = context_->requested_backend;
+      if (compute_forces) {
+        output.status = VIBEQC_STATUS_NOT_IMPLEMENTED;
+        continue;
+      }
+      core::System execution_system = item.system;
+      if (!coordinates.empty() && coordinates[index]) {
+        if (!valid_coordinates(*coordinates[index], execution_system.atoms.size())) {
+          output.status = VIBEQC_STATUS_INVALID_ARGUMENT;
+          continue;
+        }
+        apply_coordinates(execution_system, *coordinates[index]);
+      }
+      const auto current_coordinates = coordinates_of(execution_system);
+      if (item.warm && item.warm->coordinates != current_coordinates) item.warm.reset();
+      const bool use_warm = warm_starts_enabled_ && item.warm.has_value();
+      output.warm_start_used = use_warm;
+      try {
+        if (!item.calculation || item.prepared_coordinates != current_coordinates) {
+          item.calculation = std::make_unique<DftPreparedCalculation>(
+              capabilities_, execution_system, method_, options_, *context_);
+          item.prepared_coordinates = current_coordinates;
+        }
+        const auto evaluate = [&](const std::vector<double>* seed) {
+          return item.calculation->solve(false, seed);
+        };
+        scf::ScfResult native = evaluate(use_warm ? &item.warm->density : nullptr);
+        if (use_warm && !native.converged) {
+          output.warm_start_fallback = true;
+          native = evaluate(nullptr);
+        }
+        output.status = native.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
+        if (output.status == VIBEQC_STATUS_SUCCESS && warm_starts_enabled_ &&
+            warm_start_updates_enabled_)
+          retain(item, current_coordinates, native);
+        output.calculation = adapt_result(std::move(native), context_->requested_backend);
+      } catch (...) {
+        if (use_warm) {
+          try {
+            output.warm_start_fallback = true;
+            auto native = item.calculation->solve(false, nullptr);
+            output.status = native.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
+            if (output.status == VIBEQC_STATUS_SUCCESS && warm_starts_enabled_ &&
+                warm_start_updates_enabled_)
+              retain(item, current_coordinates, native);
+            output.calculation = adapt_result(std::move(native), context_->requested_backend);
+            continue;
+          } catch (...) {
+            output.status = exception_status();
+          }
+        } else {
+          output.status = exception_status();
+        }
+      }
+    }
+    return results;
+  }
+
+  void clear_warm_starts() override {
+    for (auto& item : items_) item.warm.reset();
+  }
+
+  std::size_t warm_density_size(std::size_t index) const override {
+    const auto& system = items_.at(index).system;
+    const auto n = molecule::ao_count(system);
+    const std::size_t spins = is_uks(method_) ? 2 : 1;
+    if (!n || n > std::numeric_limits<std::size_t>::max() / n / spins)
+      throw std::invalid_argument("DFT warm density dimensions overflow");
+    return spins * n * n;
+  }
+
+  const std::optional<scf::HfWarmState>& warm_state(std::size_t index) const override {
+    return items_.at(index).warm;
+  }
+
+  void restore_warm_states(std::vector<std::optional<scf::HfWarmState>> states) override {
+    if (!warm_starts_enabled_ || states.size() != items_.size())
+      throw std::invalid_argument("checkpoint restore requires a matching warm-enabled DFT batch");
+    for (std::size_t index = 0; index < states.size(); ++index) {
+      if (!states[index]) continue;
+      const auto& state = *states[index];
+      if (state.density.size() != warm_density_size(index) ||
+          !valid_coordinates(state.coordinates, items_[index].system.atoms.size()) ||
+          state.iterations < 0 || !std::isfinite(state.energy) ||
+          !std::isfinite(state.energy_change) || !std::isfinite(state.density_rms) ||
+          state.density_rms < 0.0)
+        throw std::invalid_argument("invalid DFT checkpoint state dimensions or diagnostics");
+      auto source = items_[index].system;
+      apply_coordinates(source, state.coordinates);
+      scf::validate_hf_warm_density(source, method_, state.density);
+    }
+    for (std::size_t index = 0; index < states.size(); ++index)
+      if (states[index]) items_[index].warm.swap(states[index]);
+  }
+
+  void set_warm_start_updates(bool enabled) override { warm_start_updates_enabled_ = enabled; }
+
+  std::optional<std::vector<DirectShellClassProfileEntry>> last_direct_shell_class_profile()
+      const override {
+    return std::nullopt;
+  }
+  std::optional<DirectPppsQueueProfile> last_direct_ppps_queue_profile() const override {
+    return std::nullopt;
+  }
+  std::vector<EigensolverDiagnostic> last_eigensolver_diagnostics() const override { return {}; }
+  std::vector<scf::CudaDensityFittingMetricDiagnostic> last_density_fitting_metric_diagnostics()
+      const override {
+    return {};
+  }
+  std::vector<InactiveEigensolverProfileEntry> last_inactive_eigensolver_profile() const override {
+    return {};
+  }
+
+ private:
+  struct Item {
+    core::System system;
+    std::size_t bucket_id{};
+    std::vector<double> prepared_coordinates;
+    std::unique_ptr<DftPreparedCalculation> calculation;
+    std::optional<scf::HfWarmState> warm;
+  };
+
+  static void retain(Item& item, const std::vector<double>& coordinates,
+                     const scf::ScfResult& result) {
+    scf::HfWarmState state;
+    state.density = result.density;
+    state.coordinates = coordinates;
+    state.energy = result.energy;
+    state.energy_change = result.energy_change;
+    state.density_rms = result.density_rms;
+    state.iterations = static_cast<int>(result.iterations);
+    item.warm = std::move(state);
+  }
+
+  Capabilities capabilities_;
+  core::ContextState* context_{};
+  vibeqc_method method_{};
+  scf::ScfOptions options_;
+  bool warm_starts_enabled_{};
+  bool warm_start_updates_enabled_{true};
+  std::vector<Item> items_;
 };
 
 }  // namespace
@@ -196,6 +423,21 @@ std::unique_ptr<PreparedCalculation> prepare_dft_calculation(
   return std::make_unique<DftPreparedCalculation>(
       capabilities, system, descriptor.method, dft_options(descriptor, context.requested_backend),
       context);
+}
+
+std::unique_ptr<PreparedBatch> prepare_dft_batch(const Capabilities& capabilities,
+                                                 core::ContextState& context,
+                                                 std::vector<core::System> systems,
+                                                 const vibeqc_method_descriptor& descriptor,
+                                                 vibeqc_batch_flags flags) {
+  if (systems.empty())
+    throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "DFT batch requires at least one system");
+  if (context.requested_backend != VIBEQC_BACKEND_CPU_REFERENCE &&
+      context.requested_backend != VIBEQC_BACKEND_CUDA)
+    throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown DFT execution backend");
+  return std::make_unique<DftPreparedBatch>(
+      capabilities, context, std::move(systems), descriptor.method,
+      dft_options(descriptor, context.requested_backend), flags);
 }
 
 }  // namespace vibeqc::methods::detail

@@ -528,15 +528,16 @@ class PreparedBatch:
     ) -> BatchResult:
         """Replay the fleet, optionally omitting analytic forces.
 
-        The default requests energy and forces. ``properties=("energy",)``
-        skips force evaluation and returns ``forces=None`` for each item.
+        The default requests every property supported by the prepared method.
+        ``properties=("energy",)`` skips force evaluation and returns
+        ``forces=None`` for each item.
         Output selection does not change the prepared model or warm snapshot;
         a later force replay rebuilds response caches when necessary. Resource
         plans retain their conservative energy-plus-force capacity allowance.
         """
         self._ensure_open()
         if properties is None:
-            properties = ("energy", "forces")
+            properties = self._calculator._capabilities.supported_properties
         if isinstance(properties, (str, bytes)):
             raise TypeError("properties must be an iterable of property names")
         try:

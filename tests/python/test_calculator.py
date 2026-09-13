@@ -152,20 +152,20 @@ def test_method_capabilities_report_families_and_properties():
     lda = method_capabilities("lda-rks")
     assert lda.family == "density_functional"
     assert lda.available
-    assert not lda.supports_batch
+    assert lda.supports_batch
     assert lda.supported_properties == frozenset(("energy",))
 
     pbe = method_capabilities("pbe-rks")
     assert pbe.family == "density_functional"
     assert pbe.available
-    assert not pbe.supports_batch
+    assert pbe.supports_batch
     assert pbe.supported_properties == frozenset(("energy",))
 
     for name in ("lda-uks", "pbe-uks"):
         uks = method_capabilities(name)
         assert uks.family == "density_functional"
         assert uks.available
-        assert not uks.supports_batch
+        assert uks.supports_batch
         assert uks.supported_properties == frozenset(("energy",))
 
 
@@ -180,8 +180,6 @@ def test_lda_rks_public_contract_is_cpu_energy_only():
         calculator.singlepoint(
             [("He", (0.0, 0.0, 0.0))], properties=("energy", "forces")
         )
-    with pytest.raises(NotImplementedError, match="prepared batches"):
-        calculator.prepare_batch([[("He", (0.0, 0.0, 0.0))]])
     with pytest.raises(NotImplementedError, match="Hartree-Fock methods only"):
         calculator.estimate_resources([[("He", (0.0, 0.0, 0.0))]])
 
@@ -197,8 +195,6 @@ def test_pbe_rks_public_contract_is_cpu_energy_only():
         calculator.singlepoint(
             [("He", (0.0, 0.0, 0.0))], properties=("energy", "forces")
         )
-    with pytest.raises(NotImplementedError, match="prepared batches"):
-        calculator.prepare_batch([["He", (0.0, 0.0, 0.0)]])
 
 
 @pytest.mark.parametrize("method", ("lda-uks", "pbe-uks"))
@@ -220,8 +216,46 @@ def test_uks_public_contract_is_cpu_energy_only(method):
             multiplicity=2,
             properties=("energy", "forces"),
         )
-    with pytest.raises(NotImplementedError, match="prepared batches"):
-        calculator.prepare_batch([atoms], charges=[-1], multiplicities=[2])
+
+
+def test_dft_prepared_batch_preserves_order_isolates_failures_and_invalidates_geometry():
+    h2 = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
+    calculator = Calculator(method="lda-rks", basis="sto-3g", device="cpu")
+    reference = calculator.singlepoint(h2)
+    with calculator.prepare_batch([h2, h2], warm_start=True) as prepared:
+        cold = prepared.execute(strict=True)
+        warm = prepared.execute(strict=True)
+        changed = prepared.execute(
+            coordinates=[[(0.0, 0.0, -0.8), (0.0, 0.0, 0.8)], [0.0]],
+            strict=False,
+        )
+        changed_warm = prepared.execute(
+            coordinates=[[(0.0, 0.0, -0.8), (0.0, 0.0, 0.8)], None],
+            strict=True,
+        )
+
+    assert cold.items[0].energy == pytest.approx(reference.energy, abs=2.0e-12)
+    assert all(item.warm_start_used for item in warm.items)
+    assert changed.items[0].succeeded
+    assert not changed.items[0].warm_start_used
+    assert changed.items[1].status_message == "invalid argument"
+    assert changed_warm.items[0].warm_start_used
+    assert not changed_warm.items[1].warm_start_used
+
+
+def test_dft_prepared_ragged_batch_matches_independent_endpoints():
+    systems = [
+        [("He", (0.0, 0.0, 0.0))],
+        [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))],
+    ]
+    calculator = Calculator(method="pbe-rks", basis="sto-3g", device="cpu")
+    independent = [calculator.singlepoint(system) for system in systems]
+    batch = calculator.batch_singlepoint(systems, strict=True)
+
+    assert [item.bucket_id for item in batch.items] == [0, 1]
+    assert batch.energies == pytest.approx(
+        [result.energy for result in independent], abs=2.0e-12
+    )
 
 
 @pytest.mark.parametrize("method", ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks"))
