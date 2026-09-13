@@ -532,7 +532,10 @@ class NativeSource:
         object headers, CUDA context and allocator overhead are excluded.
         """
 
-        value = np.ascontiguousarray(weights, dtype=np.float64)
+        raw_weights = np.asarray(weights)
+        if np.iscomplexobj(raw_weights):
+            raise ValueError("weighted ERI gradient weights must be real")
+        value = np.ascontiguousarray(raw_weights, dtype=np.float64)
         if value.shape != (self.nbf,) * 4 or not np.isfinite(value).all():
             raise ValueError("weighted ERI gradient requires finite [AO]*4 weights")
         if (
@@ -576,7 +579,10 @@ class NativeSource:
         if indices.shape != (4,) or np.any(indices >= len(self.shells)):
             raise ValueError("weighted ERI shell gradient requires four shell indices")
         shape = tuple(self.shell_sizes[int(index)] for index in indices)
-        value = np.ascontiguousarray(weights, dtype=np.float64)
+        raw_weights = np.asarray(weights)
+        if np.iscomplexobj(raw_weights):
+            raise ValueError("weighted ERI shell weights must be real")
+        value = np.ascontiguousarray(raw_weights, dtype=np.float64)
         if value.shape != shape or not np.isfinite(value).all():
             raise ValueError(
                 "weighted ERI shell weights have the wrong shape or values"
