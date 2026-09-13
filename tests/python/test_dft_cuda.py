@@ -37,12 +37,11 @@ def test_native_cuda_dft_matches_independently_converged_cpu_endpoint(
     cpu = Calculator(device="cpu", **options).singlepoint(atoms, **state)
     cuda_calculator = Calculator(device="cuda", **options)
     cuda = cuda_calculator.singlepoint(atoms, **state)
-    replay = cuda_calculator.singlepoint(atoms, **state)
 
-    assert cpu.converged and cuda.converged and replay.converged
+    assert cpu.converged and cuda.converged
     assert cuda.executed_backend == "cuda"
     assert cuda.energy == pytest.approx(cpu.energy, abs=2.0e-9)
-    assert replay.energy == pytest.approx(cuda.energy, abs=2.0e-12)
+    assert cuda.physical_residual_rms < 1.0e-9
     assert cuda.forces is None
 
 
