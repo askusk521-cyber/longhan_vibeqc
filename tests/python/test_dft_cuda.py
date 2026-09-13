@@ -49,4 +49,27 @@ def test_native_cuda_dft_matches_independently_converged_cpu_endpoint(
 def test_cuda_dft_force_request_remains_outside_issue_162():
     calculator = Calculator(method="lda-rks", basis="sto-3g", device="cuda")
     with pytest.raises(ValueError, match="does not support properties.*forces"):
-        calculator.singlepoint([("He", (0.0, 0.0, 0.0))])
+        calculator.singlepoint(
+            [("He", (0.0, 0.0, 0.0))], properties=("energy", "forces")
+        )
+
+
+def test_native_cuda_dft_ragged_batch_replay_and_failure_isolation():
+    systems = [
+        [("He", (0.0, 0.0, 0.0))],
+        [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))],
+    ]
+    cpu = Calculator(method="lda-rks", basis="sto-3g", device="cpu")
+    expected = [cpu.singlepoint(system).energy for system in systems]
+    cuda = Calculator(method="lda-rks", basis="sto-3g", device="cuda")
+    with cuda.prepare_batch(systems, warm_start=True) as prepared:
+        cold = prepared.execute(strict=True)
+        warm = prepared.execute(strict=True)
+        isolated = prepared.execute(coordinates=[None, [0.0]], strict=False)
+
+    assert [item.bucket_id for item in cold.items] == [0, 1]
+    assert cold.energies == pytest.approx(expected, abs=2.0e-9)
+    assert all(item.executed_backend == "cuda" for item in cold.items)
+    assert all(item.warm_start_used for item in warm.items)
+    assert isolated.items[0].succeeded and isolated.items[0].warm_start_used
+    assert isolated.items[1].status_message == "invalid argument"

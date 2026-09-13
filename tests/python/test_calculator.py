@@ -240,7 +240,8 @@ def test_dft_prepared_batch_preserves_order_isolates_failures_and_invalidates_ge
     assert not changed.items[0].warm_start_used
     assert changed.items[1].status_message == "invalid argument"
     assert changed_warm.items[0].warm_start_used
-    assert not changed_warm.items[1].warm_start_used
+    # The malformed neighbor never mutates its valid fixed-geometry snapshot.
+    assert changed_warm.items[1].warm_start_used
 
 
 def test_dft_prepared_ragged_batch_matches_independent_endpoints():
