@@ -94,19 +94,19 @@ int main() {
             "LDA RKS capability query failed");
     require(capabilities.family == VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL &&
                 capabilities.supported_properties == VIBEQC_PROPERTY_ENERGY &&
-                capabilities.available == 1 && capabilities.supports_batch == 0,
+                capabilities.available == 1 && capabilities.supports_batch == 1,
             "LDA RKS capabilities are incorrect");
     require(vibeqc_method_get_capabilities(VIBEQC_METHOD_PBE_RKS, &capabilities) ==
                     VIBEQC_STATUS_SUCCESS &&
                 capabilities.family == VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL &&
                 capabilities.supported_properties == VIBEQC_PROPERTY_ENERGY &&
-                capabilities.available == 1 && capabilities.supports_batch == 0,
+                capabilities.available == 1 && capabilities.supports_batch == 1,
             "PBE RKS capabilities are incorrect");
     for (vibeqc_method method : {VIBEQC_METHOD_LDA_UKS, VIBEQC_METHOD_PBE_UKS}) {
       require(vibeqc_method_get_capabilities(method, &capabilities) == VIBEQC_STATUS_SUCCESS &&
                   capabilities.family == VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL &&
                   capabilities.supported_properties == VIBEQC_PROPERTY_ENERGY &&
-                  capabilities.available == 1 && capabilities.supports_batch == 0,
+                  capabilities.available == 1 && capabilities.supports_batch == 1,
               "UKS capabilities are incorrect");
     }
 
@@ -260,8 +260,10 @@ int main() {
     method = lda_method();
     vibeqc_batch* batch = nullptr;
     require(vibeqc_batch_prepare(fixture.context, systems, 1, &method, 0, &batch) ==
-                VIBEQC_STATUS_NOT_IMPLEMENTED,
-            "LDA RKS accepted prepared batch execution");
+                    VIBEQC_STATUS_SUCCESS &&
+                batch != nullptr,
+            "LDA RKS prepared batch registration failed");
+    vibeqc_batch_destroy(batch);
 
 #if VIBEQC_HAS_CUDA
     vibeqc_context_descriptor cuda_descriptor{sizeof(vibeqc_context_descriptor), VIBEQC_ABI_VERSION,
@@ -271,8 +273,10 @@ int main() {
       vibeqc_system* cuda_system = Fixture::create_system(cuda_context);
       vibeqc_calculation* cuda_calculation = nullptr;
       require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
-                  VIBEQC_STATUS_NOT_IMPLEMENTED,
-              "LDA RKS accepted the CUDA backend");
+                      VIBEQC_STATUS_SUCCESS &&
+                  cuda_calculation != nullptr,
+              "LDA RKS CUDA preparation failed");
+      vibeqc_calculation_destroy(cuda_calculation);
       vibeqc_system_destroy(cuda_system);
       vibeqc_context_destroy(cuda_context);
     }
