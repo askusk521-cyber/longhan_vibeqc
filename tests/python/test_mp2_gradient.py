@@ -71,6 +71,16 @@ def test_dense_derivative_oracle_rejects_output_budget_before_allocation(monkeyp
             source.weighted_eri_shell_gradient_cuda(
                 (0, 0, 0, 0), np.ones(shell_shape, dtype=complex)
             )
+        for shell_indices in (
+            (0.9, 0, 0, 0),
+            ("0", 0, 0, 0),
+            (-1, 0, 0, 0),
+            (True, 0, 0, 0),
+        ):
+            with pytest.raises(ValueError, match="four shell indices"):
+                source.weighted_eri_shell_gradient_cuda(
+                    shell_indices, np.ones(shell_shape)
+                )
 
 
 def test_inverse_sqrt_metric_response_is_included_in_ri_gradient():

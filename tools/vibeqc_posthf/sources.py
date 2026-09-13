@@ -575,9 +575,18 @@ class NativeSource:
         context and allocator overhead.
         """
 
-        indices = np.ascontiguousarray(shell_indices, dtype=np.uintp)
-        if indices.shape != (4,) or np.any(indices >= len(self.shells)):
+        try:
+            index_values = tuple(shell_indices)
+        except TypeError as error:
+            raise ValueError(
+                "weighted ERI shell gradient requires four shell indices"
+            ) from error
+        if len(index_values) != 4 or any(
+            type(index) is not int or index < 0 or index >= len(self.shells)
+            for index in index_values
+        ):
             raise ValueError("weighted ERI shell gradient requires four shell indices")
+        indices = np.ascontiguousarray(index_values, dtype=np.uintp)
         shape = tuple(self.shell_sizes[int(index)] for index in indices)
         raw_weights = np.asarray(weights)
         if np.iscomplexobj(raw_weights):
