@@ -3,7 +3,6 @@ import os
 import pytest
 from vibeqc import Calculator
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get("VIBEQC_DFT_CUDA_TEST") != "1",
     reason="opt-in native CUDA DFT gate",
