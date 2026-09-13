@@ -2,9 +2,9 @@
 
 VibeQC's long-term mission is to cover **all quantum-chemistry methods** in one
 accelerator-native system. This is a roadmap commitment, not a statement of
-current availability. Today, RHF/UHF energies and analytic nuclear forces are
-executable, together with provisional CPU energy-only LDA and PBE RKS vertical
-slices.
+current availability. RHF and UHF provide energies and analytic nuclear forces;
+closed-shell MP2 and provisional CPU LDA/PBE RKS slices provide energy-only
+execution.
 
 ## Current method status
 
@@ -17,7 +17,8 @@ slices.
 | Density functional theory | LDA RKS | Implemented vertical slice: CPU energy only, closed shell, conventional J; independent matched-grid SCF endpoint accepted for H2 and He |
 | Density functional theory | PBE RKS | Limited CPU energy-only slice: closed shell, conventional J, exact interior PBE and versioned LDA fallback tail; independent matched-grid SCF endpoint accepted for H2 |
 | Density functional theory | LDA/PBE UKS, meta-GGA, hybrid, range-separated, nonlocal correlation | Planned |
-| Perturbation theory | MP2 and higher-order variants | Planned |
+| Perturbation theory | Closed-shell MP2 | Conventional and RI energy implemented on CPU/CUDA; analytic forces planned |
+| Perturbation theory | Open-shell, frozen-core, ECP and higher-order variants | Planned |
 | Coupled cluster | CCSD, perturbative triples, higher-rank variants | Planned |
 | Configuration interaction | CIS, selected CI, truncated and full CI | Planned |
 | Multireference | CASCI, CASSCF, internally contracted and selected-space methods | Planned |
@@ -63,6 +64,12 @@ validation records. The PBE record covers the closed-shell CPU energy-only
 slice; broader DFT still requires representative systems, UKS semantics,
 prepared CUDA, resource planning and gradients. AO-to-MO transforms and
 correlated tensor contractions open the post-HF families.
+The RI-MP2 endpoint uses an RHF reference built with the same thresholded
+density-fitting Hamiltonian as its correlation integrals. The auxiliary Coulomb
+metric uses a square symmetric inverse square root with eigenvalues at or below
+`density_fitting_relative_threshold * lambda_max` removed. The implementation
+forms no four-index AO ERI tensor or T2 amplitude tensor and rejects requests
+whose reference or RI transformation capacity exceeds the configured budget.
 Multireference, excited-state, periodic, embedding, and relativistic methods
 then build on those validated primitives rather than on reserved names alone.
 
