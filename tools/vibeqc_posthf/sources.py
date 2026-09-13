@@ -530,6 +530,8 @@ class NativeSource:
         The stage budget includes numeric candidate, offset, expansion, record,
         upload and result storage. Caller weights/output, owned system state,
         object headers, CUDA context and allocator overhead are excluded.
+        Complex weights are rejected before conversion because casting would
+        discard the supplied cotangent's imaginary component.
         """
 
         raw_weights = np.asarray(weights)
@@ -573,19 +575,26 @@ class NativeSource:
         Stage accounting includes numeric expansion/record/result storage and
         excludes caller weights/output, system ownership, object headers, CUDA
         context and allocator overhead.
+        Only real cotangents are supported; complex inputs fail before casting.
         """
 
         try:
             index_values = tuple(shell_indices)
         except TypeError as error:
             raise ValueError(
-                "weighted ERI shell gradient requires four shell indices"
+                "weighted ERI shell gradient requires four in-range integer shell indices"
             ) from error
+        # Validate before uintp conversion so fractional or overflowing values
+        # cannot select a different quartet. NumPy integer scalars remain valid.
         if len(index_values) != 4 or any(
-            type(index) is not int or index < 0 or index >= len(self.shells)
+            isinstance(index, (bool, np.bool_))
+            or not isinstance(index, (int, np.integer))
+            or not 0 <= index < len(self.shells)
             for index in index_values
         ):
-            raise ValueError("weighted ERI shell gradient requires four shell indices")
+            raise ValueError(
+                "weighted ERI shell gradient requires four in-range integer shell indices"
+            )
         indices = np.ascontiguousarray(index_values, dtype=np.uintp)
         shape = tuple(self.shell_sizes[int(index)] for index in indices)
         raw_weights = np.asarray(weights)

@@ -77,10 +77,52 @@ def test_dense_derivative_oracle_rejects_output_budget_before_allocation(monkeyp
             (-1, 0, 0, 0),
             (True, 0, 0, 0),
         ):
-            with pytest.raises(ValueError, match="four shell indices"):
+            with pytest.raises(ValueError, match="shell indices"):
                 source.weighted_eri_shell_gradient_cuda(
                     shell_indices, np.ones(shell_shape)
                 )
+
+
+@pytest.mark.parametrize("shell_tile", [False, True])
+def test_weighted_eri_rejects_complex_weights_before_allocation(
+    shell_tile, monkeypatch
+):
+    """Real-only bridges must reject complex cotangents without losing data."""
+    meta, _ = load_fixture("h2")
+    with NativeSource(**source_arguments(meta)) as source:
+        shape = (source.shell_sizes[0],) * 4 if shell_tile else (source.nbf,) * 4
+        weights = np.full(shape, 1.0 + 2.0j)
+        monkeypatch.setattr(
+            np,
+            "empty",
+            lambda *args, **kwargs: pytest.fail(
+                "output allocated before rejecting complex weights"
+            ),
+        )
+        with pytest.raises(ValueError, match="weights must be real"):
+            if shell_tile:
+                source.weighted_eri_shell_gradient_cuda((0, 0, 0, 0), weights)
+            else:
+                source.weighted_eri_gradient_cuda(weights)
+
+
+@pytest.mark.parametrize("invalid_index", [0.5, True, -1, 2**80])
+def test_weighted_eri_rejects_invalid_shell_indices_before_allocation(
+    invalid_index, monkeypatch
+):
+    """Index conversion must not silently select a different shell quartet."""
+    meta, _ = load_fixture("h2")
+    with NativeSource(**source_arguments(meta)) as source:
+        weights = np.ones((source.shell_sizes[0],) * 4)
+        monkeypatch.setattr(
+            np,
+            "empty",
+            lambda *args, **kwargs: pytest.fail(
+                "output allocated before rejecting invalid shell indices"
+            ),
+        )
+        with pytest.raises(ValueError, match="shell indices"):
+            source.weighted_eri_shell_gradient_cuda((invalid_index, 0, 0, 0), weights)
 
 
 def test_inverse_sqrt_metric_response_is_included_in_ri_gradient():
@@ -354,7 +396,7 @@ def test_weighted_eri_cuda_spherical_pullback_matches_dense_oracle(monkeypatch):
                 slice(offsets[index], offsets[index + 1]) for index in shell_indices
             )
             centers = source.weighted_eri_shell_gradient_cuda(
-                shell_indices, weights[slices]
+                np.asarray(shell_indices, dtype=np.int64), weights[slices]
             )
             for slot, shell in enumerate(shell_indices):
                 tiled[source.shells[shell].atom_index] += centers[slot]
