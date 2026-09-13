@@ -78,8 +78,20 @@ def test_uks_public_energy_and_spin_contract(method, device):
             1,
             "def2-svp",
         ),
+        ([("O", (0, 0, 0)), ("H", (0, 0, 1.8))], 0, 2, "sto-3g"),
+        ([("O", (0, 0, 0)), ("H", (0, 0, 1.8))], 0, 2, "def2-svp"),
     ),
-    ids=("h2", "he", "water", "h", "li", "h2plus", "water_large_solver"),
+    ids=(
+        "h2",
+        "he",
+        "water",
+        "h",
+        "li",
+        "h2plus",
+        "water_large_solver",
+        "oh",
+        "oh_large_solver",
+    ),
 )
 def test_native_matches_independent_scf(
     functional, raw_atoms, charge, multiplicity, basis_name, device
@@ -118,6 +130,13 @@ def test_native_matches_independent_scf(
         cart=True,
         verbose=0,
     )
+    hydroxyl = len(atoms) == 2 and atoms[0].atomic_number == 8
+    if hydroxyl:
+        # Resolve symmetry-related pi orientations in the exact molecular/grid
+        # subgroup. The final gate still checks the full unrestricted AO
+        # commutator, including directions excluded by the reference solver.
+        mol.symmetry = "C2v"
+        mol.build()
     if basis_name == "def2-svp":
         # This forces ordinary-stream execution of the larger shared native
         # eigensolver, above the small solver's 16-AO limit.
@@ -135,7 +154,7 @@ def test_native_matches_independent_scf(
         reference.grids.coords = np.array(grid.points)
         reference.grids.weights = np.array(grid.weights)
         reference.small_rho_cutoff = 0
-        reference.conv_tol = 1e-13
+        reference.conv_tol = 1e-12 if hydroxyl else 1e-13
         reference.conv_tol_grad = 1e-9
         reference.max_cycle = 150
         reference.init_guess = guess
@@ -149,5 +168,5 @@ def test_native_matches_independent_scf(
         energies.append(reference.e_tot)
         assert abs(native.energy - reference.e_tot) < 1e-8
     # These stable cases reach one energy branch from distinct independent
-    # guesses. Degenerate OH reference traces are reported separately.
+    # guesses, with the explicit C2v reference subgroup for degenerate OH.
     assert abs(energies[0] - energies[1]) < 1e-8

@@ -90,6 +90,70 @@ void physical_check(const scf::PreparedFockPlan& cpu, const dft::AoBasis& basis,
           "CUDA endpoint gate does not detect XC double counting");
 }
 
+/** OH exercises the stationary integer-occupation cycle from #305 on CUDA.
+ * Rebuild every returned physical quantity with the unshifted CPU operator. */
+void run_hydroxyl(bool pbe) {
+  core::System system;
+  system.multiplicity = 2;
+  system.atoms = {{8, {0, 0, 0}}, {1, {0, 0, 1.8}}};
+  system.shells = {
+      {0,
+       0,
+       {{130.7093214, 0.1543289673}, {23.80886605, 0.5353281423}, {6.443608313, 0.4446345422}}},
+      {0,
+       0,
+       {{5.033151319, -0.09996722919}, {1.169596125, 0.3995128261}, {0.38038896, 0.7001154689}}},
+      {0, 1, {{5.033151319, 0.155916275}, {1.169596125, 0.6076837186}, {0.38038896, 0.3919573931}}},
+      {1,
+       0,
+       {{3.425250914, 0.1543289673}, {0.6239137298, 0.5353281423}, {0.168855404, 0.4446345422}}}};
+  std::string detail;
+  require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS,
+          detail.c_str());
+  const dft::AoBasis basis(system);
+  const dft::MolecularGrid grid(system);
+  const scf::PreparedFockPlan cpu(system, nullptr, strategy(false, scf::FockBackend::Cpu));
+  const scf::PreparedFockPlan gpu(system, nullptr, strategy(false, scf::FockBackend::Cuda), 0);
+  scf::ScfOptions options;
+  options.compute_forces = false;
+  options.max_iterations = 200;
+  options.energy_tolerance = 1e-12;
+  options.density_tolerance = 1e-10;
+  dft::CudaKsPlan plan(gpu, basis, grid, options, pbe);
+  const auto cold = plan.run(nullptr, false, false);
+  require(cold.converged && !plan.failed(), "CUDA OH occupation cycle did not converge");
+  require(plan.transfers().matrix_d2h_bytes == 0,
+          "CUDA occupation stabilization exported iteration matrices");
+  physical_check(cpu, basis, grid, pbe, plan.result());
+  const auto& history = cold.dft_diagnostic.history;
+  const auto cycle = std::find_if(history.begin(), history.end(), [&](const auto& item) {
+    return item.iteration > 1 && item.energy_change < options.energy_tolerance &&
+           item.physical_residual < options.density_tolerance &&
+           item.density_change >= options.density_tolerance;
+  });
+  if (!pbe) require(cycle != history.end(), "OH regression did not exercise the occupation cycle");
+  if (cycle != history.end()) {
+    require(cycle->iteration < cold.iterations,
+            "stationary energy bypassed the subsequent density-change gate");
+    require(plan.transfers().occupation_stabilized_proposals > 0,
+            "CUDA stationary cycle did not apply the CPU-compatible proposal policy");
+  }
+  for (const auto& item : history)
+    require(std::abs(item.electrons[0] - 5) < 1e-10 && std::abs(item.electrons[1] - 4) < 1e-10,
+            "occupation stabilization changed the requested spin populations");
+  const auto warm = plan.run();
+  require(
+      warm.converged && warm.initial_density_used && std::abs(warm.energy - cold.energy) < 1e-10,
+      "CUDA OH resident replay lost its physical endpoint");
+  physical_check(cpu, basis, grid, pbe, warm);
+  const auto restarted = plan.run(nullptr, false);
+  require(restarted.converged && !restarted.initial_density_used &&
+              std::abs(restarted.energy - cold.energy) < 1e-10,
+          "CUDA OH cold restart retained stale proposal control");
+  physical_check(cpu, basis, grid, pbe, restarted);
+  std::cout << "KS OH pbe=" << pbe << " iterations=" << cold.iterations << '\n';
+}
+
 void run_case(unsigned atoms, bool restricted, bool pbe) {
   const auto system = hydrogens(atoms, restricted);
   const dft::AoBasis basis(system);
@@ -222,6 +286,7 @@ int main() {
   try {
     for (bool pbe : {false, true}) {
       run_case(2, true, pbe);
+      run_hydroxyl(pbe);
       for (unsigned atoms : {1U, 2U, 3U}) run_case(atoms, false, pbe);
     }
     std::cout << "Native CUDA KS SCF, physical-state, warm/failure/resource gates passed\n";

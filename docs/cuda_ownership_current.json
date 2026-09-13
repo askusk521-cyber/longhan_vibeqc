@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10735,
+  "all_handwritten_scientific_lines": 10741,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -47,22 +47,22 @@
       "subsystem": "ao_grid"
     },
     {
-      "bytes": 3763,
+      "bytes": 4700,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 16,
-        "scientific": 51
+        "runtime": 22,
+        "scientific": 57
       },
       "path": "src/dft/cuda_ks_kernels.cu",
-      "physical_lines": 74,
-      "reason": "Semilocal physical Fock/energy and per-spin scalar diagnostic composition; dense numerical glue remains maintained and is not claimed as retired code.",
+      "physical_lines": 90,
+      "reason": "Semilocal physical Fock/energy, per-spin diagnostics and CPU-compatible virtual-projector proposal stabilization; numerical glue remains maintained and is not claimed as retired code.",
       "regions": [
         {
-          "code_lines": 16,
-          "first_line": 58,
-          "last_line": 74,
+          "code_lines": 22,
+          "first_line": 67,
+          "last_line": 90,
           "reason": "Host launch forwarding to the numerical component kernels.",
           "role": "runtime",
           "start": "void assemble_fock(cudaStream_t",
@@ -70,24 +70,24 @@
         }
       ],
       "role": "scientific",
-      "sha256": "9277a1a719f22b0a338d37c51951de9b7e3f6f6cdb42901e3713fb1a20ec36b8",
+      "sha256": "ba1d720f17f3b09c0619c044b21e16e54f7715d58d71493e9dc87056e39ae17c",
       "subsystem": "xc"
     },
     {
-      "bytes": 1201,
+      "bytes": 1531,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 17,
+        "runtime": 19,
         "scientific": 0
       },
       "path": "src/dft/cuda_ks_kernels.hpp",
-      "physical_lines": 25,
-      "reason": "Native KS scalar diagnostic and physical-Fock launch contract; no mathematical bodies.",
+      "physical_lines": 29,
+      "reason": "Native KS scalar diagnostic, physical-Fock and occupation-stabilization launch contracts; no mathematical bodies.",
       "regions": [],
       "role": "runtime",
-      "sha256": "02f261529229c7bf5f68b389d98c6960db1b39800ba4f3493fc3b2839d456506",
+      "sha256": "1699c6f3abf514976c7790adcfd9a4fad2baedee6c15f0c7ee13d4c1c66acb78",
       "subsystem": "xc"
     },
     {
@@ -3361,8 +3361,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 9021,
-    "scientific": 10579
+    "runtime": 9029,
+    "scientific": 10585
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3585,8 +3585,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 239,
-      "scientific": 363
+      "runtime": 247,
+      "scientific": 369
     }
   },
   "schema": "vibeqc.cuda-ownership-report.v1"

@@ -224,16 +224,56 @@ Validation of the model implementation:
 - The complete C++ heap audit still bounds and releases all ten HF/KS cases:
   `/tmp/vibeqc-162-ks-options-cpu-heap-20260914.json`. New copied radius tables
   are included in the host metadata allowance.
-- Pre-commit and ten ownership tests passed. A final public-symbol export
-  annotation was subsequently added; its CPU API rebuild/test passed, and
-  the matching CUDA rebuild is in progress at publication of this increment.
+- Pre-commit and ten ownership tests passed. The final public-symbol export
+  annotation passed its CPU API rebuild/test and matching CUDA rebuild:
+  4/4 CUDA native tests and all four CUDA custom-grid option cases passed.
+
+## CUDA occupation and larger open-shell state increment (2026-09-14)
+
+CUDA UKS now applies the CPU's stationary occupation policy: after energy and
+the per-spin physical residual pass, a cycling density enables a 0.1-Eh
+virtual-projector shift for subsequent orbital proposals. The unshifted
+physical Fock, energy and commutator remain tied to the current density, and
+a subsequent density-change gate is still required. Each replay resets the
+control state. Existing matrix scratch is reused; the policy adds no device
+buffer, matrix transfer or synchronization. A cumulative proposal counter
+lets the native regression verify that this policy actually executed.
+
+LDA/PBE OH now has independent matched-grid CPU/CUDA endpoints with two PySCF
+guesses, using the explicit C2v subgroup and the full unrestricted AO residual
+gate. Both STO-3G and >16-AO def2-SVP are covered. Ragged OH/H def2-SVP batches
+exercise resident replay, changed geometry, frozen seeds, failure isolation
+and restoration.
+
+That failure regression exposed coincident O/H centers: their AO metric can
+remain nonsingular while the nuclear energy becomes infinite. CUDA KS now
+rejects nonfinite prepared one-electron/nuclear data and checks the complete
+physical energy before convergence or caching. The failed item reports a
+numerical failure without publishing a finite residual alongside an infinite
+energy; its last-good seed and neighboring items remain usable.
+
+Validation: 30 CPU Python SCF/batch cases passed, plus both stricter numerical
+failure-status regressions; 2/2 CUDA native tests and 38 CUDA independent SCF,
+batch, model-option and resource cases passed. Ten ownership tests and
+pre-commit passed. GPU runs used finite Slurm jobs on the RTX 5090. The full
+native CUDA KS executable and both larger-open-shell batch cases passed
+Compute Sanitizer memcheck with full leak checking: 0 errors and 0 bytes
+leaked for each process. The two Python batch cases took 279.21 seconds under
+memcheck; the complete scheduled job stayed within its 15-minute allocation.
+Log: `/tmp/vibeqc-162-stabilization-memcheck.log`.
+
+Physical ownership comparison against merged `15d6936`: scientific CUDA
++154/-0 lines, runtime CUDA +194/-4 lines; no reclassification or scientific
+retirement. The current source/build snapshot is retained in
+`docs/cuda_ownership_current.json`.
 
 ## Remaining work against the full issue
 
 1. Preserve the implemented method-level #203 resource contract as richer
    model options/diagnostics are added; bind new capacities and identities.
-2. Extend larger-solver SCF coverage to independent open-shell and replay/failure
-   cases; water/def2-SVP CPU/CUDA closed-shell endpoints now pass.
+2. Retain the larger-solver closed/open-shell and replay/failure coverage in
+   permanent source-bound endpoint evidence: water and OH def2-SVP now pass
+   independent CPU/CUDA checks, and OH/H ragged batches pass state checks.
 3. Include the now-tested native CPU/CUDA ragged batch paths in the full
    workload/evidence runner. Active/converged/failed isolation, stable order,
    force rejection, warm/frozen/imported replay and changed-geometry rebuilds

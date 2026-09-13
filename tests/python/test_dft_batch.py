@@ -249,3 +249,51 @@ def test_energy_batch_resolves_only_required_operator_derivatives(
     with calculator.prepare_batch([[("He", (0, 0, 0))]]):
         assert ("ao", ao_order) in calls
         assert all(order == 0 for operator, order in calls if operator != "ao")
+
+
+@pytest.mark.parametrize("method", ("lda-uks", "pbe-uks"))
+def test_open_shell_large_solver_ragged_replay_and_failure(method, device):
+    """OH uses the >16-AO solver beside an independent one-electron item."""
+    systems = [
+        [("O", (0, 0, 0)), ("H", (0, 0, 1.8))],
+        [("H", (0, 0, 0))],
+    ]
+    calculator = Calculator(
+        method=method,
+        basis="def2-svp",
+        device=device,
+        max_iterations=200,
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+    )
+    with calculator.prepare_batch(systems, multiplicities=[2, 2]) as prepared:
+        cold = prepared.execute(strict=True)
+        for item in cold.items:
+            assert item.physical_residual_rms < 1e-9
+            assert item.executed_backend == (
+                "cuda" if device == "cuda" else "cpu_reference"
+            )
+        original_seed = warm_snapshot(prepared, 0)
+        assert original_seed[0].size > 2 * 16 * 16
+        replay = prepared.execute(strict=True)
+        assert all(item.warm_start_used for item in replay.items)
+        assert replay.energies == pytest.approx(cold.energies, abs=1e-9)
+        prepared.set_warm_start_updates(False)
+        moved_coordinates = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.9]])
+        moved = prepared.execute([moved_coordinates, None], strict=True)
+        fresh = calculator.singlepoint(
+            [("O", moved_coordinates[0]), ("H", moved_coordinates[1])], multiplicity=2
+        )
+        assert moved.items[0].energy == pytest.approx(fresh.energy, abs=1e-9)
+        assert moved.items[0].physical_residual_rms < 1e-9
+        assert abs(moved.items[0].energy - cold.items[0].energy) > 1e-5
+        saved_seed = warm_snapshot(prepared, 0)
+        failed = prepared.execute([np.zeros((2, 3)), None])
+        assert failed.failure_indices == (0,)
+        assert failed.items[0].status == _native.STATUS_NUMERICAL_FAILURE
+        assert failed.items[0].physical_residual_rms is None
+        assert failed.items[1].energy == pytest.approx(cold.items[1].energy, abs=1e-9)
+        assert np.array_equal(warm_snapshot(prepared, 0)[0], saved_seed[0])
+        restored = prepared.execute(strict=True)
+        assert restored.energies == pytest.approx(cold.energies, abs=1e-9)
+        assert all(item.physical_residual_rms < 1e-9 for item in restored.items)

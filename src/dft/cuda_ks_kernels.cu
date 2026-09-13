@@ -12,6 +12,15 @@ __global__ void fock_kernel(std::size_t matrix, unsigned spins, const double* hc
     fock[i] = hcore[i % matrix] + coulomb[i % matrix] + potential[i];
 }
 
+// The projector uses a unit-occupation UKS spin density in the AO metric.
+// Proposal control must not change the physical operator used for E/residual.
+__global__ void stabilize_uks_kernel(std::size_t matrix, const double* overlap,
+                                     const double* occupied_projector, double* proposal_fock) {
+  for (std::size_t i = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x; i < 2 * matrix;
+       i += std::size_t(blockDim.x) * gridDim.x)
+    proposal_fock[i] += 0.1 * (overlap[i % matrix] - occupied_projector[i]);
+}
+
 // One deterministic reduction owner is sufficient for scalar control of the
 // baseline. The expensive XC, J and matrix operations remain separate kernels.
 __global__ void diagnostic_kernel(std::size_t matrix, unsigned spins, const double* density,
@@ -60,6 +69,13 @@ void assemble_fock(cudaStream_t stream, std::size_t n, unsigned spins, const dou
   const auto blocks = std::min<std::size_t>((spins * n * n + 127) / 128, 65535);
   fock_kernel<<<static_cast<unsigned>(blocks), 128, 0, stream>>>(n * n, spins, hcore, coulomb,
                                                                  potential, fock);
+}
+
+void stabilize_uks_proposal(cudaStream_t stream, std::size_t n, const double* overlap,
+                            const double* occupied_projector, double* proposal_fock) {
+  const auto blocks = std::min<std::size_t>((2 * n * n + 127) / 128, 65535);
+  stabilize_uks_kernel<<<static_cast<unsigned>(blocks), 128, 0, stream>>>(
+      n * n, overlap, occupied_projector, proposal_fock);
 }
 
 void diagnostics(cudaStream_t stream, std::size_t n, unsigned spins, const double* density,

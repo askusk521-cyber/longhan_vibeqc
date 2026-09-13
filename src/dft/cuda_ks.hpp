@@ -26,6 +26,9 @@ struct CudaKsResources {
 struct CudaKsTransfers {
   std::uint64_t setup_h2d_bytes{}, density_h2d_bytes{}, scalar_d2h_bytes{}, matrix_d2h_bytes{};
   std::uint64_t synchronizations{}, iterations{};
+  /** Number of subsequent proposals using the CPU-compatible stationary-cycle
+   * shift; cumulative across replays, independent of transfer counts. */
+  std::uint64_t occupation_stabilized_proposals{};
 };
 
 /** Exact state-arena size from the allocator's own typed layout. This query

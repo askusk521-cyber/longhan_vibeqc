@@ -3,14 +3,14 @@
   "files": [
     {
       "path": "src/dft/cuda_ks_kernels.hpp",
-      "reason": "Native KS scalar diagnostic and physical-Fock launch contract; no mathematical bodies.",
+      "reason": "Native KS scalar diagnostic, physical-Fock and occupation-stabilization launch contracts; no mathematical bodies.",
       "regions": [],
       "role": "runtime",
       "subsystem": "xc"
     },
     {
       "path": "src/dft/cuda_ks_kernels.cu",
-      "reason": "Semilocal physical Fock/energy and per-spin scalar diagnostic composition; dense numerical glue remains maintained and is not claimed as retired code.",
+      "reason": "Semilocal physical Fock/energy, per-spin diagnostics and CPU-compatible virtual-projector proposal stabilization; numerical glue remains maintained and is not claimed as retired code.",
       "regions": [
         {
           "start": "void assemble_fock(cudaStream_t",

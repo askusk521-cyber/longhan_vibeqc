@@ -110,6 +110,7 @@ struct CudaKsPlan::Impl : KsStateStorage {
   scf::ScfResult output;
   bool is_active{}, is_pending{}, is_failed{}, warm_ready{}, started{};
   bool warm_updates{true};
+  bool stabilize_occupations{};
   std::uint64_t generation{};
   double previous_energy{std::numeric_limits<double>::infinity()};
 
@@ -175,6 +176,15 @@ struct CudaKsPlan::Impl : KsStateStorage {
     if (!provider.system().electron_count || occupations[0] > n || occupations[1] > n ||
         (spins == 1 && (occupations[0] != occupations[1] || provider.system().multiplicity != 1)))
       throw std::invalid_argument("CUDA KS occupations do not match the spin/orbital space");
+    // A valid overlap does not imply finite physical data: unlike two equal
+    // H centers, coincident O/H centers can retain a nonsingular AO metric
+    // while nuclear repulsion is infinite. Fail before staging a cold seed.
+    const auto& integrals = provider.one_electron();
+    const auto finite = [](double value) { return std::isfinite(value); };
+    if (!finite(integrals.nuclear_repulsion) ||
+        !std::all_of(integrals.overlap.begin(), integrals.overlap.end(), finite) ||
+        !std::all_of(integrals.hcore.begin(), integrals.hcore.end(), finite))
+      throw std::runtime_error("nonfinite CUDA KS one-electron or nuclear energy");
     history = std::max(1U, options.diis_history);
     device = scf::cuda_direct_jk_device(direct);
     stream = scf::cuda_direct_jk_stream(direct);
@@ -243,6 +253,7 @@ struct CudaKsPlan::Impl : KsStateStorage {
     is_active = false;
     started = true;
     is_failed = false;
+    stabilize_occupations = false;
     try {
       check(cudaMemsetAsync(history_count, 0, sizeof(*history_count), stream));
       check(cudaMemsetAsync(history_head, 0, sizeof(*history_head), stream));
@@ -303,6 +314,16 @@ struct CudaKsPlan::Impl : KsStateStorage {
                                 fock_history, residual_history, gram, weights, history_count,
                                 history_head, effective, true);
       check(cudaGetLastError());
+      if (stabilize_occupations) {
+        // Match the CPU stationary-cycle policy. The unit-occupation virtual
+        // projector is S-SDS for each spin. Shift only the DIIS proposal;
+        // physical F/D/residual and the history above remain unmodified.
+        multiply(overlap, false, false, density, true, tmp1);
+        multiply(tmp1, true, false, overlap, false, tmp2);
+        cuda_ks_detail::stabilize_uks_proposal(stream, n, overlap, tmp2, effective);
+        check(cudaGetLastError());
+        ++movement.occupation_stabilized_proposals;
+      }
       multiply(effective, true, false, x, false, tmp1);
       multiply(x, false, true, tmp1, true, tmp2);
       EigensolverResources solver{};
@@ -368,13 +389,22 @@ struct CudaKsPlan::Impl : KsStateStorage {
                                   physical.density_change,
                                   physical.residual,
                                   {physical.electrons[0], physical.electrons[1]}});
-    is_failed = physical.failure != 0;
+    // The kernel validates electronic components; their host-side sum with
+    // the nuclear term must also be finite before any convergence/cache gate.
+    is_failed = physical.failure != 0 || !std::isfinite(output.energy);
     for (unsigned s = 0; s < 2; ++s)
       if (std::abs(physical.electrons[s] - occupations[s]) > 1e-8) is_failed = true;
     if (is_failed) {
       is_active = false;
       return false;
     }
+    // A stationary physical state can still alternate integer occupations.
+    // Enable the same 0.1-Eh proposal shift as CPU UKS only after both physical
+    // gates pass. A subsequent density-change gate must still pass to finish.
+    if (spins == 2 && output.iterations > 1 && output.energy_change < options.energy_tolerance &&
+        physical.residual < std::min(1e-9, options.density_tolerance) &&
+        physical.density_change >= options.density_tolerance)
+      stabilize_occupations = true;
     output.converged = output.iterations > 1 && output.energy_change < options.energy_tolerance &&
                        physical.density_change < options.density_tolerance &&
                        physical.residual < std::min(1e-9, options.density_tolerance);

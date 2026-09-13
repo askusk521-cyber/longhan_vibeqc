@@ -16,6 +16,10 @@ struct Scalars {
 
 void assemble_fock(cudaStream_t stream, std::size_t n, unsigned spins, const double* hcore,
                    const double* coulomb, const double* potential, double* fock);
+/** Add 0.1(S-S D_s S) to each unit-occupation spin proposal. The caller
+ * computes S D_s S in existing scratch; physical Fock storage is never aliased. */
+void stabilize_uks_proposal(cudaStream_t stream, std::size_t n, const double* overlap,
+                            const double* occupied_projector, double* proposal_fock);
 /** Evaluate the CURRENT E/D/F generation and the proposed density change.
  * RMS is gated per spin; an empty spin cannot dilute an unconverged one. */
 void diagnostics(cudaStream_t stream, std::size_t n, unsigned spins, const double* density,
