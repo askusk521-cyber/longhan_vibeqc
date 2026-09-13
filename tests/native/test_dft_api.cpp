@@ -94,19 +94,19 @@ int main() {
             "LDA RKS capability query failed");
     require(capabilities.family == VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL &&
                 capabilities.supported_properties == VIBEQC_PROPERTY_ENERGY &&
-                capabilities.available == 1 && capabilities.supports_batch == 0,
+                capabilities.available == 1 && capabilities.supports_batch == 1,
             "LDA RKS capabilities are incorrect");
     require(vibeqc_method_get_capabilities(VIBEQC_METHOD_PBE_RKS, &capabilities) ==
                     VIBEQC_STATUS_SUCCESS &&
                 capabilities.family == VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL &&
                 capabilities.supported_properties == VIBEQC_PROPERTY_ENERGY &&
-                capabilities.available == 1 && capabilities.supports_batch == 0,
+                capabilities.available == 1 && capabilities.supports_batch == 1,
             "PBE RKS capabilities are incorrect");
     for (vibeqc_method method : {VIBEQC_METHOD_LDA_UKS, VIBEQC_METHOD_PBE_UKS}) {
       require(vibeqc_method_get_capabilities(method, &capabilities) == VIBEQC_STATUS_SUCCESS &&
                   capabilities.family == VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL &&
                   capabilities.supported_properties == VIBEQC_PROPERTY_ENERGY &&
-                  capabilities.available == 1 && capabilities.supports_batch == 0,
+                  capabilities.available == 1 && capabilities.supports_batch == 1,
               "UKS capabilities are incorrect");
     }
 
@@ -285,8 +285,27 @@ int main() {
     method = lda_method();
     vibeqc_batch* batch = nullptr;
     require(vibeqc_batch_prepare(fixture.context, systems, 1, &method, 0, &batch) ==
-                VIBEQC_STATUS_NOT_IMPLEMENTED,
-            "LDA RKS accepted prepared batch execution");
+                VIBEQC_STATUS_SUCCESS,
+            "LDA RKS batch preparation failed");
+    vibeqc_batch_item_result_descriptor item{};
+    item.struct_size = sizeof(item);
+    item.abi_version = VIBEQC_ABI_VERSION;
+    require(vibeqc_batch_get_scf_diagnostic(batch, 0, nullptr) == VIBEQC_STATUS_NOT_IMPLEMENTED,
+            "unexecuted KS batch exposed stale diagnostics");
+    require(vibeqc_batch_execute(batch, nullptr, 0, &item, 1) == VIBEQC_STATUS_SUCCESS &&
+                item.status == VIBEQC_STATUS_SUCCESS && item.converged,
+            "LDA RKS native batch energy failed");
+    vibeqc_scf_diagnostic diagnostic{sizeof(vibeqc_scf_diagnostic), VIBEQC_ABI_VERSION};
+    require(vibeqc_batch_get_scf_diagnostic(batch, 0, &diagnostic) == VIBEQC_STATUS_SUCCESS &&
+                diagnostic.physical_residual_rms < 1e-9 &&
+                diagnostic.density_rms == item.density_rms,
+            "KS batch physical diagnostic is missing or inconsistent");
+    item.forces = forces.data();
+    item.force_count = forces.size();
+    require(vibeqc_batch_execute(batch, nullptr, 0, &item, 1) == VIBEQC_STATUS_NOT_IMPLEMENTED &&
+                vibeqc_batch_get_scf_diagnostic(batch, 0, nullptr) == VIBEQC_STATUS_NOT_IMPLEMENTED,
+            "KS batch force rejection retained stale diagnostics");
+    vibeqc_batch_destroy(batch);
 
 #if VIBEQC_HAS_CUDA
     vibeqc_context_descriptor cuda_descriptor{sizeof(vibeqc_context_descriptor), VIBEQC_ABI_VERSION,

@@ -826,6 +826,15 @@ VIBEQC_API vibeqc_status vibeqc_batch_restore_hf_warm_states(vibeqc_batch* batch
 /** Discard all retained per-system converged-density warm starts. */
 VIBEQC_API vibeqc_status vibeqc_batch_clear_warm_starts(vibeqc_batch* batch);
 
+/** Input-ordered SCF diagnostics for the latest completed item evaluation.
+ * Returns NOT_IMPLEMENTED before execution, after a rejected/failed item, or
+ * when the method does not report a physical residual. A null out queries
+ * availability. Every replay invalidates all prior records before validation.
+ * This additive query preserves the legacy batch result array's exact stride.
+ */
+VIBEQC_API vibeqc_status vibeqc_batch_get_scf_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                                         vibeqc_scf_diagnostic* out);
+
 /**
  * Enable or disable replacement of retained warm-start densities.
  *

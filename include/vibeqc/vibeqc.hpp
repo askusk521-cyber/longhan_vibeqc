@@ -170,6 +170,7 @@ struct BatchItemResult {
   std::uint32_t bucket_id{};
   bool warm_start_used{};
   bool warm_start_fallback{};
+  std::optional<double> physical_residual_rms;
 };
 
 /** CUDA DF value/J/K plan evidence; peaks exclude generated-force staging. */
@@ -264,6 +265,12 @@ class Batch {
       results[i].bucket_id = native[i].bucket_id;
       results[i].warm_start_used = native[i].warm_start_used != 0;
       results[i].warm_start_fallback = native[i].warm_start_fallback != 0;
+      vibeqc_scf_diagnostic diagnostic{sizeof(vibeqc_scf_diagnostic), VIBEQC_ABI_VERSION};
+      const auto status = vibeqc_batch_get_scf_diagnostic(handle_, i, &diagnostic);
+      if (status != VIBEQC_STATUS_NOT_IMPLEMENTED) {
+        check(status);
+        results[i].physical_residual_rms = diagnostic.physical_residual_rms;
+      }
       if (native[i].status != VIBEQC_STATUS_SUCCESS) results[i].forces.clear();
     }
     return results;

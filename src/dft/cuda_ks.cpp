@@ -68,6 +68,7 @@ struct CudaKsPlan::Impl {
   cuda_ks_detail::Scalars* scalars{};
   scf::ScfResult output;
   bool is_active{}, is_pending{}, is_failed{}, warm_ready{}, started{};
+  bool warm_updates{true};
   std::uint64_t generation{};
   double previous_energy{std::numeric_limits<double>::infinity()};
 
@@ -368,7 +369,7 @@ struct CudaKsPlan::Impl {
                        physical.residual < std::min(1e-9, options.density_tolerance);
     is_active = !output.converged && output.iterations < options.max_iterations;
     try {
-      if (output.converged) {
+      if (output.converged && warm_updates) {
         // E, F, residual and retained D all belong to this same generation.
         // A failed/unfinished solve can never overwrite the last-good cache.
         check(cudaMemcpyAsync(warm, density, elements * sizeof(double), cudaMemcpyDeviceToDevice,
@@ -440,6 +441,8 @@ std::vector<double> CudaKsPlan::warm_density() {
     throw std::logic_error("cannot export warm state during a pending iteration");
   return impl_->warm_ready ? impl_->download(impl_->warm) : std::vector<double>{};
 }
+void CudaKsPlan::set_warm_start_updates(bool enabled) noexcept { impl_->warm_updates = enabled; }
+void CudaKsPlan::clear_warm_start() noexcept { impl_->warm_ready = false; }
 const CudaKsResources& CudaKsPlan::resources() const noexcept { return impl_->resource; }
 CudaKsTransfers CudaKsPlan::transfers() const noexcept {
   auto out = impl_->movement;

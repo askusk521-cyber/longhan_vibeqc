@@ -61,6 +61,10 @@ class CudaKsPlan {
                      bool export_density = true);
   /** Export only the last converged state for a changed-geometry rebuild. */
   std::vector<double> warm_density();
+  /** Freeze replacement without disabling reuse of the last-good density. */
+  void set_warm_start_updates(bool enabled) noexcept;
+  /** Forget the seed without downloading or changing the current result. */
+  void clear_warm_start() noexcept;
   const CudaKsResources& resources() const noexcept;
   CudaKsTransfers transfers() const noexcept;
 

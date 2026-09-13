@@ -797,7 +797,7 @@ class Calculator:
         )
 
     def _preflight_hf_basis(self, atoms, *, compute_forces=True):
-        """Check only the operators needed by the selected HF outputs.
+        """Check operators and AO jets needed by the selected mean-field outputs.
 
         Runtime shape/resource and occupation checks remain native. This data
         preflight never turns an ECP or an unsupported auxiliary shell into an
@@ -820,7 +820,18 @@ class Calculator:
             if basis is None:
                 continue
             for operator in operators:
-                for order in derivative_orders:
+                # GGA energies consume first AO jets even when nuclear forces
+                # are unavailable. LDA requires only AO values; integral
+                # derivatives remain controlled by the requested observable.
+                orders = derivative_orders
+                if operator == "ao":
+                    orders = (
+                        1
+                        if self._method
+                        in (_native.METHOD_PBE_RKS, _native.METHOD_PBE_UKS)
+                        else 0,
+                    )
+                for order in orders:
                     require_basis(
                         basis,
                         atoms,

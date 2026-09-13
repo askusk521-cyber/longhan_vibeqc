@@ -5,7 +5,7 @@ RKS/UKS CPU/CUDA prepared-execution scope and both issue addenda remain the
 acceptance contract. Gradients are #163; DF is not advertised by this work.
 
 PR #305 is merged as `15d6936390723edf9e9eb0c91fecde4390490573`.
-This workspace is being integrated onto that actual squash commit. It retains
+Implementation `05951fb` is integrated onto that actual squash commit. It retains
 all CPU corrections: stable extreme-spin/gradient point algebra, evaluated
 UKS returned states, OH occupation stabilization, separate public density and
 physical residual diagnostics, and permanent independent endpoint evidence.
@@ -17,6 +17,33 @@ references and 32 public CPU/CUDA matched-grid endpoint/API cases. Those are
 historical measurements; the integration onto the final merged API is being
 revalidated. CPU occupation stabilization still needs matching CUDA SCF
 implementation and coverage before full cross-backend parity is established.
+
+Validation of `05951fb` on 2026-09-14 passed 25 native CPU tests, 166 selected
+Python CPU tests (3 optional skips), 10 CUDA-ownership inventory tests, four
+native CUDA tests, and all 32 public CPU/CUDA matched-grid SCF cases. CUDA
+execution used an RTX 5090 allocated through Slurm, CUDA 12.9 and sm_120.
+
+The next working-tree change adds native prepared ragged KS scheduling,
+geometry rebuilds, resident/frozen/cleared/imported last-good seeds and an
+additive per-item SCF diagnostic query. CPU validation passed 25 native tests
+and 47 selected Python tests (3 optional skips). Two subsequent derivative-
+capability regressions also pass: PBE energy requires first AO jets, LDA only
+AO values, and neither energy-only method requires nuclear derivatives.
+The matching CUDA rebuild passed. Its four native tests and all 45 combined
+public batch/independent-SCF cases pass on the Slurm-allocated RTX 5090.
+Compute Sanitizer memcheck of all five CUDA batch cases passed in 239.50 s,
+with 0 errors and 0 bytes leaked. This covers ordinary replay, geometry
+rebuilds, item failure/recovery, frozen and cleared seeds, atomic source-metric
+seed import and iteration-limit handling for both functionals/spin conventions.
+
+```
+srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
+  --time=00:10:00 env PYTHONPATH=python VIBEQC_LIBRARY=$PWD/build/cuda/libvibeqc.so \
+  VIBEQC_PROFILE=off OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+  /group/software/cuda-12.9.1/bin/compute-sanitizer --tool memcheck \
+  --error-exitcode 99 --leak-check full \
+  .venv/bin/python -m pytest tests/python/test_dft_batch.py -q -k cuda
+```
 
 ## Implemented and checked so far
 
@@ -151,9 +178,10 @@ record. They do not establish the earlier unconstrained or CUDA traces.
    native single-system XC/SCF owners and their exact arena requests.
 2. Extend larger-solver SCF coverage to independent open-shell and replay/failure
    cases; water/def2-SVP CPU/CUDA closed-shell endpoints now pass.
-3. Add native prepared ragged batches with per-item active/converged/failed
-   state, stable public order, force-request rejection, warm replay and
-   changed-geometry rebuilds. Failed items must not replace valid warm states.
+3. Include the now-tested native CPU/CUDA ragged batch paths in the full
+   workload/evidence runner. Active/converged/failed isolation, stable order,
+   force rejection, warm/frozen/imported replay and changed-geometry rebuilds
+   pass; failed items preserve valid warm states.
 4. Complete functional/grid/model options and numerical identity. Invalidate
    geometry, basis, spin/charge, grid and functional/regularization changes;
    keep density/orbital generations current and clear stale DIIS/final state.
@@ -164,6 +192,14 @@ record. They do not establish the earlier unconstrained or CUDA traces.
 6. Integrate #203 resource ownership and planning for J, grid, XC, matrices,
    DIIS, diagnostics and host staging. Public DFT still rejects resource
    budgets; no second independent user memory budget may be introduced.
+   Both public single and batch KS owners currently allocate during prepare,
+   before the existing Python execution-only observation scope. Extend the
+   common observation/ledger to include preparation before enabling DFT budgets.
+   The CUDA direct J source's exact device shape is six AO matrices plus its
+   metadata/error scalar; its HostBatch packing has additional temporary
+   metadata that must be counted. Host quadrature is 36 bytes per point plus
+   source metadata and Gauss-Legendre/partition workspace. State and XC dry-run
+   APIs must resolve shapes without allocating the quadrature or AO matrices.
 7. Validate CPU/CUDA fixed-density E/V and full RKS/UKS endpoints, failure
    isolation, numerical state, replay, changed geometry and distinct guesses.
    Retain all HF gates. Run every real-GPU test/sanitizer/benchmark through
@@ -172,6 +208,8 @@ record. They do not establish the earlier unconstrained or CUDA traces.
    energy-only, batch 1 and ragged batches. Record grid size, actual backend,
    iteration history, component costs, H2D/D2H bytes and synchronization,
    including host quadrature and final outputs in complete timings.
+   The shared entry point is `benchmarks/validation_gate.py`, with protocol
+   helpers in `tools/vibeqc_validation/{schema,performance,fixtures}.py`.
 9. Publish a reviewable PR with exact required AI attribution, complete the
    issue requirement-by-requirement audit, and only then claim completion.
 

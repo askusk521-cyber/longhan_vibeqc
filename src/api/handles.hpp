@@ -41,6 +41,8 @@ struct vibeqc_batch {
   std::vector<std::uint64_t> last_fock_builds;
   /** Input-ordered completed-run records; invalid/throwing items stay unavailable. */
   std::vector<std::optional<vibeqc::scf::PrecisionProvenance>> precision;
+  /** Separate from the fixed-stride legacy batch output array. */
+  std::vector<std::optional<vibeqc_scf_diagnostic>> scf_diagnostics;
 };
 
 #endif

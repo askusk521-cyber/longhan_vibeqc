@@ -4,9 +4,8 @@
 component for #162. It consumes current device density matrices and returns
 device XC energy/electron totals, potential matrices and a numerical-error
 flag. `dft/cuda_ks.hpp` composes it into native ordinary-stream SCF; the
-registered single-system method adapter exposes CPU/CUDA energy execution.
-Prepared ragged batching and full public resource planning remain separate
-work.
+registered method adapter exposes CPU/CUDA single-system and native prepared
+ragged energy execution. Full public resource planning remains separate work.
 
 ## Ownership and data movement
 
@@ -78,6 +77,38 @@ current evaluated density; only converged states replace the resident warm
 cache. An energy-only public call omits final matrix export. Full #203 public
 planning remains separate integration work.
 
+## Prepared ragged execution
+
+`KsPreparedBatch` owns one compatible KS plan per input item. CUDA execution
+submits every active item stream before reading any iteration's scalar record.
+Converged and failed items leave the active schedule independently. CPU items
+use the same scientific KS routines serially. Results and diagnostic queries
+retain input order; this schedule does not inherit an HF graph layout.
+
+An omitted coordinate entry selects the original prepared geometry. A changed
+geometry reconstructs that item's basis/grid/J/KS owner and starts fresh DIIS.
+Before releasing a CUDA owner, its last successful density is downloaded only
+if a compatible seed has not already been exported. The old owner is released
+before the new one is allocated, avoiding two complete live device plans for
+one slot. The seed is normalized in the target overlap, separately for each
+spin. A rejected or nonconverged warm solve gets one cold retry. Malformed
+geometry and failed solves preserve the previous successful seed.
+
+Normal energy-only replays leave warm densities resident. Explicit snapshot
+export and geometry rebuilds are distinct transfer boundaries. The legacy
+`*_hf_warm_state` buffer APIs also represent KS densities using the same total
+RKS or alpha/beta UKS convention; they export scientific seeds, never cached
+convergence. Imports validate the source metric and all supplied items before
+changing any seed. Missing import entries preserve neighbors. Frozen warm
+updates keep the same seed even across successful or changed-geometry solves;
+clearing seeds while frozen prevents later solves from creating replacements.
+
+The additive `vibeqc_batch_get_scf_diagnostic` query returns density-update and
+physical-commutator RMS values without changing the legacy result array stride.
+Unavailable and failed items report absence, including after a rejected replay.
+Python batch calls default to the method's supported observables, so KS defaults
+to energy and rejects forces. HF retains its energy-plus-force default.
+
 ## Validation
 
 `vibeqc_dft_cuda_tests` checks the actual device-buffer pipeline against CPU
@@ -97,4 +128,11 @@ and rejects stale grids and failed warm-state replacement. The registered
 C API tests cover both spins/functionals on the actual CUDA backend and reject
 forces. `tests/python/test_dft_scf.py` compares CPU/CUDA stable small endpoints
 against two independently converged PySCF guesses on the identical grid.
-These verified single-system paths do not establish native prepared batching.
+`tests/python/test_dft_batch.py` separately exercises public ragged replay,
+geometry rebuilds, per-item failures, frozen/cleared/imported seeds, ABI
+diagnostics and method-specific derivative requirements. The combined batch
+and independent SCF modules pass all 45 cases on the CPU/CUDA build with a
+Slurm-allocated RTX 5090. These checks remain distinct from complete method
+resource planning and the full workload evidence required by #162.
+The five CUDA batch cases also pass Compute Sanitizer memcheck with full leak
+checking: zero errors and zero bytes leaked.

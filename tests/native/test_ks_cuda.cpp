@@ -137,6 +137,22 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
   require(energy_only.converged && energy_only.density.empty() &&
               plan.transfers().matrix_d2h_bytes == after.matrix_d2h_bytes,
           "energy-only CUDA KS exported a final density matrix");
+  const auto frozen_density = plan.warm_density();
+  plan.set_warm_start_updates(false);
+  const auto frozen_before = plan.transfers();
+  const auto frozen_result = plan.run(nullptr, false, false);
+  require(frozen_result.converged && !frozen_result.initial_density_used &&
+              plan.transfers().matrix_d2h_bytes == frozen_before.matrix_d2h_bytes,
+          "frozen cold solve performed an implicit density export");
+  require(plan.warm_density() == frozen_density,
+          "successful frozen solve replaced the resident last-good density");
+  plan.clear_warm_start();
+  require(plan.warm_density().empty(), "cleared CUDA seed remains visible");
+  require(plan.run(nullptr, true, false).converged && plan.warm_density().empty(),
+          "frozen CUDA owner established a new seed");
+  plan.set_warm_start_updates(true);
+  require(plan.run(nullptr, false, false).converged && !plan.warm_density().empty(),
+          "unfrozen CUDA owner failed to establish a seed");
 
   if (atoms > 1) {
     auto invalid = result.density;

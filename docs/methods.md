@@ -14,9 +14,9 @@ execution.
 | Hartree-Fock | UHF | Implemented: energy and analytic forces |
 | Hartree-Fock | ROHF, GHF, spinor HF | Planned |
 | Density fitting | Two-/three-center integral oracle, first nuclear derivatives, metric conditioning, memory planner | CPU oracle plus CUDA-native batched integral generation, RI-J/K, raw two-electron force-response contractions, and device-resident SCF integration implemented; streamed host tiles and provider-dependent Graph replay are documented acceptance-boundary modes |
-| Density functional theory | LDA RKS | CPU/CUDA single-system energy only, closed shell, conventional J; independent matched-grid H2, He and water gates |
-| Density functional theory | PBE RKS | CPU/CUDA single-system energy only, closed shell, conventional J; scaled PBE tail algebra and independent matched-grid H2, He and water gates |
-| Density functional theory | LDA/PBE UKS | CPU/CUDA single-system energy only, independent spins, conventional J; matched-grid H, Li and H2+ gates; explicit PBE spin boundary policy |
+| Density functional theory | LDA RKS | CPU/CUDA single-system and native ragged energy only, closed shell, conventional J; independent matched-grid H2, He and water gates |
+| Density functional theory | PBE RKS | CPU/CUDA single-system and native ragged energy only, closed shell, conventional J; scaled PBE tail algebra and independent matched-grid H2, He and water gates |
+| Density functional theory | LDA/PBE UKS | CPU/CUDA single-system and native ragged energy only, independent spins, conventional J; matched-grid H, Li and H2+ gates; explicit PBE spin boundary policy |
 | Density functional theory | Meta-GGA, hybrid, range-separated, nonlocal correlation | Planned |
 | Perturbation theory | Closed-shell MP2 | Conventional and RI energy implemented on CPU/CUDA; analytic forces planned |
 | Perturbation theory | Open-shell, frozen-core, ECP and higher-order variants | Planned |
@@ -64,15 +64,20 @@ XC, the common Coulomb provider and CPU/native CUDA SCF. The
 stable tail algebra and explicit PBE spin endpoint extension. The issue-0162-b
 record retains the independent CPU H2-/H2+/OH UKS endpoints. Additional
 CPU/CUDA matched-grid tests use two PySCF initial guesses; native tests enforce
-physical residuals, spin populations and stale-input rejection. Prepared
-ragged batches and complete resource planning remain open parts of #162.
+physical residuals, spin populations and stale-input rejection. Native prepared
+ragged batches preserve per-item status/order and last-good densities through
+geometry rebuilds, failure, frozen updates and atomic seed import. CUDA batches
+enqueue all active item streams before reading their scalar results. Complete
+resource planning, richer diagnostics and workload evidence remain open parts
+of #162.
 Nuclear gradients remain #163. No DFT density-fitting or performance-leadership
 claim follows from the tested CPU/CUDA energy endpoints.
 The public `Result.density_rms` retains its density-update convergence meaning.
 The separate `Result.physical_residual_rms` reports the physical commutator
 RMS; UKS combines the alpha/beta matrix entries in both public RMS measures.
-The additive C query `vibeqc_calculation_get_scf_diagnostic` returns both
-measures without changing the existing result descriptor layout. The physical
+The additive C queries `vibeqc_calculation_get_scf_diagnostic` and
+`vibeqc_batch_get_scf_diagnostic` return both measures without changing the
+existing result descriptor layouts or batch array stride. The physical
 measure is unavailable (`None` in Python) for methods that do not report it
 and for older native libraries. KS internally gates each spin separately, so
 an empty spin cannot dilute an unconverged channel.

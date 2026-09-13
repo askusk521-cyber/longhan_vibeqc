@@ -553,6 +553,14 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
     if scf_diagnostic is not None:
         scf_diagnostic.argtypes = [ctypes.c_void_p, ctypes.POINTER(ScfDiagnostic)]
         scf_diagnostic.restype = ctypes.c_int
+    batch_scf_diagnostic = getattr(library, "vibeqc_batch_get_scf_diagnostic", None)
+    if batch_scf_diagnostic is not None:
+        batch_scf_diagnostic.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ScfDiagnostic),
+        ]
+        batch_scf_diagnostic.restype = ctypes.c_int
     library.vibeqc_batch_prepare.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_void_p),

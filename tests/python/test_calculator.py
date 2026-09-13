@@ -152,20 +152,20 @@ def test_method_capabilities_report_families_and_properties():
     lda = method_capabilities("lda-rks")
     assert lda.family == "density_functional"
     assert lda.available
-    assert not lda.supports_batch
+    assert lda.supports_batch
     assert lda.supported_properties == frozenset(("energy",))
 
     pbe = method_capabilities("pbe-rks")
     assert pbe.family == "density_functional"
     assert pbe.available
-    assert not pbe.supports_batch
+    assert pbe.supports_batch
     assert pbe.supported_properties == frozenset(("energy",))
 
     for name in ("lda-uks", "pbe-uks"):
         uks = method_capabilities(name)
         assert uks.family == "density_functional"
         assert uks.available
-        assert not uks.supports_batch
+        assert uks.supports_batch
         assert uks.supported_properties == frozenset(("energy",))
 
 
@@ -180,8 +180,8 @@ def test_lda_rks_public_contract_is_cpu_energy_only():
         calculator.singlepoint(
             [("He", (0.0, 0.0, 0.0))], properties=("energy", "forces")
         )
-    with pytest.raises(NotImplementedError, match="prepared batches"):
-        calculator.prepare_batch([[("He", (0.0, 0.0, 0.0))]])
+    with calculator.prepare_batch([[("He", (0.0, 0.0, 0.0))]]) as batch:
+        assert batch.execute(strict=True).items[0].forces is None
     with pytest.raises(NotImplementedError, match="Hartree-Fock methods only"):
         calculator.estimate_resources([[("He", (0.0, 0.0, 0.0))]])
 
@@ -197,8 +197,8 @@ def test_pbe_rks_public_contract_is_cpu_energy_only():
         calculator.singlepoint(
             [("He", (0.0, 0.0, 0.0))], properties=("energy", "forces")
         )
-    with pytest.raises(NotImplementedError, match="prepared batches"):
-        calculator.prepare_batch([["He", (0.0, 0.0, 0.0)]])
+    with calculator.prepare_batch([[("He", (0.0, 0.0, 0.0))]]) as batch:
+        assert batch.execute(strict=True).items[0].forces is None
 
 
 @pytest.mark.parametrize("method", ("lda-uks", "pbe-uks"))
@@ -220,8 +220,8 @@ def test_uks_public_contract_on_cpu_is_energy_only(method):
             multiplicity=2,
             properties=("energy", "forces"),
         )
-    with pytest.raises(NotImplementedError, match="prepared batches"):
-        calculator.prepare_batch([atoms], charges=[-1], multiplicities=[2])
+    with calculator.prepare_batch([atoms], charges=[-1], multiplicities=[2]) as batch:
+        assert batch.execute(strict=True).items[0].forces is None
 
 
 @pytest.mark.parametrize("method", ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks"))

@@ -37,6 +37,8 @@ class BatchItemResult:
     fock_builds: int | None = None
     # None means this item did not complete a solve, or the library predates the query.
     precision: dict | None = None
+    # Physical commutator at the returned density; absent for unsupported methods.
+    physical_residual_rms: float | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -71,7 +73,7 @@ class BatchResult:
             if not item.succeeded
         ]
         if failures:
-            raise RuntimeError("batched HF item failures: " + "; ".join(failures))
+            raise RuntimeError("batched item failures: " + "; ".join(failures))
 
 
 def _decode_triangular_class(index: int) -> tuple[int, int]:
@@ -372,7 +374,11 @@ class PreparedBatch:
         if len(self._charges) != count or len(self._multiplicities) != count:
             raise ValueError("charges and multiplicities must match the batch size")
         for atoms in self._systems:
-            calculator._preflight_hf_basis(atoms)
+            calculator._preflight_hf_basis(
+                atoms,
+                compute_forces="forces"
+                in calculator._capabilities.supported_properties,
+            )
         self.resource_plan = resource_plan
         self.resource_diagnostics = None
         self._resource_ledger = None
@@ -528,15 +534,16 @@ class PreparedBatch:
     ) -> BatchResult:
         """Replay the fleet, optionally omitting analytic forces.
 
-        The default requests energy and forces. ``properties=("energy",)``
-        skips force evaluation and returns ``forces=None`` for each item.
+        The default requests the method's supported properties. Energy-only
+        methods return ``forces=None``; HF can omit forces explicitly with
+        ``properties=("energy",)``.
         Output selection does not change the prepared model or warm snapshot;
         a later force replay rebuilds response caches when necessary. Resource
         plans retain their conservative energy-plus-force capacity allowance.
         """
         self._ensure_open()
         if properties is None:
-            properties = ("energy", "forces")
+            properties = self._calculator._capabilities.supported_properties
         if isinstance(properties, (str, bytes)):
             raise TypeError("properties must be an iterable of property names")
         try:
@@ -551,6 +558,12 @@ class PreparedBatch:
         if unknown:
             names = ", ".join(sorted(repr(name) for name in unknown))
             raise ValueError(f"unsupported properties: {names}")
+        unsupported = requested - self._calculator._capabilities.supported_properties
+        if unsupported:
+            raise ValueError(
+                f"method {self._calculator._method_name!r} does not support properties "
+                + ", ".join(sorted(unsupported))
+            )
         compute_forces = "forces" in requested
         if self._calculator._model_signature() != self._model_signature:
             raise RuntimeError(
@@ -669,6 +682,16 @@ class PreparedBatch:
             ):
                 _native.check(self._library, count_status)
             succeeded = output.status == _native.STATUS_SUCCESS
+            physical_residual_rms = None
+            scf_getter = getattr(self._library, "vibeqc_batch_get_scf_diagnostic", None)
+            if scf_getter is not None:
+                diagnostic = _native.ScfDiagnostic(
+                    ctypes.sizeof(_native.ScfDiagnostic), _native.ABI_VERSION
+                )
+                status = scf_getter(self._batch, index, ctypes.byref(diagnostic))
+                if status != _native.STATUS_NOT_IMPLEMENTED:
+                    _native.check(self._library, status, context=self._context)
+                    physical_residual_rms = diagnostic.physical_residual_rms
             forces = (
                 np.ctypeslib.as_array(force_storage[index]).copy().reshape(-1, 3)
                 if succeeded and compute_forces
@@ -706,6 +729,7 @@ class PreparedBatch:
                     iterations=output.iterations,
                     energy_change=output.energy_change,
                     density_rms=output.density_rms,
+                    physical_residual_rms=physical_residual_rms,
                     executed_backend={
                         _native.BACKEND_CPU_REFERENCE: "cpu_reference",
                         _native.BACKEND_CUDA: "cuda",
