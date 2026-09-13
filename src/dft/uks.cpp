@@ -28,13 +28,13 @@ struct SpinEvaluation {
  * The #202 strategy owns J dispatch; semilocal methods never request K. */
 SpinEvaluation evaluate(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                         const dft::MolecularGrid& grid, const Matrix& alpha, const Matrix& beta,
-                        bool pbe) {
+                        bool pbe, std::size_t tile) {
   const auto& ints = plan.one_electron();
   const auto jk = plan.build(alpha, beta);
   SpinEvaluation out;
   out.fock = assemble_fock(plan.strategy(), ints.hcore, jk);
-  const auto xc = pbe ? dft::integrate_pbe_uks(basis, grid, alpha, beta)
-                      : dft::integrate_lda_xc_pw_uks(basis, grid, alpha, beta);
+  const auto xc = pbe ? dft::integrate_pbe_uks(basis, grid, alpha, beta, tile)
+                      : dft::integrate_lda_xc_pw_uks(basis, grid, alpha, beta, tile);
   for (std::size_t i = 0; i < alpha.size(); ++i) {
     out.fock.alpha[i] += xc.potential[0][i];
     out.fock.beta[i] += xc.potential[1][i];
@@ -100,7 +100,7 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   const double residual_gate = std::min(1.0e-9, options.density_tolerance);
   bool stabilize_occupations = false;
   for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
-    const auto physical = evaluate(plan, basis, grid, alpha, beta, pbe);
+    const auto physical = evaluate(plan, basis, grid, alpha, beta, pbe, options.xc_tile_points);
     ++result.fock_builds;
     const Matrix ra = commutator_residual(physical.fock.alpha, alpha, ints.overlap, n);
     const Matrix rb = commutator_residual(physical.fock.beta, beta, ints.overlap, n);

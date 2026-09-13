@@ -97,15 +97,21 @@ double owner_partition(const double* point, const core::System& system, std::siz
 
 }  // namespace
 
+void validate_grid_spec(const GridSpec& spec) {
+  if (spec.version != 1 || !spec.radial_points || spec.radial_points > 512 || !spec.angular_polar ||
+      spec.angular_polar > 256 || spec.angular_azimuth < 3 || spec.angular_azimuth > 1024 ||
+      !spec.partition_iterations || spec.partition_iterations > 5 ||
+      !std::isfinite(spec.coincident_tolerance) || spec.coincident_tolerance < 0.0)
+    throw std::invalid_argument("unsupported DFT grid prescription/version");
+  for (double radius : spec.element_radii)
+    if (!std::isfinite(radius) || radius < 0.0)
+      throw std::invalid_argument("invalid DFT element radius");
+}
+
 MolecularGrid::MolecularGrid(const core::System& system, GridSpec spec)
     : system_(system), spec_(spec) {
   if (system_.atoms.empty()) throw std::invalid_argument("a DFT grid requires atoms");
-  if (spec_.version != 1 || !spec_.radial_points || spec_.radial_points > 512 ||
-      !spec_.angular_polar || spec_.angular_polar > 256 || spec_.angular_azimuth < 3 ||
-      spec_.angular_azimuth > 1024 || !spec_.partition_iterations ||
-      spec_.partition_iterations > 5 || !std::isfinite(spec_.coincident_tolerance) ||
-      spec_.coincident_tolerance < 0.0)
-    throw std::invalid_argument("unsupported DFT grid prescription/version");
+  validate_grid_spec(spec_);
 
   auto [polar, polar_weights] = gauss_legendre(spec_.angular_polar);
   auto [radial_nodes, radial_weights] = gauss_legendre(spec_.radial_points);
@@ -118,11 +124,14 @@ MolecularGrid::MolecularGrid(const core::System& system, GridSpec spec)
   const double azimuth_weight = 2.0 * std::numbers::pi / spec_.angular_azimuth;
   for (std::size_t owner = 0; owner < system_.atoms.size(); ++owner) {
     const auto& center = system_.atoms[owner].position;
+    const auto z = system_.atoms[owner].atomic_number;
+    if (z < 1 || z > 118) throw std::invalid_argument("invalid grid atomic number");
+    const double radius = spec_.element_radii[z] > 0.0 ? spec_.element_radii[z] : 1.0;
     for (std::size_t radial = 0; radial < spec_.radial_points; ++radial) {
       const double t = 0.5 * (radial_nodes[radial] + 1.0);
       const double wt = 0.5 * radial_weights[radial];
-      const double r = t / (1.0 - t);
-      const double wr = wt * r * r / ((1.0 - t) * (1.0 - t));
+      const double r = radius * t / (1.0 - t);
+      const double wr = wt * radius * r * r / ((1.0 - t) * (1.0 - t));
       for (std::size_t z = 0; z < spec_.angular_polar; ++z) {
         const double ring = std::sqrt(std::max(0.0, 1.0 - polar[z] * polar[z]));
         for (std::size_t azimuth = 0; azimuth < spec_.angular_azimuth; ++azimuth) {

@@ -66,6 +66,8 @@ struct ScfOptions {
   bool compute_forces{true};
   /** Internal native RKS candidate override; public/default execution stays D. */
   dft::XcDensityRoute xc_density_route{dft::XcDensityRoute::DensityMatrix};
+  /** Bounded AO/XC tile schedule; does not alter the grid or functional. */
+  std::size_t xc_tile_points{256};
 };
 
 /** Internal mean-field result, including state retained for warm starts. */

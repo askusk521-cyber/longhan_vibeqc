@@ -4,6 +4,8 @@
 
 extern "C" {
 
+uint32_t vibeqc_ks_options_version(void) { return 1; }
+
 uint32_t vibeqc_get_abi_version(void) { return VIBEQC_ABI_VERSION; }
 
 const char* vibeqc_status_message(vibeqc_status status) {

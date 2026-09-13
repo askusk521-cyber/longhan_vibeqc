@@ -178,6 +178,25 @@ class SystemDescriptor(ctypes.Structure):
     ]
 
 
+class KsOptionsDescriptor(ctypes.Structure):
+    """Borrowed model snapshot; native preparation copies every pointee."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("scf_domain_version", ctypes.c_uint32),
+        ("grid_version", ctypes.c_uint32),
+        ("radial_points", ctypes.c_uint32),
+        ("angular_polar", ctypes.c_uint32),
+        ("angular_azimuth", ctypes.c_uint32),
+        ("partition_iterations", ctypes.c_uint32),
+        ("coincident_tolerance", ctypes.c_double),
+        ("tile_points", ctypes.c_uint64),
+        ("element_radii", ctypes.POINTER(ctypes.c_double)),
+        ("element_radius_count", ctypes.c_uint32),
+    ]
+
+
 class MethodDescriptor(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -195,6 +214,7 @@ class MethodDescriptor(ctypes.Structure):
         ("precision_mode", ctypes.c_int32),
         ("correlation_memory_budget_bytes", ctypes.c_uint64),
         ("mp2_denominator_threshold", ctypes.c_double),
+        ("ks_options", ctypes.POINTER(KsOptionsDescriptor)),
     ]
 
 

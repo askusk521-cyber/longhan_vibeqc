@@ -371,6 +371,30 @@ typedef struct vibeqc_system_descriptor {
   vibeqc_basis_representation basis_representation;
 } vibeqc_system_descriptor;
 
+/** Native semilocal KS model snapshot, copied during preparation. The method
+ * identifier fixes unit LDA_X+LDA_C_PW or GGA_X_PBE+GGA_C_PBE composition.
+ * No exact exchange, pruning or implicit functional alias is supported. */
+typedef struct vibeqc_ks_options {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  /** Version 1: semilocal-scaled-v1/pbe-spin-c2-1e-18. */
+  uint32_t scf_domain_version;
+  uint32_t grid_version;
+  uint32_t radial_points;
+  uint32_t angular_polar;
+  uint32_t angular_azimuth;
+  uint32_t partition_iterations;
+  double coincident_tolerance;
+  uint64_t tile_points;
+  /** Optional positive finite radii [0..118] in Bohr, indexed by atomic
+   * number; slot zero is unused. NULL/zero means unit radii for all elements. */
+  const double* element_radii;
+  uint32_t element_radius_count;
+} vibeqc_ks_options;
+
+/** Pure capability query. Version 1 accepts the complete options above. */
+VIBEQC_API uint32_t vibeqc_ks_options_version(void);
+
 typedef struct vibeqc_method_descriptor {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -398,6 +422,9 @@ typedef struct vibeqc_method_descriptor {
   uint64_t correlation_memory_budget_bytes;
   /** Positive MP2 absolute denominator threshold in Hartree; zero uses 1e-10. */
   double mp2_denominator_threshold;
+  /** Optional KS snapshot. NULL/absent preserves the original default model.
+   * The descriptor and pointees need only outlive the prepare call. */
+  const vibeqc_ks_options* ks_options;
 } vibeqc_method_descriptor;
 
 /**

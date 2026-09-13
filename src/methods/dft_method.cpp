@@ -1,6 +1,7 @@
 #include "methods/dft_method.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -87,6 +88,44 @@ scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor, vibeqc_b
   return options;
 }
 
+/** Copy every pointee before constructing scientific owners. Legacy method
+ * descriptors retain the original unit-radius GridSpec and 256-point tiles. */
+dft::GridSpec ks_grid_options(const vibeqc_method_descriptor& descriptor,
+                              scf::ScfOptions& options) {
+  dft::GridSpec grid;
+  if (!field_present(descriptor, offsetof(vibeqc_method_descriptor, ks_options),
+                     sizeof(descriptor.ks_options)) ||
+      !descriptor.ks_options)
+    return grid;
+  const auto& input = *descriptor.ks_options;
+  if (input.struct_size < sizeof(vibeqc_ks_options) || input.abi_version != VIBEQC_ABI_VERSION)
+    throw MethodError(VIBEQC_STATUS_ABI_MISMATCH, "KS options ABI mismatch");
+  if (input.scf_domain_version != 1)
+    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "unsupported KS tail/spin domain policy");
+  if (!input.tile_points || input.tile_points > static_cast<std::uint64_t>(INT_MAX))
+    throw std::invalid_argument("invalid KS XC tile points");
+  options.xc_tile_points = input.tile_points;
+  grid.version = input.grid_version;
+  grid.radial_points = input.radial_points;
+  grid.angular_polar = input.angular_polar;
+  grid.angular_azimuth = input.angular_azimuth;
+  grid.partition_iterations = input.partition_iterations;
+  grid.coincident_tolerance = input.coincident_tolerance;
+  if ((input.element_radii == nullptr) != (input.element_radius_count == 0) ||
+      (input.element_radii && input.element_radius_count != grid.element_radii.size()))
+    throw std::invalid_argument("KS element radii require 119 entries or NULL/zero");
+  if (input.element_radii) {
+    for (std::size_t z = 1; z < grid.element_radii.size(); ++z) {
+      const double radius = input.element_radii[z];
+      if (!std::isfinite(radius) || radius <= 0.0)
+        throw std::invalid_argument("KS element radii must be positive finite");
+      grid.element_radii[z] = radius == 1.0 ? 0.0 : radius;
+    }
+  }
+  dft::validate_grid_spec(grid);
+  return grid;
+}
+
 Result adapt_result(const scf::ScfResult& native, vibeqc_backend backend) {
   Result result;
   result.energy = native.energy;
@@ -118,7 +157,8 @@ std::size_t ks_provider_bytes(const core::System& system, vibeqc_backend backend
 class KsPreparedCalculation final : public PreparedCalculation {
  public:
   KsPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
-                        scf::ScfOptions options, vibeqc_backend backend, int device)
+                        scf::ScfOptions options, dft::GridSpec grid, vibeqc_backend backend,
+                        int device)
       : capabilities_(capabilities),
         system_(std::move(system)),
         method_(method),
@@ -127,12 +167,13 @@ class KsPreparedCalculation final : public PreparedCalculation {
         fock_(system_, nullptr, *options_.resolved_fock_build, device,
               ks_provider_bytes(system_, backend)),
         basis_(system_),
-        grid_(system_) {
+        grid_(system_, grid) {
 #if VIBEQC_HAS_CUDA
     if (backend_ == VIBEQC_BACKEND_CUDA)
       cuda_ = std::make_unique<dft::CudaKsPlan>(
           fock_, basis_, grid_, options_,
-          method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS);
+          method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS,
+          options_.xc_tile_points);
 #endif
     runtime::sample_cpu_capacity(host_numeric_capacity());
   }
@@ -272,12 +313,13 @@ vibeqc_status item_exception_status() {
 class KsPreparedBatch final : public PreparedBatch {
  public:
   KsPreparedBatch(Capabilities capabilities, std::vector<core::System> systems,
-                  vibeqc_method method, scf::ScfOptions options, vibeqc_backend backend, int device,
-                  bool warm_enabled)
+                  vibeqc_method method, scf::ScfOptions options, dft::GridSpec grid,
+                  vibeqc_backend backend, int device, bool warm_enabled)
       : capabilities_(capabilities),
         systems_(std::move(systems)),
         method_(method),
         options_(std::move(options)),
+        grid_spec_(std::move(grid)),
         backend_(backend),
         device_(device),
         warm_enabled_(warm_enabled),
@@ -504,7 +546,7 @@ class KsPreparedBatch final : public PreparedBatch {
   };
   std::unique_ptr<KsPreparedCalculation> make_plan(const core::System& system) const {
     return std::make_unique<KsPreparedCalculation>(capabilities_, system, method_, options_,
-                                                   backend_, device_);
+                                                   grid_spec_, backend_, device_);
   }
   void materialize_warm(std::size_t i) const {
     const auto& item = items_.at(i);
@@ -516,6 +558,7 @@ class KsPreparedBatch final : public PreparedBatch {
   std::vector<core::System> systems_;
   vibeqc_method method_;
   scf::ScfOptions options_;
+  dft::GridSpec grid_spec_;
   vibeqc_backend backend_;
   int device_;
   bool warm_enabled_, warm_updates_{true};
@@ -560,8 +603,10 @@ std::unique_ptr<PreparedCalculation> prepare_dft_calculation(
       descriptor.method != VIBEQC_METHOD_LDA_UKS && descriptor.method != VIBEQC_METHOD_PBE_UKS)
     throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
                       "requested DFT method is reserved but not implemented");
+  auto options = dft_options(descriptor, context.requested_backend);
+  auto grid = ks_grid_options(descriptor, options);
   return std::make_unique<KsPreparedCalculation>(capabilities, system, descriptor.method,
-                                                 dft_options(descriptor, context.requested_backend),
+                                                 std::move(options), std::move(grid),
                                                  context.requested_backend, context.device_id);
 }
 
@@ -577,10 +622,11 @@ std::unique_ptr<PreparedBatch> prepare_dft_batch(const Capabilities& capabilitie
   if (context.requested_backend == VIBEQC_BACKEND_CUDA)
     throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT CUDA backend is not built");
 #endif
-  return std::make_unique<KsPreparedBatch>(capabilities, std::move(systems), descriptor.method,
-                                           dft_options(descriptor, context.requested_backend),
-                                           context.requested_backend, context.device_id,
-                                           (flags & VIBEQC_BATCH_ENABLE_WARM_STARTS) != 0);
+  auto options = dft_options(descriptor, context.requested_backend);
+  auto grid = ks_grid_options(descriptor, options);
+  return std::make_unique<KsPreparedBatch>(
+      capabilities, std::move(systems), descriptor.method, std::move(options), std::move(grid),
+      context.requested_backend, context.device_id, (flags & VIBEQC_BATCH_ENABLE_WARM_STARTS) != 0);
 }
 
 }  // namespace vibeqc::methods::detail

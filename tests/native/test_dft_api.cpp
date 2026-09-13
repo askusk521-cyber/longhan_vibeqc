@@ -83,10 +83,77 @@ vibeqc_method_descriptor lda_method() {
           0};
 }
 
+void ks_option_snapshot() {
+  require(vibeqc_ks_options_version() == 1, "KS option version unavailable");
+  Fixture fixture;
+  auto method = lda_method();
+  std::array<double, 119> radii;
+  radii.fill(1.0);
+  radii[1] = 1.3;
+  vibeqc_ks_options options{sizeof(vibeqc_ks_options),
+                            VIBEQC_ABI_VERSION,
+                            1,
+                            1,
+                            32,
+                            10,
+                            20,
+                            2,
+                            1e-12,
+                            31,
+                            radii.data(),
+                            radii.size()};
+  method.ks_options = &options;
+  vibeqc_calculation* calculation = nullptr;
+  require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+              VIBEQC_STATUS_SUCCESS,
+          "custom KS preparation failed");
+  // Caller storage can change or die immediately after preparation.
+  options.radial_points = 0;
+  radii[1] = std::numeric_limits<double>::quiet_NaN();
+  vibeqc_result_descriptor result{
+      sizeof(vibeqc_result_descriptor), VIBEQC_ABI_VERSION, 0, nullptr, 0, 0, 0, 0, 0,
+      VIBEQC_BACKEND_CPU_REFERENCE};
+  require(vibeqc_calculation_execute(calculation, &result) == VIBEQC_STATUS_SUCCESS,
+          "KS consumed caller options after prepare");
+  const double energy = result.energy;
+  require(vibeqc_calculation_execute(calculation, &result) == VIBEQC_STATUS_SUCCESS &&
+              std::abs(result.energy - energy) < 1e-11,
+          "KS snapshot replay changed");
+  vibeqc_calculation_destroy(calculation);
+  // A new preparation validates every option again, before scientific owners.
+  require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+              VIBEQC_STATUS_INVALID_ARGUMENT,
+          "invalid KS snapshot accepted");
+  options.struct_size = 8;
+  require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+              VIBEQC_STATUS_ABI_MISMATCH,
+          "truncated KS snapshot accepted");
+  options.struct_size = sizeof(options);
+  options.scf_domain_version = 2;
+  require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+              VIBEQC_STATUS_NOT_IMPLEMENTED,
+          "unknown KS domain policy accepted");
+  method.method = VIBEQC_METHOD_RHF;
+  require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+              VIBEQC_STATUS_INVALID_ARGUMENT,
+          "HF ignored a KS model option");
+  method = lda_method();
+  method.struct_size = offsetof(vibeqc_method_descriptor, ks_options);
+  method.ks_options = reinterpret_cast<const vibeqc_ks_options*>(std::uintptr_t{1});
+  require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+              VIBEQC_STATUS_SUCCESS,
+          "legacy method descriptor read its missing option");
+  require(vibeqc_calculation_execute(calculation, &result) == VIBEQC_STATUS_SUCCESS &&
+              std::abs(result.energy - (-1.121017859421488)) < 2e-12,
+          "legacy KS default model changed");
+  vibeqc_calculation_destroy(calculation);
+}
+
 }  // namespace
 
 int main() {
   try {
+    ks_option_snapshot();
     vibeqc_method_capabilities_descriptor capabilities{
         sizeof(vibeqc_method_capabilities_descriptor), VIBEQC_ABI_VERSION, 0, 0, 0, 0, 0};
     require(vibeqc_method_get_capabilities(VIBEQC_METHOD_LDA_RKS, &capabilities) ==

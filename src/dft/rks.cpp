@@ -55,28 +55,31 @@ struct RksEvaluation {
 };
 
 using RksXcEvaluator = dft::XcIntegral (*)(const dft::AoBasis&, const dft::MolecularGrid&,
-                                           const Matrix&, dft::XcDensitySource);
+                                           const Matrix&, dft::XcDensitySource, std::size_t);
 
 dft::XcIntegral evaluate_lda_xc_rks(const dft::AoBasis& basis, const dft::MolecularGrid& grid,
-                                    const Matrix& density, dft::XcDensitySource source) {
-  return dft::integrate_lda_xc_pw_rks(basis, grid, density, 256, source);
+                                    const Matrix& density, dft::XcDensitySource source,
+                                    std::size_t tile) {
+  return dft::integrate_lda_xc_pw_rks(basis, grid, density, tile, source);
 }
 
 dft::XcIntegral evaluate_pbe_xc_rks(const dft::AoBasis& basis, const dft::MolecularGrid& grid,
-                                    const Matrix& density, dft::XcDensitySource source) {
-  return dft::integrate_pbe_rks_with_tail(basis, grid, density, 256, source);
+                                    const Matrix& density, dft::XcDensitySource source,
+                                    std::size_t tile) {
+  return dft::integrate_pbe_rks_with_tail(basis, grid, density, tile, source);
 }
 
 RksEvaluation evaluate_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                            const dft::MolecularGrid& grid, const Matrix& density,
                            RksXcEvaluator evaluate_xc, const char* method_name,
-                           dft::XcDensitySource source, std::size_t retained_capacity) {
+                           dft::XcDensitySource source, std::size_t retained_capacity,
+                           std::size_t tile) {
   const auto& strategy = plan.strategy();
   const auto& ints = plan.one_electron();
   const auto jk = plan.build(density);
   RksEvaluation result;
   result.fock = assemble_fock(strategy, ints.hcore, jk).alpha;
-  const auto xc = evaluate_xc(basis, grid, density, source);
+  const auto xc = evaluate_xc(basis, grid, density, source, tile);
   result.density_diagnostic = xc.density_diagnostic;
   // The AO tile and potential were live together with these J/Fock buffers
   // inside evaluate_xc. Its peak excludes borrowed D/factor to avoid charging
@@ -188,7 +191,8 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   const auto evaluate_current = [&](std::size_t extra_live_bytes = 0) {
     auto physical = evaluate_rks(plan, basis, grid, density, evaluate_xc, method_name,
                                  {options.xc_density_route, factor.get(), identity},
-                                 runtime::add_capacity(retained_capacity(), extra_live_bytes));
+                                 runtime::add_capacity(retained_capacity(), extra_live_bytes),
+                                 options.xc_tile_points);
     const auto& record = physical.density_diagnostic;
     if (record.executed == dft::XcDensityRoute::OccupiedOrbitals)
       ++diagnostic.orbital_calls;

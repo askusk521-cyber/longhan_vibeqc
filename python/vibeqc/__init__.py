@@ -34,6 +34,7 @@ from .calculator import (
 )
 from .elements import ElectronState, electron_state
 from .fock import FockBuildSpec, FockEvaluation, FockPlan, FockScfResult, FockTerm
+from .ks import FunctionalSpec, GridSpec, KsOptions
 from .mean_field import FixedDensityMeanField, MeanFieldEvaluation
 from .overlap import cross_overlap
 from .progressive import ProgressiveResult, projected_singlepoint
@@ -81,7 +82,10 @@ __all__ = [
     "FockPlan",
     "FockScfResult",
     "FockTerm",
+    "FunctionalSpec",
+    "GridSpec",
     "InactiveEigensolverProfileEntry",
+    "KsOptions",
     "MeanFieldEvaluation",
     "MethodCapabilities",
     "ObservableTarget",

@@ -324,6 +324,7 @@ class Calculator:
         precision: str = "fp64",
         target_accuracy: TargetAccuracy | None = None,
         resource_budget=None,
+        ks_options=None,
     ) -> None:
         """Create a calculator, optionally selecting CPU or CUDA DF.
 
@@ -336,6 +337,9 @@ class Calculator:
         iteration convergence. Until an explicit audit/estimator is attached,
         successful results report ``unverified`` and numerical defaults remain
         unchanged. It never certifies an error from ``energy_tolerance``.
+
+        ``ks_options`` snapshots an explicit semilocal composition, GridSpec
+        and XC tile schedule for LDA/PBE RKS/UKS. Other methods reject it.
         """
         if target_accuracy is not None and not isinstance(
             target_accuracy, TargetAccuracy
@@ -402,6 +406,13 @@ class Calculator:
             raise ValueError("density_fitting_memory_budget_bytes must be non-negative")
         self._method_name = method.lower()
         self._method = _METHODS[self._method_name]
+        self._ks_options = None
+        if self._method_name in ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks"):
+            from .ks import resolve_ks_options
+
+            self._ks_options = resolve_ks_options(self._method_name, ks_options)
+        elif ks_options is not None:
+            raise ValueError("ks_options requires an LDA/PBE RKS/UKS method")
         if self._method == _native.METHOD_MP2:
             if target_accuracy is not None:
                 raise NotImplementedError(
@@ -471,6 +482,19 @@ class Calculator:
         ):
             raise ValueError("canonical MP2 requires precision='fp64'")
         self._library = _native.load_library(device=device, device_id=self._device_id)
+        self._ks_options_version = 0
+        if self._ks_options is not None:
+            query = getattr(self._library, "vibeqc_ks_options_version", None)
+            if query is not None:
+                query.argtypes, query.restype = [], ctypes.c_uint32
+                self._ks_options_version = query()
+            if self._ks_options_version != 1:
+                from .ks import resolve_ks_options
+
+                if self._ks_options != resolve_ks_options(self._method_name):
+                    raise NotImplementedError(
+                        "native library does not support KS model options v1"
+                    )
 
         available = ctypes.c_int32()
         _native.check(
@@ -495,6 +519,11 @@ class Calculator:
                 raise NotImplementedError(
                     "DFT accuracy-model identities are not implemented yet"
                 )
+
+    @property
+    def ks_options(self):
+        """Resolved immutable KS model, or None for another method family."""
+        return self._ks_options
 
     @property
     def profile_diagnostics(self) -> dict:
@@ -535,7 +564,7 @@ class Calculator:
                     "density_fitting_memory_budget_bytes", df_budget
                 )
             )
-        return _native.MethodDescriptor(
+        descriptor = _native.MethodDescriptor(
             ctypes.sizeof(_native.MethodDescriptor),
             _native.ABI_VERSION,
             self._method,
@@ -552,6 +581,11 @@ class Calculator:
             self._correlation_memory_budget_bytes,
             self._mp2_denominator_threshold,
         )
+        if self._ks_options is not None and self._ks_options_version == 1:
+            from .ks import native_ks_options
+
+            descriptor.ks_options = ctypes.pointer(native_ks_options(self._ks_options))
+        return descriptor
 
     def _precision_provenance(
         self, calculation: ctypes.c_void_p, index: int | None = None
@@ -659,6 +693,11 @@ class Calculator:
                 "auxiliary": identity(self._auxiliary_basis),
                 "representation": self._basis_representation,
                 "method": self._method,
+                **(
+                    {"ks_options": self._ks_options.to_payload()}
+                    if self._ks_options
+                    else {}
+                ),
                 **(
                     {
                         "correlation_memory_budget_bytes": self._correlation_memory_budget_bytes,
@@ -821,12 +860,7 @@ class Calculator:
                 # derivatives remain controlled by the requested observable.
                 orders = derivative_orders
                 if operator == "ao":
-                    orders = (
-                        1
-                        if self._method
-                        in (_native.METHOD_PBE_RKS, _native.METHOD_PBE_UKS)
-                        else 0,
-                    )
+                    orders = (self._ks_options.ao_order,)
                 for order in orders:
                     require_basis(
                         basis,
@@ -963,6 +997,7 @@ class Calculator:
                 energy_tolerance=self._energy_tolerance,
                 density_tolerance=self._density_tolerance,
                 screening_tolerance=self._screening_tolerance,
+                ks_options=self._ks_options,
                 device_id=self._device_id,
                 library=self._library,
             )

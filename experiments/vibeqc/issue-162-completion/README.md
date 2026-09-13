@@ -197,6 +197,37 @@ The later #305 CPU OH records use the explicit C2v reference subgroup and
 pass the full unrestricted AO residual gate; see the source-bound correction
 record. They do not establish the earlier unconstrained or CUDA traces.
 
+## Immutable model-options increment (2026-09-14)
+
+`KsOptions` reuses the existing `FunctionalSpec` and `GridSpec`, resolves only
+audited LDA/PBE spin compositions, records the effective native tail policy,
+and derives the minimal AO order from functional ingredients. Grid counts,
+per-element radial scales and XC tile capacity are copied by native prepare
+and included in both model identity and the shared resource request. A changed
+model cannot execute an existing Python prepared owner. The additive C method
+option respects legacy descriptor size; unsupported families/domains fail
+before constructing scientific owners. See [the public contract](../../../docs/ks_options.md).
+
+Validation of the model implementation:
+
+- CPU native: 25/25 tests passed, including caller-storage snapshot, malformed
+  options, non-DFT rejection and a legacy descriptor with an ignored invalid
+  tail pointer. Python: 71 passed, 3 optional skips, 37 deselected across options,
+  KS/HF resources, calculator and native batches.
+- Slurm RTX 5090: 4/4 native tests and 32 selected CUDA options/resources/batch/
+  independent SCF tests passed. Custom-grid LDA/PBE RKS/UKS agree with both
+  independent PySCF guesses within 1e-8 Eh; tiles 31/128 preserve the discrete
+  endpoint and device ledgers match the selected shapes exactly.
+- All four CUDA custom-grid cases passed Compute Sanitizer memcheck with full
+  leak checking: 0 errors and 0 bytes leaked. Log:
+  `/tmp/vibeqc-162-options-memcheck.log`.
+- The complete C++ heap audit still bounds and releases all ten HF/KS cases:
+  `/tmp/vibeqc-162-ks-options-cpu-heap-20260914.json`. New copied radius tables
+  are included in the host metadata allowance.
+- Pre-commit and ten ownership tests passed. A final public-symbol export
+  annotation was subsequently added; its CPU API rebuild/test passed, and
+  the matching CUDA rebuild is in progress at publication of this increment.
+
 ## Remaining work against the full issue
 
 1. Preserve the implemented method-level #203 resource contract as richer
@@ -207,9 +238,10 @@ record. They do not establish the earlier unconstrained or CUDA traces.
    workload/evidence runner. Active/converged/failed isolation, stable order,
    force rejection, warm/frozen/imported replay and changed-geometry rebuilds
    pass; failed items preserve valid warm states.
-4. Complete functional/grid/model options and numerical identity. Invalidate
-   geometry, basis, spin/charge, grid and functional/regularization changes;
-   keep density/orbital generations current and clear stale DIIS/final state.
+4. Preserve the implemented immutable functional/grid/model options and
+   numerical identity as diagnostics and evidence are completed. Geometry,
+   basis, spin/charge, grid and functional/regularization changes must retain
+   the validated invalidation and current-density generation gates.
 5. Expose physical residual, density change, occupations, iteration history,
    components, actual backend and transfers. The merged additive SCF query
    already exposes distinct density-update and physical RMS; richer KS

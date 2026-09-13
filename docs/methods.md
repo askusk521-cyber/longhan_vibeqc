@@ -69,8 +69,10 @@ ragged batches preserve per-item status/order and last-good densities through
 geometry rebuilds, failure, frozen updates and atomic seed import. CUDA batches
 enqueue all active item streams before reading their scalar results. Public
 KS resource plans cover preparation, execution and geometry rebuilds through
-the common ledger; see [resource planning](resource_planning.md). Richer model
-options, diagnostics and workload evidence remain open parts of #162.
+the common ledger; see [resource planning](resource_planning.md). Immutable
+[KS options](ks_options.md) bind the functional, grid/radii and tile schedule
+to native preparation and resource identity. Richer diagnostics and workload
+evidence remain open parts of #162.
 Nuclear gradients remain #163. No DFT density-fitting or performance-leadership
 claim follows from the tested CPU/CUDA energy endpoints.
 The public `Result.density_rms` retains its density-update convergence meaning.

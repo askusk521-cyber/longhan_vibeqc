@@ -106,8 +106,10 @@ CUDA estimation uses allocation-owned shape queries without constructing a
 context, quadrature, AO matrix, integral or eigensolver. Native KS inventory v1
 supports the ordinary-stream solver above 16 AOs and up to 64 DIIS entries,
 subject to checked native launch dimensions. It declares the current immutable
-GridSpec-v1 (48 radial, 16 polar, 32 azimuth), 256-point tile, functional/domain
+GridSpec-v1 (48 radial, 16 polar, 32 azimuth by default), XC tile, functional/domain
 policy, basis/charge/spin, numerical controls, backend and CUDA binary identity.
+`ks_options=KsOptions(...)` uses the selected grid/radii/tile in both the
+estimator and native preparation; see [KS options](ks_options.md).
 Geometry changes preserve the resource shape; model changes require a new plan.
 
 The host inventory includes 36 bytes per quadrature point, packed AO metadata,
