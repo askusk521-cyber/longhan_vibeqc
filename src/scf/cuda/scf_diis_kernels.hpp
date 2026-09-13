@@ -15,6 +15,7 @@ void launch_update_diis_kernel(dim3 grid, dim3 block, std::size_t shared_bytes, 
                                const std::uint8_t* active, double* fock_history,
                                double* residual_history, double* linear_system,
                                double* coefficients, std::uint32_t* history_count,
-                               std::uint32_t* history_head, double* effective_fock);
+                               std::uint32_t* history_head, double* effective_fock,
+                               bool normalize_metric = false);
 
 }  // namespace vibeqc::scf::cuda_execution

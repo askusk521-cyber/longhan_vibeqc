@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 
 #include "scf/cuda/direct_jk_kernels.hpp"
@@ -9,6 +10,13 @@ using namespace cuda_execution;
 }
 
 namespace {
+
+__global__ void independent_jk_finite_kernel(const double* values, std::size_t count,
+                                             int* failure) {
+  for (std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < count;
+       i += static_cast<std::size_t>(blockDim.x) * gridDim.x)
+    if (!isfinite(values[i])) atomicExch(failure, 1);
+}
 
 /** Schwarz bounds in public AO order, including sparse spherical expansions. */
 __global__ void independent_jk_bounds_kernel(DeviceBatch batch, double* bounds, int* failure) {
@@ -123,6 +131,12 @@ __global__ void independent_jk_derivative_kernel(DeviceBatch batch,
 }  // namespace
 
 namespace cuda_execution {
+
+void launch_independent_jk_finite_kernel(cudaStream_t stream, const double* values,
+                                         std::size_t count, int* failure) {
+  const unsigned blocks = static_cast<unsigned>(std::min<std::size_t>((count + 127) / 128, 65535));
+  independent_jk_finite_kernel<<<blocks, 128, 0, stream>>>(values, count, failure);
+}
 
 void launch_independent_jk_bounds_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
                                          cudaStream_t stream, DeviceBatch batch, double* bounds,

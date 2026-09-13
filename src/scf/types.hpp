@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "dft/density_source.hpp"
+#include "dft/scf_diagnostic.hpp"
 #include "scf/fock_build.hpp"
 #include "vibeqc/vibeqc.h"
 
@@ -89,9 +90,9 @@ struct ScfResult {
   unsigned iterations{};
   double energy_change{};
   double density_rms{};
-  /** RMS of the physical commutator/orbital-gradient residual at the retained
-   * density. Zero
-   * means the backend does not report it separately. */
+  /** Physical commutator RMS at the retained density, over all spin entries.
+   * KS separately gates the maximum per-spin value in dft_diagnostic.
+   * Zero means the backend does not report this field separately. */
   double physical_residual_rms{};
   bool converged{};
   bool initial_density_used{};
@@ -108,6 +109,8 @@ struct ScfResult {
    * nonconverged return. Its witness matches the returned density exactly. */
   std::shared_ptr<const OccupiedDensityFactor> xc_density_factor;
   dft::RksDensityDiagnostic xc_density_diagnostic;
+  /** Populated by KS solvers; HF diagnostics and stopping rules are unchanged. */
+  dft::ScfDiagnostic dft_diagnostic;
 };
 
 }  // namespace vibeqc::scf

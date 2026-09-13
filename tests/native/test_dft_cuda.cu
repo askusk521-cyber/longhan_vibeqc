@@ -1,0 +1,295 @@
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <vector>
+
+#include "dft/cuda_xc.hpp"
+#include "dft/xc.hpp"
+#include "molecule/basis.hpp"
+
+namespace {
+using namespace vibeqc::dft;
+void require(bool condition, const char* message) {
+  if (!condition) throw std::runtime_error(message);
+}
+void check(cudaError_t status) {
+  if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+}
+void close(double actual, double expected, const char* message, double tolerance = 2e-11) {
+  if (!std::isfinite(actual) || std::abs(actual - expected) > tolerance) {
+    std::cerr << std::setprecision(17) << message << ": " << actual << " versus " << expected
+              << ", difference " << actual - expected << '\n';
+    throw std::runtime_error(message);
+  }
+}
+
+vibeqc::core::System system(unsigned l = 0, bool spherical = false) {
+  vibeqc::core::System out;
+  out.atoms = {{1, {0, 0, 0}}, {1, {0.1, 0.2, 1.4}}};
+  out.shells = {
+      {0,
+       0,
+       {{3.425250914, 0.1543289673}, {0.6239137298, 0.5353281423}, {0.168855404, 0.4446345422}}},
+      {1,
+       0,
+       {{3.425250914, 0.1543289673}, {0.6239137298, 0.5353281423}, {0.168855404, 0.4446345422}}}};
+  if (l) out.shells.push_back({1, l, {{0.7, 1.0}}});
+  if (spherical) out.basis_representation = VIBEQC_BASIS_SPHERICAL;
+  std::string detail;
+  if (vibeqc::molecule::validate_and_normalize(out, detail) != VIBEQC_STATUS_SUCCESS)
+    throw std::runtime_error(detail);
+  return out;
+}
+
+/** Test owner deliberately allocates exactly the component request plus a
+ * canary. Production ResourcePlan will own this arena together with J/SCF. */
+struct Fixture {
+  cudaStream_t stream{};
+  void* arena{};
+  double* density{};
+  CudaXcLayout layout;
+  std::unique_ptr<CudaXcPlan> plan;
+  std::uint64_t generation{};
+  Fixture(const AoBasis& basis, const MolecularGrid& grid, bool pbe, bool uks, std::size_t tile)
+      : layout(cuda_xc_layout(basis, grid, pbe, uks, tile)) {
+    try {
+      check(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+      check(cudaMalloc(&arena, layout.device_bytes + 64));
+      check(cudaMemset(static_cast<char*>(arena) + layout.device_bytes, 0x5a, 64));
+      check(cudaMalloc(&density, layout.spins * layout.nao * layout.nao * sizeof(double)));
+      plan = std::make_unique<CudaXcPlan>(basis, grid, pbe, uks, tile, arena, layout.device_bytes,
+                                          stream);
+    } catch (...) {
+      cleanup();
+      throw;
+    }
+  }
+  void cleanup() {
+    plan.reset();
+    if (stream) cudaStreamSynchronize(stream);
+    if (density) cudaFree(density);
+    if (arena) cudaFree(arena);
+    if (stream) cudaStreamDestroy(stream);
+  }
+  ~Fixture() { cleanup(); }
+  void submit(const std::vector<double>& d) {
+    check(cudaMemcpyAsync(density, d.data(), d.size() * sizeof(double), cudaMemcpyHostToDevice,
+                          stream));
+    // Reference input transfer is an explicit test stage. Complete it before
+    // a temporary host density can die; the measured native enqueue follows.
+    check(cudaStreamSynchronize(stream));
+    const auto before = plan->transfers();
+    plan->enqueue(density, d.size(), ++generation);
+    const auto after = plan->transfers();
+    require(after.output_d2h_bytes == before.output_d2h_bytes &&
+                after.setup_h2d_bytes == before.setup_h2d_bytes &&
+                after.synchronizations == before.synchronizations,
+            "XC enqueue staged data or synchronized");
+  }
+  CudaXcScalars scalars() { return plan->read_scalars(generation); }
+  std::vector<double> potential() { return plan->download_potential(generation); }
+  void canary() {
+    unsigned char bytes[64]{};
+    check(cudaMemcpy(bytes, static_cast<char*>(arena) + layout.device_bytes, 64,
+                     cudaMemcpyDeviceToHost));
+    require(std::all_of(std::begin(bytes), std::end(bytes), [](auto b) { return b == 0x5a; }),
+            "XC arena exceeded its exact resource request");
+  }
+};
+
+std::vector<double> density(std::size_t n, unsigned spins) {
+  std::vector<double> d(spins * n * n);
+  for (unsigned s = 0; s < spins; ++s)
+    for (std::size_t i = 0; i < n; ++i)
+      for (std::size_t j = 0; j < n; ++j)
+        d[(s * n + i) * n + j] =
+            (s == 0 ? 0.7 : 0.3) * ((i == j ? 0.2 : 0.0) + 0.1 / ((i + 1.0) * (j + 1.0)));
+  return d;
+}
+
+void compare(Fixture& fixture, const AoBasis& basis, const MolecularGrid& grid,
+             const std::vector<double>& d) {
+  fixture.submit(d);
+  const auto result = fixture.scalars();
+  require(result.error == 0, "valid density failed device XC evaluation");
+  const auto v = fixture.potential();
+  const auto& l = fixture.layout;
+  if (l.spins == 1) {
+    const auto ref = l.pbe ? integrate_pbe_rks_with_tail(basis, grid, d, 17)
+                           : integrate_lda_xc_pw_rks(basis, grid, d, 17);
+    close(result.energy, ref.energy, "RKS CPU/CUDA XC energy");
+    close(result.electrons[0] + result.electrons[1], ref.electrons, "RKS electrons");
+    for (std::size_t i = 0; i < v.size(); ++i)
+      close(v[i], ref.potential[i], "RKS CPU/CUDA V", 2e-11 + 2e-12 * std::abs(ref.potential[i]));
+  } else {
+    const auto elements = l.nao * l.nao;
+    const std::vector<double> a(d.begin(), d.begin() + elements), b(d.begin() + elements, d.end());
+    const auto ref = l.pbe ? integrate_pbe_uks(basis, grid, a, b, 17)
+                           : integrate_lda_xc_pw_uks(basis, grid, a, b, 17);
+    close(result.energy, ref.energy, "UKS CPU/CUDA XC energy");
+    for (unsigned s = 0; s < 2; ++s) {
+      close(result.electrons[s], ref.electrons[s], "UKS electrons");
+      // The explicit PBE empty-spin extension has large finite minority
+      // coefficients. Retain an FP64 relative gate as well as the absolute
+      // floor; an absolute-only test would reject a few ulps at |V|~1e4.
+      for (std::size_t i = 0; i < elements; ++i)
+        close(v[s * elements + i], ref.potential[s][i], "UKS CPU/CUDA V",
+              2e-11 + 2e-12 * std::abs(ref.potential[s][i]));
+    }
+  }
+  fixture.canary();
+}
+
+__global__ void halve_density(double* d, std::size_t n) {
+  for (std::size_t i = threadIdx.x; i < n; i += blockDim.x) d[i] *= 0.5;
+}
+
+void variational_and_state(const AoBasis& basis, const MolecularGrid& grid, bool pbe) {
+  Fixture good(basis, grid, pbe, true, 7), bad(basis, grid, pbe, true, 11);
+  auto d = density(basis.nao, 2);
+  good.submit(d);
+  auto invalid = d;
+  invalid[0] = std::numeric_limits<double>::quiet_NaN();
+  bad.submit(invalid);
+  require(bad.scalars().error != 0, "nonfinite spin density was accepted");
+  require(good.scalars().error == 0, "one failed plan contaminated another stream");
+  const auto v = good.potential();
+  const std::size_t n = basis.nao, elements = n * n;
+  for (unsigned spin = 0; spin < 2; ++spin) {
+    std::vector<double> direction(d.size());
+    // A symmetric off-diagonal perturbation tests both AO legs and spin isolation.
+    direction[spin * elements + 1] = direction[spin * elements + n] = 0.1;
+    direction[spin * elements] = -0.04;
+    double contraction = 0;
+    for (std::size_t i = 0; i < d.size(); ++i) contraction += v[i] * direction[i];
+    for (double step : {1e-4, 3e-5}) {
+      auto plus = d, minus = d;
+      for (std::size_t i = 0; i < d.size(); ++i) {
+        plus[i] += step * direction[i];
+        minus[i] -= step * direction[i];
+      }
+      good.submit(plus);
+      const auto ep = good.scalars();
+      good.submit(minus);
+      const auto em = good.scalars();
+      require(ep.error == 0 && em.error == 0, "variational density was rejected");
+      close((ep.energy - em.energy) / (2 * step), contraction, "GPU delta E = Tr(V delta D)", 2e-8);
+    }
+  }
+  compare(bad, basis, grid, d);  // A new generation clears the preceding numerical failure.
+  const auto old = bad.generation;
+  halve_density<<<1, 32, 0, bad.stream>>>(bad.density, d.size());
+  check(cudaGetLastError());
+  bad.plan->enqueue(bad.density, d.size(), ++bad.generation);
+  require(bad.scalars().error == 0, "device-produced density was rejected");
+  for (auto& x : d) x *= 0.5;
+  const std::vector<double> a(d.begin(), d.begin() + elements), b(d.begin() + elements, d.end());
+  const auto ref =
+      pbe ? integrate_pbe_uks(basis, grid, a, b) : integrate_lda_xc_pw_uks(basis, grid, a, b);
+  close(bad.scalars().energy, ref.energy, "XC ignored the current device density");
+  bool stale = false;
+  try {
+    (void)bad.plan->view(old);
+  } catch (const std::invalid_argument&) {
+    stale = true;
+  }
+  require(stale, "stale GPU XC result view was accepted");
+  stale = false;
+  try {
+    bad.plan->enqueue(bad.density, d.size(), old);
+  } catch (const std::invalid_argument&) {
+    stale = true;
+  }
+  require(stale, "stale GPU density generation was accepted");
+  good.canary();
+  bad.canary();
+}
+}  // namespace
+
+int main() {
+  int devices = 0;
+  if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0) return 77;
+  try {
+    const auto molecule = system();
+    const AoBasis basis(molecule);
+    const MolecularGrid grid(molecule, {1, 2, 2, 4, 3, 1e-12});
+    for (bool pbe : {false, true}) {
+      for (bool uks : {false, true}) {
+        for (std::size_t tile : {1U, 7U, 64U}) {
+          Fixture test(basis, grid, pbe, uks, tile);
+          require(test.layout.jets == (pbe ? 4U : 1U), "unused AO jets were allocated");
+          compare(test, basis, grid, density(basis.nao, uks ? 2 : 1));
+        }
+      }
+      variational_and_state(basis, grid, pbe);
+      const MolecularGrid tail_grid(molecule);
+      Fixture tail(basis, tail_grid, pbe, true, 257);
+      auto fully = density(basis.nao, 2);
+      std::fill(fully.begin() + basis.nao * basis.nao, fully.end(), 0.0);
+      compare(tail, basis, tail_grid, fully);
+      compare(tail, basis, tail_grid, std::vector<double>(fully.size()));
+    }
+    for (bool spherical : {false, true}) {
+      const auto f = system(3, spherical);
+      const AoBasis f_basis(f);
+      const MolecularGrid f_grid(f, {1, 3, 3, 4, 3, 1e-12});
+      Fixture f_test(f_basis, f_grid, true, true, 13);
+      compare(f_test, f_basis, f_grid, density(f_basis.nao, 2));
+    }
+    // Independent PR #214 same-grid PySCF/Libxc fixture, not just CPU parity.
+    Fixture independent(basis, grid, true, false, 9);
+    independent.submit(
+        {1.2007575959127958, 0.011302590336886256, 0.011302590336886256, 0.462144452714005});
+    require(independent.scalars().error == 0, "independent reference density was rejected");
+    close(independent.scalars().energy, -0.23010116952210713, "independent GPU PBE E", 1e-11);
+    const double oracle[]{-0.1903934858683413, -0.07901244667607567, -0.07901244667607567,
+                          -0.15198583764323192};
+    const auto v = independent.potential();
+    for (std::size_t i = 0; i < v.size(); ++i)
+      close(v[i], oracle[i], "independent GPU PBE V", 1e-11);
+    // Unequal-spin values from the same independent #214 h2.npz fixture.
+    // Keep both potentials: equal-spin reduction alone cannot detect a spin
+    // degeneracy or mixed-sigma factor error in a UKS consumer.
+    const std::vector<double> spin_density{
+        0.8754226489181763, 0.13425021134730328,  0.13425021134730328,  0.1929077645192876,
+        0.3253349469946195, -0.12294762101041702, -0.12294762101041702, 0.2692366881947174};
+    const double spin_energy[]{-0.23601166477391342, -0.23920047881983975};
+    const double spin_oracle[2][8]{
+        {-0.20988426234150148, -0.08482648070126539, -0.08482648070126539, -0.15648657460357385,
+         -0.15888935561902634, -0.06989855886500512, -0.06989855886500512, -0.14358097629106337},
+        {-0.21238938797091092, -0.08600503368570547, -0.08600503368570547, -0.15759933292601364,
+         -0.15871394325917046, -0.06875820189039786, -0.06875820189039786, -0.14429309123882408}};
+    for (unsigned pbe = 0; pbe < 2; ++pbe) {
+      Fixture independent_spin(basis, grid, pbe, true, 9);
+      independent_spin.submit(spin_density);
+      const auto scalars = independent_spin.scalars();
+      require(scalars.error == 0, "independent spin reference density was rejected");
+      close(scalars.energy, spin_energy[pbe], "independent GPU UKS E", 1e-11);
+      close(scalars.electrons[0], 0.3798061637510074, "independent alpha population", 1e-11);
+      close(scalars.electrons[1], 0.15110624456362898, "independent beta population", 1e-11);
+      const auto potential = independent_spin.potential();
+      for (std::size_t i = 0; i < potential.size(); ++i)
+        close(potential[i], spin_oracle[pbe][i], "independent GPU UKS V", 1e-11);
+    }
+    auto changed = molecule;
+    changed.atoms[1].position[2] += 0.1;
+    bool stale = false;
+    try {
+      (void)cuda_xc_layout(basis, MolecularGrid(changed), true, false);
+    } catch (const std::invalid_argument&) {
+      stale = true;
+    }
+    require(stale, "same-shape stale grid identity was accepted");
+    std::cout << "Native device-buffer LDA/PBE RKS/UKS E/V and state gates passed\n";
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+}

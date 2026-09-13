@@ -202,7 +202,7 @@ def test_pbe_rks_public_contract_is_cpu_energy_only():
 
 
 @pytest.mark.parametrize("method", ("lda-uks", "pbe-uks"))
-def test_uks_public_contract_is_cpu_energy_only(method):
+def test_uks_public_contract_on_cpu_is_energy_only(method):
     atoms = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
     calculator = Calculator(method=method, basis="sto-3g", device="cpu")
     result = calculator.singlepoint(atoms, charge=-1, multiplicity=2)
@@ -271,7 +271,6 @@ def test_uks_rejects_invalid_spin_occupations(method, charge, multiplicity):
 @pytest.mark.parametrize(
     "kwargs",
     (
-        {"device": "cuda"},
         {"density_fitting": "cpu"},
         {"precision": "auto"},
     ),

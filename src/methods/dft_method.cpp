@@ -8,8 +8,13 @@
 #include "dft/ao_grid.hpp"
 #include "dft/grid.hpp"
 #include "scf/fock_prepared.hpp"
+#include "scf/initial_guess/density.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
+
+#if VIBEQC_HAS_CUDA
+#include "dft/cuda_ks.hpp"
+#endif
 
 namespace vibeqc::methods::detail {
 namespace {
@@ -27,7 +32,7 @@ bool field_present(const vibeqc_method_descriptor& descriptor, std::size_t offse
   return descriptor.struct_size >= offset && descriptor.struct_size - offset >= width;
 }
 
-scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor) {
+scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor, vibeqc_backend backend) {
   if (!std::isfinite(descriptor.energy_tolerance) || !std::isfinite(descriptor.density_tolerance) ||
       !std::isfinite(descriptor.screening_tolerance))
     throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "DFT tolerances must be finite");
@@ -47,35 +52,37 @@ scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor) {
         mode != VIBEQC_DENSITY_FITTING_CUDA && mode != VIBEQC_DENSITY_FITTING_AUTO)
       throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown density-fitting execution mode");
     if (mode != VIBEQC_DENSITY_FITTING_NONE)
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        "DFT energy methods support conventional Coulomb only");
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT supports conventional Coulomb only");
   }
   if (field_present(descriptor, offsetof(vibeqc_method_descriptor, density_fitting_auxiliary_basis),
                     sizeof(descriptor.density_fitting_auxiliary_basis)) &&
       descriptor.density_fitting_auxiliary_basis != nullptr)
     throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT,
-                      "DFT energy methods do not accept an unused auxiliary basis");
+                      "DFT does not accept an unused auxiliary basis");
   if (field_present(descriptor, offsetof(vibeqc_method_descriptor, precision_mode),
                     sizeof(descriptor.precision_mode))) {
     if (descriptor.precision_mode != VIBEQC_PRECISION_FP64 &&
         descriptor.precision_mode != VIBEQC_PRECISION_AUTO)
       throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown floating-point precision mode");
     if (descriptor.precision_mode == VIBEQC_PRECISION_AUTO)
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        "DFT energy methods support explicit FP64 precision only");
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT supports explicit FP64 precision only");
   }
 
   scf::FockBuildSpec fock;
-  fock.spin = is_uks(descriptor.method) ? scf::FockSpin::Unrestricted : scf::FockSpin::Restricted;
+  fock.spin =
+      (descriptor.method == VIBEQC_METHOD_LDA_UKS || descriptor.method == VIBEQC_METHOD_PBE_UKS)
+          ? scf::FockSpin::Unrestricted
+          : scf::FockSpin::Restricted;
   fock.derivative_order = 0;
   fock.exchange.present = false;
-  options.resolved_fock_build =
-      scf::resolve_fock_build(fock, scf::FockBackend::Cpu, options.screening_tolerance);
+  options.resolved_fock_build = scf::resolve_fock_build(
+      fock, backend == VIBEQC_BACKEND_CUDA ? scf::FockBackend::Cuda : scf::FockBackend::Cpu,
+      options.screening_tolerance);
   options.compute_forces = false;
   return options;
 }
 
-Result adapt_result(scf::ScfResult native) {
+Result adapt_result(const scf::ScfResult& native, vibeqc_backend backend) {
   Result result;
   result.energy = native.energy;
   result.convergence.iterations = native.iterations;
@@ -83,42 +90,64 @@ Result adapt_result(scf::ScfResult native) {
   result.convergence.residual_rms = native.density_rms;
   result.physical_residual_rms = native.physical_residual_rms;
   result.convergence.converged = native.converged;
-  result.executed_backend = VIBEQC_BACKEND_CPU_REFERENCE;
+  result.executed_backend = backend;
   result.fock_builds = native.fock_builds;
   return result;
 }
 
-class DftPreparedCalculation final : public PreparedCalculation {
+class KsPreparedCalculation final : public PreparedCalculation {
  public:
-  DftPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
-                         scf::ScfOptions options)
+  KsPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
+                        scf::ScfOptions options, vibeqc_backend backend, int device)
       : capabilities_(capabilities),
         system_(std::move(system)),
         method_(method),
         options_(std::move(options)),
-        fock_(system_, nullptr, *options_.resolved_fock_build),
+        backend_(backend),
+        fock_(system_, nullptr, *options_.resolved_fock_build, device),
         basis_(system_),
-        grid_(system_) {}
+        grid_(system_) {
+#if VIBEQC_HAS_CUDA
+    if (backend_ == VIBEQC_BACKEND_CUDA)
+      cuda_ = std::make_unique<dft::CudaKsPlan>(
+          fock_, basis_, grid_, options_,
+          method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS);
+#endif
+  }
 
   std::size_t atom_count() const noexcept override { return system_.atoms.size(); }
   const Capabilities& capabilities() const noexcept override { return capabilities_; }
 
   Result execute(bool compute_forces) override {
-    const bool pbe = method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS;
-    const bool uks = is_uks(method_);
-    const char* method_name = pbe ? "PBE" : "LDA";
+    const char* method_name =
+        (method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS) ? "PBE" : "LDA";
     if (compute_forces) {
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        std::string(method_name) + (uks ? " UKS" : " RKS") +
-                            " nuclear gradients are tracked separately in issue #163");
+      throw MethodError(
+          VIBEQC_STATUS_NOT_IMPLEMENTED,
+          std::string(method_name) + " KS nuclear gradients are tracked separately in issue #163");
     }
-    if (method_ == VIBEQC_METHOD_PBE_RKS)
-      return adapt_result(scf::run_pbe_rks(fock_, basis_, grid_, options_));
-    if (method_ == VIBEQC_METHOD_LDA_UKS)
-      return adapt_result(scf::run_lda_uks(fock_, basis_, grid_, options_));
-    if (method_ == VIBEQC_METHOD_PBE_UKS)
-      return adapt_result(scf::run_pbe_uks(fock_, basis_, grid_, options_));
-    return adapt_result(scf::run_lda_rks(fock_, basis_, grid_, options_));
+#if VIBEQC_HAS_CUDA
+    if (cuda_) {
+      // Native iterations read only scalar diagnostics. The public energy
+      // result does not require a final AO matrix download; warm D stays resident.
+      const auto native = cuda_->run(nullptr, true, false);
+      if (cuda_->failed())
+        throw MethodError(VIBEQC_STATUS_NUMERICAL_FAILURE, "CUDA KS physical evaluation failed");
+      return adapt_result(native, backend_);
+    }
+#endif
+    const auto* seed = warm_.empty() ? nullptr : &warm_;
+    scf::ScfResult native;
+    if (method_ == VIBEQC_METHOD_LDA_UKS || method_ == VIBEQC_METHOD_PBE_UKS)
+      native = scf::run_uks(fock_, basis_, grid_, options_, method_ == VIBEQC_METHOD_PBE_UKS, seed);
+    else if (method_ == VIBEQC_METHOD_PBE_RKS)
+      native = scf::run_pbe_rks(fock_, basis_, grid_, options_, seed);
+    else
+      native = scf::run_lda_rks(fock_, basis_, grid_, options_, seed);
+    // This owner has immutable model/geometry/spin identity. Only successful
+    // executions may replace its compatible last-good density; DIIS is fresh.
+    if (native.converged) warm_ = std::move(native.density);
+    return adapt_result(native, backend_);
   }
 
  private:
@@ -126,9 +155,14 @@ class DftPreparedCalculation final : public PreparedCalculation {
   core::System system_;
   vibeqc_method method_{};
   scf::ScfOptions options_;
+  vibeqc_backend backend_;
   scf::PreparedFockPlan fock_;
   dft::AoBasis basis_;
   dft::MolecularGrid grid_;
+  std::vector<double> warm_;
+#if VIBEQC_HAS_CUDA
+  std::unique_ptr<dft::CudaKsPlan> cuda_;
+#endif
 };
 
 }  // namespace
@@ -161,13 +195,17 @@ vibeqc_status validate_dft_system(vibeqc_method method, const core::System& syst
 std::unique_ptr<PreparedCalculation> prepare_dft_calculation(
     const Capabilities& capabilities, core::ContextState& context, const core::System& system,
     const vibeqc_method_descriptor& descriptor) {
-  if (context.requested_backend != VIBEQC_BACKEND_CPU_REFERENCE)
-    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT is available on the CPU backend only");
-  if (!is_supported_dft(descriptor.method))
+#if !VIBEQC_HAS_CUDA
+  if (context.requested_backend == VIBEQC_BACKEND_CUDA)
+    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT CUDA backend is not built");
+#endif
+  if (descriptor.method != VIBEQC_METHOD_LDA_RKS && descriptor.method != VIBEQC_METHOD_PBE_RKS &&
+      descriptor.method != VIBEQC_METHOD_LDA_UKS && descriptor.method != VIBEQC_METHOD_PBE_UKS)
     throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
                       "requested DFT method is reserved but not implemented");
-  return std::make_unique<DftPreparedCalculation>(capabilities, system, descriptor.method,
-                                                  dft_options(descriptor));
+  return std::make_unique<KsPreparedCalculation>(capabilities, system, descriptor.method,
+                                                 dft_options(descriptor, context.requested_backend),
+                                                 context.requested_backend, context.device_id);
 }
 
 }  // namespace vibeqc::methods::detail

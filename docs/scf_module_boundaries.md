@@ -556,8 +556,16 @@ and stream destruction in their original order. Download fences still protect
 local output buffers during exceptions; failed uploads retain the outer guard's
 stream fence before caller-owned pageable memory can expire.
 
-The three direct consumer kernels use `direct_jk_kernels.hpp` launch contracts.
-They remain a 151-line fragment of the retained contracted-ERI owner, with no
+The value-only `cuda_direct_jk_device.hpp` seam additionally borrows the
+provider's ordinary stream and consumes caller-owned device density/output
+buffers. Its success path does not allocate, stage matrices or synchronize.
+It shares the same strategy validation and numerical J/K kernel as the host
+adapter; device finite-value checks report into a caller-owned scalar slot.
+All buffers and the plan remain alive until that stream completes. This is a
+provider interface for native KS, not a new HF graph layout or force route.
+
+The direct consumer kernels use `direct_jk_kernels.hpp` launch contracts.
+They remain part of the retained contracted-ERI owner, with no
 recurrence duplication. Host input/specification checks and provider semantics
 remain native after moving out of the CUDA-only inventory; the SCF migration
 ledger records that fact explicitly. No scientific retirement is claimed from

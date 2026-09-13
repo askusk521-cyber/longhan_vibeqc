@@ -223,6 +223,7 @@ CUDA_ALLOWED["cuda_direct_provider_host"] = (
     "scf/cuda/metadata_upload.",
     "scf/cuda/topology.",
     "scf/cuda_direct_jk.hpp",
+    "scf/cuda_direct_jk_device.hpp",
     "runtime/",
 )
 CUDA_MODULES["cuda_one_electron_export"] = (

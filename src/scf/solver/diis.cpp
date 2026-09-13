@@ -1,5 +1,7 @@
 #include "scf/solver/diis.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "runtime/resource_usage.hpp"
@@ -8,7 +10,8 @@ namespace vibeqc::scf::solver {
 using reference::dot;
 using reference::index;
 using reference::solve_linear;
-Diis::Diis(std::size_t capacity) : capacity_(capacity) {}
+Diis::Diis(std::size_t capacity, bool normalize_metric)
+    : capacity_(capacity), normalize_metric_(normalize_metric) {}
 
 /** Actual retained numerical capacity; no temporary extrapolation work. */
 std::size_t Diis::numeric_capacity() const noexcept {
@@ -35,28 +38,44 @@ Matrix Diis::update(const Matrix& fock, const Matrix& residual) {
   }
   if (focks_.size() < 2) return fock;
 
-  const std::size_t m = focks_.size();
-  const std::size_t dim = m + 1;
-  Matrix b(dim * dim, 0.0);
-  std::vector<double> rhs(dim, 0.0);
-  rhs[m] = -1.0;
-  for (std::size_t i = 0; i < m; ++i) {
-    for (std::size_t j = 0; j < m; ++j) {
-      b[index(i, j, dim)] = dot(residuals_[i], residuals_[j]);
+  for (;;) {
+    const std::size_t m = focks_.size();
+    const std::size_t dim = m + 1;
+    Matrix b(dim * dim, 0.0);
+    std::vector<double> rhs(dim, 0.0);
+    rhs[m] = -1.0;
+    for (std::size_t i = 0; i < m; ++i) {
+      for (std::size_t j = 0; j < m; ++j) {
+        b[index(i, j, dim)] = dot(residuals_[i], residuals_[j]);
+      }
+      b[index(i, m, dim)] = -1.0;
+      b[index(m, i, dim)] = -1.0;
     }
-    b[index(i, m, dim)] = -1.0;
-    b[index(m, i, dim)] = -1.0;
-  }
-  std::vector<double> coefficients;
-  if (!solve_linear(std::move(b), std::move(rhs), coefficients, dim)) return fock;
+    if (normalize_metric_) {
+      double scale = 0.0;
+      for (std::size_t i = 0; i < m; ++i) scale = std::max(scale, std::abs(b[index(i, i, dim)]));
+      if (!(scale > 0.0) || !std::isfinite(scale)) return fock;
+      for (std::size_t i = 0; i < m; ++i)
+        for (std::size_t j = 0; j < m; ++j) b[index(i, j, dim)] /= scale;
+    }
+    std::vector<double> coefficients;
+    if (!solve_linear(std::move(b), std::move(rhs), coefficients, dim)) {
+      if (!normalize_metric_ || m <= 2) return fock;
+      // Keep the most recent physical states when old, nearly dependent errors
+      // make the augmented solve singular. Both spin blocks retire together.
+      focks_.erase(focks_.begin());
+      residuals_.erase(residuals_.begin());
+      continue;
+    }
 
-  Matrix extrapolated(fock.size(), 0.0);
-  for (std::size_t i = 0; i < m; ++i) {
-    for (std::size_t element = 0; element < fock.size(); ++element) {
-      extrapolated[element] += coefficients[i] * focks_[i][element];
+    Matrix extrapolated(fock.size(), 0.0);
+    for (std::size_t i = 0; i < m; ++i) {
+      for (std::size_t element = 0; element < fock.size(); ++element) {
+        extrapolated[element] += coefficients[i] * focks_[i][element];
+      }
     }
+    return extrapolated;
   }
-  return extrapolated;
 }
 
 }  // namespace vibeqc::scf::solver

@@ -200,6 +200,31 @@ int main() {
               "LDA RKS spin rejection omitted its closed-shell boundary");
     }
 
+    for (vibeqc_method spin_method : {VIBEQC_METHOD_LDA_UKS, VIBEQC_METHOD_PBE_UKS}) {
+      method = lda_method();
+      method.method = spin_method;
+      calculation = nullptr;
+      require(vibeqc_calculation_prepare(fixture.context, fixture.system, &method, &calculation) ==
+                      VIBEQC_STATUS_SUCCESS &&
+                  calculation != nullptr,
+              "UKS singlet preparation failed");
+      result = {
+          sizeof(vibeqc_result_descriptor), VIBEQC_ABI_VERSION, 0.0, nullptr, 0, 0, 0.0, 0.0, 0,
+          VIBEQC_BACKEND_CPU_REFERENCE};
+      require(vibeqc_calculation_execute(calculation, &result) == VIBEQC_STATUS_SUCCESS &&
+                  result.converged == 1 && result.density_rms < 1.0e-9,
+              "UKS singlet execution failed");
+      const double expected =
+          spin_method == VIBEQC_METHOD_LDA_UKS ? -1.121017859421488 : -1.1520643753396715;
+      require(std::abs(result.energy - expected) < 2.0e-12,
+              "equal-spin UKS and RKS energies disagree");
+      result.forces = forces.data();
+      result.force_count = static_cast<uint32_t>(forces.size());
+      require(vibeqc_calculation_execute(calculation, &result) == VIBEQC_STATUS_NOT_IMPLEMENTED,
+              "UKS force request exposed an unsupported buffer");
+      vibeqc_calculation_destroy(calculation);
+    }
+
     Fixture open_shell(VIBEQC_BACKEND_CPU_REFERENCE, -1, 2);
     method = lda_method();
     method.method = VIBEQC_METHOD_LDA_UKS;
@@ -268,16 +293,46 @@ int main() {
                                               0, VIBEQC_BACKEND_CUDA};
     vibeqc_context* cuda_context = nullptr;
     if (vibeqc_context_create(&cuda_descriptor, &cuda_context) == VIBEQC_STATUS_SUCCESS) {
-      vibeqc_system* cuda_system = Fixture::create_system(cuda_context);
-      vibeqc_calculation* cuda_calculation = nullptr;
-      require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
-                  VIBEQC_STATUS_NOT_IMPLEMENTED,
-              "LDA RKS accepted the CUDA backend");
-      vibeqc_system_destroy(cuda_system);
+      for (auto ks : {VIBEQC_METHOD_LDA_RKS, VIBEQC_METHOD_PBE_RKS, VIBEQC_METHOD_LDA_UKS,
+                      VIBEQC_METHOD_PBE_UKS}) {
+        const bool uks = ks == VIBEQC_METHOD_LDA_UKS || ks == VIBEQC_METHOD_PBE_UKS;
+        Fixture cpu_fixture(VIBEQC_BACKEND_CPU_REFERENCE, uks ? 1 : 0, uks ? 2 : 1);
+        vibeqc_system* cuda_system = Fixture::create_system(cuda_context, uks ? 1 : 0, uks ? 2 : 1);
+        method = lda_method();
+        method.method = ks;
+        vibeqc_calculation *cpu_calculation = nullptr, *cuda_calculation = nullptr;
+        require(vibeqc_calculation_prepare(cpu_fixture.context, cpu_fixture.system, &method,
+                                           &cpu_calculation) == VIBEQC_STATUS_SUCCESS &&
+                    vibeqc_calculation_prepare(cuda_context, cuda_system, &method,
+                                               &cuda_calculation) == VIBEQC_STATUS_SUCCESS,
+                "CPU/CUDA KS preparation failed");
+        auto cpu_result = unconverged, cuda_result = unconverged;
+        require(vibeqc_calculation_execute(cpu_calculation, &cpu_result) == VIBEQC_STATUS_SUCCESS &&
+                    vibeqc_calculation_execute(cuda_calculation, &cuda_result) ==
+                        VIBEQC_STATUS_SUCCESS &&
+                    cuda_result.executed_backend == VIBEQC_BACKEND_CUDA &&
+                    cuda_result.density_rms < 1e-9 &&
+                    std::abs(cuda_result.energy - cpu_result.energy) < 1e-10,
+                "public native CUDA KS energy/residual/backend differs from CPU");
+        const auto cold = cuda_result;
+        require(
+            vibeqc_calculation_execute(cuda_calculation, &cuda_result) == VIBEQC_STATUS_SUCCESS &&
+                cuda_result.iterations <= cold.iterations &&
+                std::abs(cuda_result.energy - cold.energy) < 1e-11,
+            "public CUDA KS compatible replay changed the endpoint");
+        cuda_result.forces = forces.data();
+        cuda_result.force_count = static_cast<uint32_t>(forces.size());
+        require(vibeqc_calculation_execute(cuda_calculation, &cuda_result) ==
+                    VIBEQC_STATUS_NOT_IMPLEMENTED,
+                "public CUDA KS force request was not rejected");
+        vibeqc_calculation_destroy(cpu_calculation);
+        vibeqc_calculation_destroy(cuda_calculation);
+        vibeqc_system_destroy(cuda_system);
+      }
       vibeqc_context_destroy(cuda_context);
     }
 #endif
-    std::cout << "LDA RKS public CPU energy-only contract passed\n";
+    std::cout << "Registered KS energy-only backend and force-rejection contract passed\n";
     return EXIT_SUCCESS;
   } catch (const std::exception& error) {
     std::cerr << "test failure: " << error.what() << '\n';

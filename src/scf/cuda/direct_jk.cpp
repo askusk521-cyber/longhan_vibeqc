@@ -12,6 +12,7 @@
 #include "scf/cuda/direct_jk_plan.hpp"
 #include "scf/cuda/metadata_upload.hpp"
 #include "scf/cuda/topology.hpp"
+#include "scf/cuda_direct_jk_device.hpp"
 
 namespace vibeqc::scf {
 
@@ -86,9 +87,8 @@ vibeqc_status direct_jk_guard(CudaDirectJkPlan* plan, std::string& detail, Funct
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
 }
-FockBuildSpec direct_jk_spec(const CudaDirectJkPlan* plan, FockBuildSpec spec,
-                             const std::vector<double>& density, const std::vector<double>& beta,
-                             std::size_t begin, std::size_t count) {
+FockBuildSpec direct_jk_strategy(const CudaDirectJkPlan* plan, FockBuildSpec spec,
+                                 std::size_t begin, std::size_t count) {
   direct_jk_require(plan != nullptr, "null direct J/K plan");
   direct_jk_require(begin < plan->diagnostic.batch_size && count > 0 &&
                         count <= plan->diagnostic.batch_size - begin,
@@ -99,6 +99,12 @@ FockBuildSpec direct_jk_spec(const CudaDirectJkPlan* plan, FockBuildSpec spec,
                       "exact direct source cannot execute a fitted provider");
   direct_jk_require(spec.derivative_order <= plan->derivative_order,
                     "direct source lacks requested derivative capability");
+  return spec;
+}
+FockBuildSpec direct_jk_spec(const CudaDirectJkPlan* plan, FockBuildSpec spec,
+                             const std::vector<double>& density, const std::vector<double>& beta,
+                             std::size_t begin, std::size_t count) {
+  spec = direct_jk_strategy(plan, spec, begin, count);
   direct_jk_require(
       density.size() == count * plan->diagnostic.nbf * plan->diagnostic.nbf &&
           (spec.spin == FockSpin::Unrestricted ? beta.size() == density.size() : beta.empty()),
@@ -283,6 +289,85 @@ vibeqc_status create_cuda_direct_jk_plan(int device_id, const std::vector<core::
   });
 }
 void destroy_cuda_direct_jk_plan(CudaDirectJkPlan* plan) noexcept { delete plan; }
+
+cudaStream_t cuda_direct_jk_stream(const CudaDirectJkPlan* plan) {
+  direct_jk_require(plan != nullptr, "null direct J/K plan");
+  return plan->stream;
+}
+int cuda_direct_jk_device(const CudaDirectJkPlan* plan) noexcept {
+  return plan ? plan->device_id : -1;
+}
+
+vibeqc_status enqueue_cuda_direct_jk_device(CudaDirectJkPlan* plan, FockBuildSpec spec,
+                                            const double* density, const double* beta,
+                                            std::size_t elements, double* coulomb,
+                                            double* alpha_exchange, double* beta_exchange,
+                                            int* numerical_error, std::string& detail) {
+  return direct_jk_guard(plan, detail, [&] {
+    direct_jk_require(plan != nullptr, "null direct J/K plan");
+    spec = direct_jk_strategy(plan, spec, 0, plan->diagnostic.batch_size);
+    direct_jk_require(spec.derivative_order == 0 && elements == plan->matrix_elements,
+                      "device direct J/K requires full-plan value dimensions");
+    const bool unrestricted = spec.spin == FockSpin::Unrestricted;
+    direct_jk_require(
+        (unrestricted ? beta != nullptr : beta == nullptr) &&
+            (spec.coulomb.present ? coulomb != nullptr : coulomb == nullptr) &&
+            (spec.exchange.present ? alpha_exchange != nullptr : alpha_exchange == nullptr) &&
+            (spec.exchange.present && unrestricted ? beta_exchange != nullptr
+                                                   : beta_exchange == nullptr),
+        "device direct J/K spin or selected-output mismatch");
+    int current = -1;
+    direct_jk_check(cudaGetDevice(&current));
+    direct_jk_require(current == plan->device_id, "device direct J/K current device mismatch");
+    const auto pointer = [&](const void* value) {
+      direct_jk_require(value != nullptr, "null device direct J/K buffer");
+      cudaPointerAttributes attributes{};
+      direct_jk_check(cudaPointerGetAttributes(&attributes, value));
+      direct_jk_require(attributes.type == cudaMemoryTypeDevice && attributes.device == current,
+                        "direct J/K requires buffers on the current CUDA device");
+    };
+    pointer(density);
+    pointer(numerical_error);
+    if (unrestricted) pointer(beta);
+    const auto bytes = direct_jk_product(elements, sizeof(double));
+    const auto disjoint = [&](const void* a, std::size_t na, const void* b, std::size_t nb) {
+      if (!a || !b) return;
+      const auto x = reinterpret_cast<std::uintptr_t>(a), y = reinterpret_cast<std::uintptr_t>(b);
+      direct_jk_require(x <= std::numeric_limits<std::uintptr_t>::max() - na &&
+                            y <= std::numeric_limits<std::uintptr_t>::max() - nb &&
+                            (x + na <= y || y + nb <= x),
+                        "device direct J/K writable buffers alias");
+    };
+    const double* inputs[]{density, beta};
+    double* outputs[]{coulomb, alpha_exchange, beta_exchange};
+    for (const auto* input : inputs) disjoint(input, bytes, numerical_error, sizeof(int));
+    for (unsigned i = 0; i < 3; ++i) {
+      if (!outputs[i]) continue;
+      pointer(outputs[i]);
+      for (const auto* input : inputs) disjoint(input, bytes, outputs[i], bytes);
+      disjoint(outputs[i], bytes, numerical_error, sizeof(int));
+      for (unsigned j = 0; j < i; ++j) disjoint(outputs[i], bytes, outputs[j], bytes);
+    }
+    direct_jk_check(cudaMemsetAsync(numerical_error, 0, sizeof(int), plan->stream));
+    for (const auto* input : inputs)
+      if (input) {
+        launch_independent_jk_finite_kernel(plan->stream, input, elements, numerical_error);
+        direct_jk_check(cudaGetLastError());
+      }
+    if (spec.coulomb.present || spec.exchange.present) {
+      launch_independent_jk_kernel(
+          static_cast<unsigned>(elements), kIndependentJkThreads, 0, plan->stream, plan->batch, 0,
+          spec.coulomb.present, spec.exchange.present, unrestricted, plan->screening_tolerance,
+          plan->bounds, density, beta, coulomb, alpha_exchange, beta_exchange);
+      direct_jk_check(cudaGetLastError());
+      for (const auto* output : outputs)
+        if (output) {
+          launch_independent_jk_finite_kernel(plan->stream, output, elements, numerical_error);
+          direct_jk_check(cudaGetLastError());
+        }
+    }
+  });
+}
 
 static vibeqc_status execute_cuda_direct_jk_range(
     CudaDirectJkPlan* plan, std::size_t begin, std::size_t count, FockBuildSpec spec,

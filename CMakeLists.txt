@@ -162,6 +162,7 @@ add_library(vibeqc SHARED
   src/dft/bridge.cpp
   src/dft/grid.cpp
   src/dft/rks.cpp
+  src/dft/uks.cpp
   src/dft/xc.cpp
   src/integrals/s_integrals.cpp
   src/integrals/ecp.cpp
@@ -336,6 +337,7 @@ if(VIBEQC_ENABLE_CUDA)
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_grid_kernels.py"
             --output "${VIBEQC_GRID_SOURCE}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_grid_kernels.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/dft/cuda_xc_kernels.cuh"
             ${VIBEQC_DF_GENERATOR_INPUTS}
     VERBATIM)
   target_include_directories(vibeqc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/dft")
@@ -369,6 +371,9 @@ if(VIBEQC_ENABLE_CUDA)
   target_include_directories(vibeqc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/tensor")
   target_sources(vibeqc PRIVATE
     "${VIBEQC_GRID_SOURCE}"
+    src/dft/cuda_xc.cpp
+    src/dft/cuda_ks.cpp
+    src/dft/cuda_ks_kernels.cu
     src/posthf/df_bridge.cu
     src/runtime/cuda_runtime.cu
     src/scf/cuda/df_coulomb.cpp
@@ -886,6 +891,31 @@ if(VIBEQC_BUILD_TESTS)
   target_link_libraries(vibeqc_uks_state_tests PRIVATE vibeqc)
   add_test(NAME vibeqc_uks_state_tests COMMAND vibeqc_uks_state_tests)
 
+  if(VIBEQC_ENABLE_CUDA)
+    add_executable(vibeqc_xc_point_cuda_tests tests/native/test_xc_point_cuda.cu)
+    target_include_directories(vibeqc_xc_point_cuda_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_definitions(vibeqc_xc_point_cuda_tests PRIVATE VIBEQC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    set_target_properties(vibeqc_xc_point_cuda_tests PROPERTIES CUDA_STANDARD 20)
+    add_test(NAME vibeqc_xc_point_cuda_tests COMMAND vibeqc_xc_point_cuda_tests)
+
+    add_executable(vibeqc_dft_cuda_tests tests/native/test_dft_cuda.cu
+      src/dft/cuda_xc.cpp "${VIBEQC_GRID_SOURCE}" src/dft/ao_grid.cpp
+      src/dft/grid.cpp src/dft/xc.cpp src/scf/density_factor.cpp src/molecule/basis.cpp)
+    add_dependencies(vibeqc_dft_cuda_tests vibeqc_xc_cpu_codegen)
+    target_include_directories(vibeqc_dft_cuda_tests PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/dft ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_link_libraries(vibeqc_dft_cuda_tests PRIVATE CUDA::cudart CUDA::cublas)
+    set_target_properties(vibeqc_dft_cuda_tests PROPERTIES CUDA_STANDARD 20)
+    add_test(NAME vibeqc_dft_cuda_tests COMMAND vibeqc_dft_cuda_tests)
+    set_tests_properties(vibeqc_dft_cuda_tests PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(vibeqc_ks_cuda_tests tests/native/test_ks_cuda.cpp)
+    target_include_directories(vibeqc_ks_cuda_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(vibeqc_ks_cuda_tests PRIVATE vibeqc CUDA::cudart)
+    add_test(NAME vibeqc_ks_cuda_tests COMMAND vibeqc_ks_cuda_tests)
+    set_tests_properties(vibeqc_ks_cuda_tests PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
+
   add_executable(vibeqc_dft_api_tests tests/native/test_dft_api.cpp)
   target_link_libraries(vibeqc_dft_api_tests PRIVATE vibeqc)
   add_test(NAME vibeqc_dft_api_tests COMMAND vibeqc_dft_api_tests)
@@ -899,6 +929,11 @@ if(VIBEQC_BUILD_TESTS)
   target_link_libraries(vibeqc_dft_density_source_tests PRIVATE vibeqc)
   target_include_directories(vibeqc_dft_density_source_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   add_test(NAME vibeqc_dft_density_source_tests COMMAND vibeqc_dft_density_source_tests)
+
+  add_executable(vibeqc_uks_tests tests/native/test_uks.cpp)
+  target_link_libraries(vibeqc_uks_tests PRIVATE vibeqc)
+  target_include_directories(vibeqc_uks_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME vibeqc_uks_tests COMMAND vibeqc_uks_tests)
 
   add_executable(vibeqc_mixed_precision_tests
     tests/native/test_mixed_precision.cpp)

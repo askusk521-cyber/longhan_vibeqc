@@ -2,6 +2,55 @@
   "classification_status": "Reviewed source regions; operator-specific scientific glue is counted conservatively with its owning function.",
   "files": [
     {
+      "path": "src/dft/cuda_ks_kernels.hpp",
+      "reason": "Native KS scalar diagnostic and physical-Fock launch contract; no mathematical bodies.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "xc"
+    },
+    {
+      "path": "src/dft/cuda_ks_kernels.cu",
+      "reason": "Semilocal physical Fock/energy and per-spin scalar diagnostic composition; dense numerical glue remains maintained and is not claimed as retired code.",
+      "regions": [
+        {
+          "start": "void assemble_fock(cudaStream_t",
+          "stop": null,
+          "role": "runtime",
+          "reason": "Host launch forwarding to the numerical component kernels."
+        }
+      ],
+      "role": "scientific",
+      "subsystem": "xc"
+    },
+    {
+      "path": "src/scf/cuda_direct_jk_device.hpp",
+      "reason": "Borrowed direct-provider stream, resident matrix and numerical-status contract; no new J/K dispatch or scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
+      "path": "src/dft/cuda_xc.hpp",
+      "reason": "Borrowed arena, device-buffer/stream result and density-generation contracts with an exact resource request; no scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "xc"
+    },
+    {
+      "path": "src/dft/cuda_xc_kernels.cuh",
+      "reason": "Allocation-free native semilocal XC launch adapters. Existing generated AO and ingredient policies are reused; current point coefficients use the separately counted shared XC domain algebra.",
+      "regions": [
+        {
+          "reason": "Dense D*AO contraction, point-layout adaptation and full symmetric E/V reductions remain maintained scientific glue. No scientific-code retirement is claimed for this baseline.",
+          "role": "scientific",
+          "start": "__global__ void density_product",
+          "stop": "void enqueue(const CudaXcLayout& l"
+        }
+      ],
+      "role": "runtime",
+      "subsystem": "xc"
+    },
+    {
       "path": "src/runtime/cuda_component_trace.hpp",
       "reason": "Opt-in CUDA event/NVTX profiling and logical work accounting; no scientific equations or provider ownership.",
       "regions": [],
@@ -1529,14 +1578,15 @@
       "status": "native_baseline"
     },
     "xc": {
-      "current_default": "generated scalar expressions and shared compact CPU potential/response contractions; explicit bounded native CPU candidate",
+      "current_default": "Generated interior scalar expressions and compact CPU contractions; native SCF uses a shared scaled-domain point evaluator with explicit spin boundary identity.",
       "evidence": [
         "docs/xc_expressions.md",
         "docs/xc_contractions.md",
-        "benchmarks/results/xc-contractions/README.md"
+        "benchmarks/results/xc-contractions/README.md",
+        "docs/xc_scf_domain.md"
       ],
       "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials",
-      "missing_capability": "native GPU XC contractions and complete stationary method integration/promotion remain with #162/#163/#168",
+      "missing_capability": "Full native device-buffer XC integration and prepared GPU SCF/resource/replay acceptance remain #162; stationary forces and performance promotion remain #163/#168.",
       "owner": "xc",
       "retirement_condition": "duplicated CPU coefficient/response formulas retired after independent E/V and derivative gates; retain external/formula oracles; GPU promotion requires its own complete endpoint evidence",
       "status": "partial"

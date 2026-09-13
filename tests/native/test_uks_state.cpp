@@ -90,12 +90,16 @@ void check_state(bool pbe, unsigned max_iterations, bool hydroxyl = false) {
     fock.alpha[i] += xc.potential[0][i];
     fock.beta[i] += xc.potential[1][i];
   }
-  const auto residual = scf::reference::concatenate(
-      scf::reference::commutator_residual(fock.alpha, alpha, ints.overlap, n),
-      scf::reference::commutator_residual(fock.beta, beta, ints.overlap, n));
-  const double physical_rms = scf::reference::residual_rms(residual);
+  const auto residual_a = scf::reference::commutator_residual(fock.alpha, alpha, ints.overlap, n);
+  const auto residual_b = scf::reference::commutator_residual(fock.beta, beta, ints.overlap, n);
+  const double physical_rms =
+      scf::reference::residual_rms(scf::reference::concatenate(residual_a, residual_b));
+  const double maximum_spin_rms =
+      std::max(scf::reference::residual_rms(residual_a), scf::reference::residual_rms(residual_b));
   require(std::abs(physical_rms - result.physical_residual_rms) < 1e-13,
           "UKS residual does not describe the returned density");
+  require(std::abs(maximum_spin_rms - result.dft_diagnostic.physical_residual) < 1e-13,
+          "UKS per-spin convergence gate was diluted by the public aggregate RMS");
   require(std::abs(scf::reference::dot(alpha, ints.overlap) - (hydroxyl ? 5.0 : 2.0)) < 1e-12 &&
               std::abs(scf::reference::dot(beta, ints.overlap) - (hydroxyl ? 4.0 : 1.0)) < 1e-12,
           "UKS changed spin populations");
@@ -106,7 +110,7 @@ void check_state(bool pbe, unsigned max_iterations, bool hydroxyl = false) {
             "UKS occupation stabilization lost the integer-occupation projector");
   }
   if (result.converged)
-    require(physical_rms < options.density_tolerance &&
+    require(maximum_spin_rms < options.density_tolerance &&
                 result.density_rms < options.density_tolerance &&
                 result.energy_change < options.energy_tolerance,
             "UKS returned success without passing all physical-state gates");

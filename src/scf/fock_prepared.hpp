@@ -59,6 +59,12 @@ class PreparedFockPlan {
    */
   std::size_t cpu_observation_capacity() const noexcept;
   const FockPreparationDiagnostic& diagnostic() const noexcept;
+  /** Borrow the already selected exact CUDA source for an ordinary-stream
+   * device consumer. Null means that this prepared strategy has no such
+   * source. The PreparedFockPlan still owns selection, lifetime and resources. */
+  CudaDirectJkPlan* cuda_direct_source() const noexcept;
+  /** Exact normalized scientific identity, independent of execution budget. */
+  bool matches_system(const core::System& system) const noexcept;
   DirectJkMatrices build(const std::vector<double>& density,
                          const std::vector<double>& beta = {}) const;
   std::vector<double> energy_derivative(const std::vector<double>& density,

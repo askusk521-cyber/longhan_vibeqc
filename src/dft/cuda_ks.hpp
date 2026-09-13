@@ -1,0 +1,71 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "dft/ao_grid.hpp"
+#include "dft/grid.hpp"
+#include "scf/fock_prepared.hpp"
+#include "scf/types.hpp"
+
+namespace vibeqc::dft {
+
+/** Explicit component ownership for composition into #203. Provider/context
+ * overhead and host quadrature preparation remain distinct from the native
+ * iteration arena. No independent user-level memory allowance is introduced. */
+struct CudaKsResources {
+  std::size_t state_device_bytes{}, xc_device_bytes{}, provider_device_bytes{};
+  std::size_t retained_host_numeric_bytes{};
+};
+
+/** Counts owned transport, not an estimate from the iteration count. One-
+ * electron provider setup includes its existing explicit host export; its
+ * preparation diagnostics are reported separately by PreparedFockPlan. */
+struct CudaKsTransfers {
+  std::uint64_t setup_h2d_bytes{}, density_h2d_bytes{}, scalar_d2h_bytes{}, matrix_d2h_bytes{};
+  std::uint64_t synchronizations{}, iterations{};
+};
+
+/** Native ordinary-stream LDA/PBE RKS/UKS trajectory. The borrowed common
+ * Fock plan must outlive it. Model/grid/functional identity is immutable;
+ * changing it requires a new owner. Initial guesses/normalization and grid
+ * preparation are explicit host setup, with no CPU XC or matrix export in
+ * an iteration. Final output is a separate, measured operation.
+ *
+ * Split enqueue/finish operations let a native ragged batch enqueue all
+ * active item streams before reading their small scalar records. Each owner
+ * isolates pending/active/failed/converged and last-good warm states. */
+class CudaKsPlan {
+ public:
+  CudaKsPlan(const scf::PreparedFockPlan& fock, const AoBasis& basis, const MolecularGrid& grid,
+             const scf::ScfOptions& options, bool pbe, std::size_t tile_points = 256);
+  ~CudaKsPlan();
+  CudaKsPlan(const CudaKsPlan&) = delete;
+  CudaKsPlan& operator=(const CudaKsPlan&) = delete;
+
+  /** Start fresh DIIS/history. A null seed reuses a compatible last-good
+   * device density when requested; explicit seeds are normalized per spin. */
+  void begin(const std::vector<double>* initial_density = nullptr, bool reuse_warm = true);
+  bool active() const noexcept;
+  bool pending() const noexcept;
+  bool failed() const noexcept;
+  void enqueue_iteration();
+  /** Resolve a submitted iteration; returns true while another is needed. */
+  bool finish_iteration();
+  /** Terminal result; density export is optional and never used in an iteration. */
+  scf::ScfResult result(bool export_density = true);
+  /** Energy-only adapters leave the final density resident by disabling export. */
+  scf::ScfResult run(const std::vector<double>* initial_density = nullptr, bool reuse_warm = true,
+                     bool export_density = true);
+  /** Export only the last converged state for a changed-geometry rebuild. */
+  std::vector<double> warm_density();
+  const CudaKsResources& resources() const noexcept;
+  CudaKsTransfers transfers() const noexcept;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+}  // namespace vibeqc::dft

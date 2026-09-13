@@ -12,6 +12,10 @@ namespace vibeqc::scf::cuda_execution {
 // Shared one-output-owner reduction width, unchanged from the direct source.
 constexpr unsigned kIndependentJkThreads = 32;
 
+/** Device-only validity reduction for the allocation-free provider seam. */
+void launch_independent_jk_finite_kernel(cudaStream_t stream, const double* values,
+                                         std::size_t count, int* failure);
+
 /** Preserve the exact public-AO consumer launch and borrowed allocations. */
 void launch_independent_jk_bounds_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
                                          cudaStream_t stream, DeviceBatch batch, double* bounds,

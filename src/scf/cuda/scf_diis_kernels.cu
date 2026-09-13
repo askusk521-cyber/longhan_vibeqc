@@ -13,7 +13,8 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
                                    const std::uint8_t* active, double* fock_history,
                                    double* residual_history, double* linear_system,
                                    double* coefficients, std::uint32_t* history_count,
-                                   std::uint32_t* history_head, double* effective_fock) {
+                                   std::uint32_t* history_head, double* effective_fock,
+                                   bool normalize_metric) {
   // One warp owns one system.  History vectors and the O(N^2) residual-dot
   // products are distributed across lanes, while the small dense DIIS solve
   // remains in lane zero.  This preserves the original dot-product order for
@@ -84,6 +85,18 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
   }
   __syncwarp();
   if (threadIdx.x == 0) {
+    // A single common scale preserves the augmented DIIS solution. KS uses
+    // this to avoid treating every residual below 1e-7 as an absolute-pivot
+    // singularity. Existing HF callers retain the historical default path.
+    if (normalize_metric) {
+      double scale = 0.0;
+      for (std::uint32_t row = 0; row < count; ++row)
+        scale = fmax(scale, fabs(matrix[static_cast<std::size_t>(row) * dimension + row]));
+      if (scale > 0.0 && isfinite(scale))
+        for (std::uint32_t row = 0; row < count; ++row)
+          for (std::uint32_t column = 0; column < count; ++column)
+            matrix[static_cast<std::size_t>(row) * dimension + column] /= scale;
+    }
     for (std::uint32_t row = 0; row < count; ++row) {
       matrix[static_cast<std::size_t>(row) * dimension + count] = -1.0;
       matrix[static_cast<std::size_t>(count) * dimension + row] = -1.0;
@@ -160,10 +173,12 @@ void launch_update_diis_kernel(dim3 grid, dim3 block, std::size_t shared_bytes, 
                                const std::uint8_t* active, double* fock_history,
                                double* residual_history, double* linear_system,
                                double* coefficients, std::uint32_t* history_count,
-                               std::uint32_t* history_head, double* effective_fock) {
+                               std::uint32_t* history_head, double* effective_fock,
+                               bool normalize_metric) {
   update_diis_kernel<<<grid, block, shared_bytes, stream>>>(
       batch_size, nbf, matrices_per_system, history_capacity, fock, residual, active, fock_history,
-      residual_history, linear_system, coefficients, history_count, history_head, effective_fock);
+      residual_history, linear_system, coefficients, history_count, history_head, effective_fock,
+      normalize_metric);
 }
 
 }  // namespace vibeqc::scf::cuda_execution

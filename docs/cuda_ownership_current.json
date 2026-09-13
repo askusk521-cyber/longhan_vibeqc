@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10587,
+  "all_handwritten_scientific_lines": 10735,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -45,6 +45,94 @@
       "role": "runtime",
       "sha256": "c33943bbfef00fdceac88c5338ef2333c3d00fb8c5022638ea0d40904763f31f",
       "subsystem": "ao_grid"
+    },
+    {
+      "bytes": 3763,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 16,
+        "scientific": 51
+      },
+      "path": "src/dft/cuda_ks_kernels.cu",
+      "physical_lines": 74,
+      "reason": "Semilocal physical Fock/energy and per-spin scalar diagnostic composition; dense numerical glue remains maintained and is not claimed as retired code.",
+      "regions": [
+        {
+          "code_lines": 16,
+          "first_line": 58,
+          "last_line": 74,
+          "reason": "Host launch forwarding to the numerical component kernels.",
+          "role": "runtime",
+          "start": "void assemble_fock(cudaStream_t",
+          "stop": null
+        }
+      ],
+      "role": "scientific",
+      "sha256": "9277a1a719f22b0a338d37c51951de9b7e3f6f6cdb42901e3713fb1a20ec36b8",
+      "subsystem": "xc"
+    },
+    {
+      "bytes": 1201,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 17,
+        "scientific": 0
+      },
+      "path": "src/dft/cuda_ks_kernels.hpp",
+      "physical_lines": 25,
+      "reason": "Native KS scalar diagnostic and physical-Fock launch contract; no mathematical bodies.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "02f261529229c7bf5f68b389d98c6960db1b39800ba4f3493fc3b2839d456506",
+      "subsystem": "xc"
+    },
+    {
+      "bytes": 3810,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 63,
+        "scientific": 0
+      },
+      "path": "src/dft/cuda_xc.hpp",
+      "physical_lines": 94,
+      "reason": "Borrowed arena, device-buffer/stream result and density-generation contracts with an exact resource request; no scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "8e4f17ef0aad5ff6e8c717028d60fac238952660a21bb207163d8928e3ad551b",
+      "subsystem": "xc"
+    },
+    {
+      "bytes": 7655,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 51,
+        "scientific": 90
+      },
+      "path": "src/dft/cuda_xc_kernels.cuh",
+      "physical_lines": 159,
+      "reason": "Allocation-free native semilocal XC launch adapters. Existing generated AO and ingredient policies are reused; current point coefficients use the separately counted shared XC domain algebra.",
+      "regions": [
+        {
+          "code_lines": 90,
+          "first_line": 27,
+          "last_line": 125,
+          "reason": "Dense D*AO contraction, point-layout adaptation and full symmetric E/V reductions remain maintained scientific glue. No scientific-code retirement is claimed for this baseline.",
+          "role": "scientific",
+          "start": "__global__ void density_product",
+          "stop": "void enqueue(const CudaXcLayout& l"
+        }
+      ],
+      "role": "runtime",
+      "sha256": "ff0fbe6bc6c2a2c20b9c1f22d242dbcd24f56ab35d25275440dc14d380cebb15",
+      "subsystem": "xc"
     },
     {
       "bytes": 1093,
@@ -1328,22 +1416,22 @@
       "subsystem": "direct_integrals"
     },
     {
-      "bytes": 8004,
+      "bytes": 8737,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 28,
-        "scientific": 104
+        "runtime": 33,
+        "scientific": 111
       },
       "path": "src/scf/cuda/direct_jk_kernels.cu",
-      "physical_lines": 157,
+      "physical_lines": 171,
       "reason": "Retained direct public-AO J/K and fixed-density derivative contractions, now separately compiled against the same shared native contraction definitions.",
       "regions": [
         {
-          "code_lines": 28,
-          "first_line": 125,
-          "last_line": 157,
+          "code_lines": 33,
+          "first_line": 133,
+          "last_line": 171,
           "reason": "Host launch forwarding; no scientific arithmetic.",
           "role": "runtime",
           "start": "namespace cuda_execution {",
@@ -1351,24 +1439,24 @@
         }
       ],
       "role": "scientific",
-      "sha256": "76d217c64fa74a6077f0aa98c5cf39884fdad2e16c3446b0b3617b83b9db6111",
+      "sha256": "64c2a4738f44dd61085e0af54792e7ceb9f78ec0ed98559bb6dfd5899031dd31",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 1872,
+      "bytes": 2109,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 23,
+        "runtime": 25,
         "scientific": 0
       },
       "path": "src/scf/cuda/direct_jk_kernels.hpp",
-      "physical_lines": 36,
+      "physical_lines": 40,
       "reason": "Borrowed direct J/K kernel ABI and shared reduction width.",
       "regions": [],
       "role": "runtime",
-      "sha256": "aa4d17ff1e71134e55fb86329e02d876346c6e72f4d10b9c6d1d3f8bbbb35035",
+      "sha256": "0198b962b7a86c56375c417fbfac85174a7b3b1f40c489f12334d05b1d8dcab0",
       "subsystem": "runtime"
     },
     {
@@ -2815,37 +2903,37 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 8328,
+      "bytes": 9145,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 153,
+        "runtime": 165,
         "scientific": 0
       },
       "path": "src/scf/cuda/scf_diis_kernels.cu",
-      "physical_lines": 169,
+      "physical_lines": 184,
       "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
       "regions": [],
       "role": "runtime",
-      "sha256": "463f74b24b4d9ab377010fc08bd6be2c51f6659ce6634bcfc7179eb17c14ff57",
+      "sha256": "8277ab641324db08873871176b8107e81dbe6dd69d2232b908a240c79c89816d",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 910,
+      "bytes": 972,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 14,
+        "runtime": 15,
         "scientific": 0
       },
       "path": "src/scf/cuda/scf_diis_kernels.hpp",
-      "physical_lines": 20,
+      "physical_lines": 21,
       "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
       "regions": [],
       "role": "runtime",
-      "sha256": "51fe87b7cf9a6fe77e80885ae493359d94b6c9a984f11a0c208aeecd04445067",
+      "sha256": "b56333265ac54c86fa905494bd8135e6a0ebc2ef7efc7b07d6003c3275fe8ce9",
       "subsystem": "scf_tensor"
     },
     {
@@ -2948,6 +3036,23 @@
       "regions": [],
       "role": "runtime",
       "sha256": "8ee8db83629e2e65fce8b44feba5ab56ba41f6253dccf8e5d7d6616c36569bdd",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 2093,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 12,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda_direct_jk_device.hpp",
+      "physical_lines": 38,
+      "reason": "Borrowed direct-provider stream, resident matrix and numerical-status contract; no new J/K dispatch or scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "2f1db7f73b28fc28c265225d85391f45a7e160f69a5572f927f73ad5d2b5cb68",
       "subsystem": "runtime"
     },
     {
@@ -3188,8 +3293,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8839,
-    "scientific": 10431
+    "runtime": 9018,
+    "scientific": 10579
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3323,14 +3428,15 @@
       "status": "native_baseline"
     },
     "xc": {
-      "current_default": "generated scalar expressions and shared compact CPU potential/response contractions; explicit bounded native CPU candidate",
+      "current_default": "Generated interior scalar expressions and compact CPU contractions; native SCF uses a shared scaled-domain point evaluator with explicit spin boundary identity.",
       "evidence": [
         "docs/xc_expressions.md",
         "docs/xc_contractions.md",
-        "benchmarks/results/xc-contractions/README.md"
+        "benchmarks/results/xc-contractions/README.md",
+        "docs/xc_scf_domain.md"
       ],
       "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials",
-      "missing_capability": "native GPU XC contractions and complete stationary method integration/promotion remain with #162/#163/#168",
+      "missing_capability": "Full native device-buffer XC integration and prepared GPU SCF/resource/replay acceptance remain #162; stationary forces and performance promotion remain #163/#168.",
       "owner": "xc",
       "retirement_condition": "duplicated CPU coefficient/response formulas retired after independent E/V and derivative gates; retain external/formula oracles; GPU promotion requires its own complete endpoint evidence",
       "status": "partial"
@@ -3397,22 +3503,22 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4202,
+      "runtime": 4216,
       "scientific": 5
     },
     "scf_tensor": {
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 1969,
-      "scientific": 418
+      "runtime": 1987,
+      "scientific": 425
     },
     "xc": {
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 89,
-      "scientific": 222
+      "runtime": 236,
+      "scientific": 363
     }
   },
   "schema": "vibeqc.cuda-ownership-report.v1"
