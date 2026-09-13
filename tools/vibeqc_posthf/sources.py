@@ -530,9 +530,14 @@ class NativeSource:
         The stage budget includes numeric candidate, offset, expansion, record,
         upload and result storage. Caller weights/output, owned system state,
         object headers, CUDA context and allocator overhead are excluded.
+        Complex weights are rejected before conversion because casting would
+        discard the supplied cotangent's imaginary component.
         """
 
-        value = np.ascontiguousarray(weights, dtype=np.float64)
+        raw_weights = np.asarray(weights)
+        if np.iscomplexobj(raw_weights):
+            raise ValueError("weighted ERI gradient weights must be real")
+        value = np.ascontiguousarray(raw_weights, dtype=np.float64)
         if value.shape != (self.nbf,) * 4 or not np.isfinite(value).all():
             raise ValueError("weighted ERI gradient requires finite [AO]*4 weights")
         if (
@@ -570,13 +575,27 @@ class NativeSource:
         Stage accounting includes numeric expansion/record/result storage and
         excludes caller weights/output, system ownership, object headers, CUDA
         context and allocator overhead.
+        Only real cotangents are supported; complex inputs fail before casting.
         """
 
-        indices = np.ascontiguousarray(shell_indices, dtype=np.uintp)
-        if indices.shape != (4,) or np.any(indices >= len(self.shells)):
-            raise ValueError("weighted ERI shell gradient requires four shell indices")
+        # Validate before uintp conversion so fractional or overflowing values
+        # cannot select a different quartet. NumPy integer scalars remain valid.
+        index_values = tuple(shell_indices)
+        if len(index_values) != 4 or any(
+            isinstance(index, (bool, np.bool_))
+            or not isinstance(index, (int, np.integer))
+            or not 0 <= index < len(self.shells)
+            for index in index_values
+        ):
+            raise ValueError(
+                "weighted ERI shell gradient requires four in-range integer shell indices"
+            )
+        indices = np.ascontiguousarray(index_values, dtype=np.uintp)
         shape = tuple(self.shell_sizes[int(index)] for index in indices)
-        value = np.ascontiguousarray(weights, dtype=np.float64)
+        raw_weights = np.asarray(weights)
+        if np.iscomplexobj(raw_weights):
+            raise ValueError("weighted ERI shell weights must be real")
+        value = np.ascontiguousarray(raw_weights, dtype=np.float64)
         if value.shape != shape or not np.isfinite(value).all():
             raise ValueError(
                 "weighted ERI shell weights have the wrong shape or values"
