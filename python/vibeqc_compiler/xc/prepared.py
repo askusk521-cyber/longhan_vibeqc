@@ -397,6 +397,7 @@ class PreparedXCContractions:
                         integrals, potential = lease.xc(
                             self.spatial.grid.weights[ids],
                             self.program.spec.identifier,
+                            restricted=nspin == 1,
                             reset=evaluated == 0,
                             download=index == last_nonempty,
                         )

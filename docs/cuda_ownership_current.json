@@ -20,16 +20,16 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 35419,
+      "bytes": 35757,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 569,
+        "runtime": 583,
         "scientific": 89
       },
       "path": "src/dft/cuda_grid.cu",
-      "physical_lines": 711,
+      "physical_lines": 725,
       "reason": "Native plan/arena ownership around the bounded AO/feature kernels.",
       "regions": [
         {
@@ -43,7 +43,7 @@
         }
       ],
       "role": "runtime",
-      "sha256": "4f8c2139557644fba031d84af1b3d6de43c952d238b0bd9c596bd396e6f48846",
+      "sha256": "911dbf9cd08b9757bb9387ddc60b28d7aa84089963d2ecdcec6bac4ee001cdcf",
       "subsystem": "ao_grid"
     },
     {
@@ -3188,7 +3188,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8961,
+    "runtime": 8975,
     "scientific": 10478
   },
   "migration_ledger": {
@@ -3341,7 +3341,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 584,
+      "runtime": 598,
       "scientific": 89
     },
     "df_derivatives": {

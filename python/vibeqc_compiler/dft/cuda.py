@@ -87,7 +87,7 @@ class DeviceGridTask:
         )
         return None if result is None else immutable(result)
 
-    def xc(self, weights, functional, *, reset=False, download=False):
+    def xc(self, weights, functional, *, restricted=False, reset=False, download=False):
         """Evaluate native LDA/PBE XC and scatter its local spin potentials.
 
         AO jets and density features remain device-resident. Only the tile's
@@ -97,7 +97,11 @@ class DeviceGridTask:
         view = self.view
         if functional not in ("LDA_XC_PW", "PBE"):
             raise ValueError("native CUDA XC supports LDA_XC_PW or PBE")
-        if type(reset) is not bool or type(download) is not bool:
+        if (
+            type(restricted) is not bool
+            or type(reset) is not bool
+            or type(download) is not bool
+        ):
             raise ValueError("XC flags must be boolean")
         weights = immutable(weights, shape=(view.npoint,))
         integrals = np.empty(3)
@@ -106,7 +110,7 @@ class DeviceGridTask:
             self._owner._handle,
             view.generation,
             int(functional == "PBE"),
-            0,
+            int(restricted),
             1,
             pointer(weights),
             len(weights),

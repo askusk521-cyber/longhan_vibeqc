@@ -243,6 +243,33 @@ def test_spatial_native_cuda_requires_complete_canonical_spec(artifact, local_ca
         assert endpoint.statistics["xc_backend"] == "native_cpu"
 
 
+def test_spatial_unpolarized_cuda_rejects_unequal_orbital_features(
+    artifact, local_case
+):
+    basis, grid, _ = local_case
+    source = factors(basis, (basis.nao + 3, basis.nao + 3))
+    density = np.stack((source.density[0], source.density[0]))
+    scale = 1.0 + 1.0e-12
+    coefficients = (source.coefficients[0], source.coefficients[0] * scale)
+    occupations = (source.occupations[0], source.occupations[0] / scale**2)
+    source = DensitySource(density, basis_identity=basis.identity)
+    source = source.with_orbitals(coefficients, occupations, stamp=source.stamp)
+    with (
+        owner(
+            basis,
+            grid,
+            artifact,
+            orbital_capacity=tuple(map(len, occupations)),
+            ingredients=("rho", "gradient", "sigma"),
+        ) as spatial,
+        PreparedXCContractions(
+            program("PBE", "unpolarized"), basis, grid, spatial=spatial
+        ) as endpoint,
+        pytest.raises(UnsupportedXC, match="CUDA XC output"),
+    ):
+        endpoint.execute(source, stamp=source.stamp, route="orbitals")
+
+
 def test_spatial_source_lifetime_fallback_and_device_leases(
     artifact,
     local_case,

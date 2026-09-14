@@ -191,7 +191,21 @@ __device__ vibeqc::dft::point::Value evaluate_xc_point(bool pbe, bool restricted
     for (int spin = 0; spin < 2; ++spin)
       for (int axis = 0; axis < 3; ++axis)
         gradient[spin][axis] = features[(5 * spin + axis + 1) * npoint + point];
-  if (interior) return vibeqc::dft::point::evaluate_interior(pbe, rho, gradient);
+  if (interior) {
+    if (restricted) {
+      vibeqc::dft::point::Value invalid;
+      if (rho[0] != rho[1]) {
+        invalid.valid = false;
+        return invalid;
+      }
+      for (int axis = 0; axis < 3; ++axis)
+        if (gradient[0][axis] != gradient[1][axis]) {
+          invalid.valid = false;
+          return invalid;
+        }
+    }
+    return vibeqc::dft::point::evaluate_interior(pbe, rho, gradient);
+  }
   return restricted ? vibeqc::dft::point::evaluate_rks(pbe, rho, gradient)
                     : vibeqc::dft::point::evaluate(pbe, rho, gradient);
 }
