@@ -13,6 +13,7 @@
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_eigen.hpp"
+#include "scf/initial_guess/overlap.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/reference/linalg.hpp"
 #include "scf/reference/observation.hpp"
@@ -224,6 +225,39 @@ void rejected_allocation_and_info() {
       detail);
 }
 
+void device_overlap_cutoff() {
+  auto plan = make_plan(3, 1);
+  core::System system;
+  system.atoms.push_back({1, {0, 0, 0}});
+  initial_guess::OverlapOrthogonalizer cache;
+  initial_guess::EigenOperation eigen = [&](const Matrix& matrix, const Matrix* s, const Matrix* x,
+                                            std::size_t) {
+    reference::EigenResult result;
+    CudaDfEigenDiagnostic diagnostic;
+    std::string detail;
+    require(
+        solve_cuda_density_fitting_eigen(plan.get(), matrix, s, x, result.values, result.vectors,
+                                         diagnostic, detail) == VIBEQC_STATUS_SUCCESS,
+        detail);
+    return result;
+  };
+  // A diagonal metric makes the exact boundary independent of eigenvalue
+  // roundoff. The general rotated/degenerate frame is qualified above.
+  Matrix overlap{1e-10, 0, 0, 0, 1, 0, 0, 0, 2};
+  const auto x = cache.get(system, overlap, 3, eigen);
+  require(std::abs(x[0] - 1e5) < 1e-10, "ordinary overlap changed the admitted boundary");
+  overlap[0] = std::nextafter(1e-10, 0.0);
+  bool rejected = false;
+  try {
+    cache.get(system, overlap, 3, eigen);
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  require(rejected && cache.numeric_capacity_bytes() == 0, "singular device X was retained");
+  overlap[0] = 1e-9;
+  cache.get(system, overlap, 3, eigen);
+}
+
 void physical_reference_export() {
   core::System system;
   system.atoms = {{1, {0, 0, -.7}}, {1, {0, 0, .7}}};
@@ -270,6 +304,7 @@ int main() {
   reference::observation::active = &observer;
   try {
     rejected_allocation_and_info();
+    device_overlap_cutoff();
     physical_reference_export();
     for (const auto n : {2U, 12U, 32U, 96U, 192U, 384U, 513U})
       for (const auto batch : {1U, 4U}) known_frame(n, batch);

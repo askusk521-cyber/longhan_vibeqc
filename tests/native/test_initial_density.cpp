@@ -143,6 +143,81 @@ void check_overlap_cache_contract() {
   cache.get(system, overlap, 3);
   require(solves == previous, "successful retry did not retain its new X");
 }
+void check_borrowed_setup_operation() {
+  // Analytic diagonal eigenpairs qualify callback forwarding without using
+  // either reference decomposition or the production CUDA provider as oracle.
+  unsigned calls = 0;
+  EigenOperation eigen = [&](const Matrix& matrix, const Matrix* overlap, const Matrix* x,
+                             std::size_t n) {
+    ++calls;
+    require(n == 3 && (overlap == nullptr) == (x == nullptr), "setup callback shape changed");
+    std::vector<std::pair<double, std::size_t>> order;
+    for (std::size_t i = 0; i < n; ++i)
+      order.emplace_back(matrix[i * n + i] * (x ? (*x)[i * n + i] * (*x)[i * n + i] : 1), i);
+    std::sort(order.begin(), order.end());
+    EigenResult result;
+    result.vectors.assign(n * n, 0);
+    for (std::size_t column = 0; column < n; ++column) {
+      const auto [value, row] = order[column];
+      result.values.push_back(value);
+      result.vectors[row * n + column] = x ? (*x)[row * n + row] : 1;
+    }
+    return result;
+  };
+  core::System system;
+  system.electron_count = 2;
+  system.atoms.push_back({1, {0, 0, 0}});
+  integrals::IntegralData ints;
+  ints.nbf = 3;
+  ints.overlap = {2, 0, 0, 0, 1, 0, 0, 0, .5};
+  ints.hcore = {-2, 0, 0, 0, -.5, 0, 0, 0, .25};
+  OverlapOrthogonalizer cache;
+  solves = 0;
+  const auto x = cache.get(system, ints.overlap, 3, eigen);
+  close(x, {std::sqrt(.5), 0, 0, 0, 1, 0, 0, 0, std::sqrt(2.)});
+  cache.get(system, ints.overlap, 3, eigen);
+  require(calls == 1 && solves == 0, "cached X retained or repeated a provider call");
+  std::optional<EigenResult> alpha, beta;
+  const auto density = prepare_initial_density(system, ints, x, 1, nullptr, alpha,
+                                               InitialOrbitalRequest::ColdDensityOnly, eigen);
+  close(density, {1, 0, 0, 0, 0, 0, 0, 0, 0});
+  auto spins = prepare_initial_uhf_density(ints, x, 2, 1, nullptr, alpha, beta,
+                                           InitialOrbitalRequest::ColdDensityOnly, eigen);
+  close(spins.second, {.25, std::sqrt(.125), 0, std::sqrt(.125), .5, 0, 0, 0, 0});
+  require(calls == 3 && solves == 0, "cold setup bypassed the borrowed operation");
+  EigenOperation fail = [](const Matrix&, const Matrix*, const Matrix*,
+                           std::size_t) -> EigenResult {
+    throw std::runtime_error("intentional setup failure");
+  };
+  prepare_initial_density(system, ints, x, 1, &density, alpha,
+                          InitialOrbitalRequest::ColdDensityOnly, fail);
+  require(!alpha, "warm setup kept an unused core frame");
+  try {
+    prepare_initial_density(system, ints, x, 1, nullptr, alpha,
+                            InitialOrbitalRequest::ColdDensityOnly, fail);
+    require(false, "setup swallowed the provider failure");
+  } catch (const std::runtime_error& error) {
+    require(std::string_view(error.what()) == "intentional setup failure" && !alpha,
+            "failed setup published stale orbitals");
+  }
+  system.atoms[0].position[0] = .1;
+  try {
+    cache.get(system, ints.overlap, 3, fail);
+    require(false, "changed setup swallowed the provider failure");
+  } catch (const std::runtime_error&) {
+    require(cache.numeric_capacity_bytes() == 0, "failed setup kept old X");
+  }
+  ints.overlap[0] = 1e-10;
+  cache.get(system, ints.overlap, 3, eigen);
+  ints.overlap[0] = std::nextafter(1e-10, 0.0);
+  bool rejected = false;
+  try {
+    cache.get(system, ints.overlap, 3, eigen);
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  require(rejected && cache.numeric_capacity_bytes() == 0, "borrowed setup changed the cutoff");
+}
 }  // namespace
 
 int main() {
@@ -150,6 +225,7 @@ int main() {
   try {
     check_initial_density_contract();
     check_overlap_cache_contract();
+    check_borrowed_setup_operation();
     observation::active = nullptr;
     return 0;
   } catch (const std::exception& error) {

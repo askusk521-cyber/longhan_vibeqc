@@ -88,7 +88,15 @@ def validate_preparation_counts(components, *, batch_size, workload, eager, rebu
     expected_overlap = batch_size if cold or rebuild else int(changed)
     expected_misses = 0 if rebuild else expected_overlap
     expected_hits = 0 if rebuild else batch_size - expected_misses
-    solves = components["eigensolves_by_reason"]
+    reference = components["eigensolves_by_reason"]
+    device = components.get("device_eigensolves_by_reason", {})
+    solves = {
+        name: {
+            "calls": reference.get(name, {}).get("calls", 0)
+            + device.get(name, {}).get("calls", 0)
+        }
+        for name in ("overlap", "core_guess")
+    }
     phases = components["exclusive_phases"]
     expected = (
         (solves, "core_guess", expected_core),
@@ -113,10 +121,10 @@ def validate_final_eigen_counts(components, *, batch_size, method, reference):
     """
     expected = batch_size * (2 if method == "uhf" else 1)
     solves = components["eigensolves_by_reason"]
-    phases = components["exclusive_phases"]
+    device = components["device_eigensolves_by_reason"]
     if (
         solves.get("final_fock", {}).get("calls", 0) != (expected if reference else 0)
-        or phases.get("device_eigensolve", {}).get("calls", 0)
+        or device.get("final_fock", {}).get("calls", 0)
         != (0 if reference else expected)
         or solves.get("fallback", {}).get("calls", 0)
     ):
@@ -159,6 +167,7 @@ def host_workloads(
             "VIBEQC_DF_EAGER_CORE_GUESS",
             "VIBEQC_DF_REBUILD_OVERLAP",
             "VIBEQC_DF_REFERENCE_FINAL_EIGEN",
+            "VIBEQC_DF_REFERENCE_SETUP_EIGEN",
         )
     ):
         raise ValueError(

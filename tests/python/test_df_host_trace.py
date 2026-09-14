@@ -51,6 +51,18 @@ def test_host_ledger_counts_actual_leaves_and_keeps_clocks_separate(tmp_path):
         read_host_trace(path)
 
 
+def test_device_solver_reasons_separate_setup_and_finalization(tmp_path):
+    """Adding cold setup calls must not inflate the final-provider ablation."""
+    record = host_record()
+    record["regions"][1]["name"] = "device_eigensolve"
+    path = tmp_path / "device.host.jsonl"
+    path.write_text(json.dumps(record) + "\n")
+    summary = aggregate_host(read_host_trace(path))
+    assert summary["eigensolves_by_reason"] == {}
+    assert summary["device_eigensolves_by_reason"]["overlap"]["calls"] == 1
+    assert summary["device_eigensolves"][0]["item"] == 0
+
+
 @pytest.mark.parametrize("suffix", ("", "\n{"))
 def test_host_trace_rejects_missing_record_terminator(tmp_path, suffix):
     """Even valid JSON must carry the writer's final record terminator."""
