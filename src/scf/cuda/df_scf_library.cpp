@@ -14,6 +14,7 @@
 #include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
+#include "scf/cuda/eigensolver.hpp"
 #include "scf/cuda_density_fitting_eigen.hpp"
 
 namespace vibeqc::scf::cuda_df {
@@ -22,8 +23,11 @@ vibeqc_status recover_scf_capture(cudaStream_t stream, cudaError_t capture_error
                                   vibeqc_status iteration_status, bool& capture_rejected,
                                   std::string& detail) {
   const auto expected = [](cudaError_t error) {
-    return error == cudaSuccess || error == cudaErrorStreamCaptureUnsupported ||
-           error == cudaErrorStreamCaptureInvalidated || error == cudaErrorNotSupported;
+    // CUDA assigns stable ABI values 900/901 to unsupported/invalidated stream
+    // capture. Compare the values so compatible runtimes need not spell the
+    // optional enum names in their public headers.
+    const int value = static_cast<int>(error);
+    return error == cudaSuccess || value == 900 || value == 901 || error == cudaErrorNotSupported;
   };
   // Assigning a local cudaSuccess does not clear the runtime's last-error
   // slot. Otherwise the next successful generated tile launch can still fail
@@ -118,8 +122,9 @@ vibeqc_status setup_device_solver(CudaDensityFittingJkPlan& plan, std::size_t nb
   std::size_t host_bytes = 0;
   status = cusolverDnXsyevBatched_bufferSize(
       solver.handle, solver.parameters, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER,
-      static_cast<int>(nbf), CUDA_R_64F, eigensystem, static_cast<int>(nbf), CUDA_R_64F,
-      eigenvalues, CUDA_R_64F, &device_bytes, &host_bytes, static_cast<int>(batch_size));
+      static_cast<std::int64_t>(nbf), CUDA_R_64F, eigensystem, static_cast<std::int64_t>(nbf),
+      CUDA_R_64F, eigenvalues, CUDA_R_64F, &device_bytes, &host_bytes,
+      static_cast<std::int64_t>(batch_size));
   if (status != CUSOLVER_STATUS_SUCCESS || device_bytes == 0) {
     return solver_failure(
         status == CUSOLVER_STATUS_SUCCESS ? CUSOLVER_STATUS_INTERNAL_ERROR : status,
@@ -168,9 +173,10 @@ vibeqc_status solve_device_batch(CudaDensityFittingJkPlan& plan, DeviceSolver& s
   } else {
     status = cusolverDnXsyevBatched(
         solver.handle, solver.parameters, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER,
-        static_cast<int>(nbf), CUDA_R_64F, eigensystem, static_cast<int>(nbf), CUDA_R_64F,
-        eigenvalues, CUDA_R_64F, solver.workspace, solver.workspace_bytes, solver.host_workspace,
-        solver.host_workspace_bytes, info, static_cast<int>(batch_size));
+        static_cast<std::int64_t>(nbf), CUDA_R_64F, eigensystem, static_cast<std::int64_t>(nbf),
+        CUDA_R_64F, eigenvalues, CUDA_R_64F, solver.workspace, solver.workspace_bytes,
+        solver.host_workspace, solver.host_workspace_bytes, info,
+        static_cast<std::int64_t>(batch_size));
   }
   return status == CUSOLVER_STATUS_SUCCESS
              ? VIBEQC_STATUS_SUCCESS
