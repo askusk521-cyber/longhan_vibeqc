@@ -301,8 +301,10 @@ def cuda_df_candidates(
                 )
             # Strict selection serializes one item. Reserve detached candidates,
             # accepted outputs and validation/correction products explicitly;
-            # its bounded scratch is separate from whole-bucket SCF state.
-            final_selection_host = 8 * (32 * n * n + 4 * n)
+            # Two-spin candidate/correction/output frames may coexist (six
+            # epsilon vectors); eight vectors also cover the provider result.
+            # Matrix scratch includes canonical export products and both W.
+            final_selection_host = 8 * (32 * n * n + 8 * n)
             host_temporary += final_selection_host
             host_temporary += (
                 row["response_host_capacity"]

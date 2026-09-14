@@ -105,7 +105,7 @@ def test_native_solver_calls_include_warm_preparation_and_finalization(
 ):
     """Actual leaves detect reintroduced warm guesses, retaining other solves.
 
-    RHF energy reuse still requires actual physical-F validation; removing
+    Both spin modes still require actual physical-F validation; removing
     trace hooks must never satisfy the zero-reference-call gates.
     """
     if device == "cuda" and os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1":
@@ -152,26 +152,19 @@ def test_native_solver_calls_include_warm_preparation_and_finalization(
         if device == "cuda":
             assert summary["exclusive_phases"]["overlap_cache_hit"]["calls"] == 2
             assert by_reason.get("final_fock", {}).get("calls", 0) == 0
-            assert summary["exclusive_phases"].get("device_eigensolve", {}).get(
-                "calls", 0
-            ) == (0 if method == "rhf" else 4)
-            if method == "rhf":
-                assert (
-                    summary["exclusive_phases"]["final_state_fock_build"]["calls"] == 2
-                )
-                assert (
-                    summary["exclusive_phases"]["final_state_validation"]["calls"] == 2
-                )
-                assert summary["exclusive_phases"]["final_state_reuse"]["calls"] == 2
+            assert (
+                summary["exclusive_phases"].get("device_eigensolve", {}).get("calls", 0)
+                == 0
+            )
+            assert summary["exclusive_phases"]["final_state_fock_build"]["calls"] == 2
+            assert summary["exclusive_phases"]["final_state_validation"]["calls"] == 2
+            assert summary["exclusive_phases"]["final_state_reuse"]["calls"] == 2
             assert not by_reason.get("fallback", {}).get("calls", 0)
             device_leaves = [
                 row
                 for record in records
                 for row in record["regions"]
-                if row["name"]
-                == (
-                    "final_state_fock_build" if method == "rhf" else "device_eigensolve"
-                )
+                if row["name"] == "final_state_fock_build"
             ]
             assert {row["item"] for row in device_leaves} == {0, 1}
         before = path.read_bytes()

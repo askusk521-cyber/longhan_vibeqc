@@ -102,13 +102,14 @@ one/four, early inactive neighbors, scratch poisoning, distinct alpha/beta
 storage, stale owner/model/epoch/generation/occupation tokens, corrupt device
 generation/info, invalid and nonconverged replay, epoch exhaustion and recovery.
 Physical candidate checks use the independent contract and analytic F/S/D.
-Production selection and complete-force performance remain the next integration.
+Production consumers validate these candidates as described below; performance
+acceptance remains a separate measurement.
 
 
-## RHF energy-only selection
+## CUDA energy, complete forces and reference selection
 
-CUDA RHF energy-only requests now read the explicitly successful device
-candidate, verify its exact returned-D witness, evaluate current physical J/K,
+CUDA RHF/UHF requests read the explicitly successful device candidate, verify
+its exact returned-D witness, requested occupations and metric policy, evaluate current physical J/K,
 and run strict selection. A qualifying state uses one physical Fock evaluation
 and no final solve. Necessary corrections use the qualified ordinary provider,
 project and re-evaluate D, and must pass all invariants and the energy-change
@@ -120,9 +121,20 @@ host J/K substitution. Failed strict selection clears the convergence claim.
 Host DIIS recovery supplies no compact candidate. Its current solve epoch and
 an offset generation range distinguish recovered D from compact iterations
 without invalidating another item's token. It therefore enters real correction.
-RHF force/reference requests and UHF retain their separately qualified consumers
-until the next integration; energy-only selection never constructs W or invokes
-DF derivative consumers.
+Both UHF spin channels are selected jointly. Each correction evaluates one pair
+of physical Fock matrices and performs two provider solves, including the empty
+beta channel. Complete forces consume the selected density and its matching W
+exactly once in the existing one-electron/Pulay, raw three-center, auxiliary
+metric and nuclear response. Energy-only selection constructs no W and invokes
+no derivative consumer. CPU finalization preserves its independent sequence.
+
+Physical-reference export additionally requires maximum reconstructed-D drift
+and absolute `C^T F C - diag(epsilon)` error at most 1e-8. These optional gates
+are part of selection, so their failure enters correction. The accepted full
+C/epsilon is moved into the exported reference, which retains its independent
+completed-reference validation; no extra export eigensolve is needed. The
+analytic contract tests separately exercise amplification by an ill-conditioned
+metric and a maximum-D error hidden by RMS.
 
 `VIBEQC_DF_FORCE_FINAL_REBUILD=1` forces actual solve/project/evaluate work even
 when a candidate qualifies. `VIBEQC_DF_REFERENCE_FINAL_EIGEN=1` additionally
@@ -132,7 +144,20 @@ so their execution remains provider substitution. Normal preparation ablations
 retain the normal selection path. The host ledger records every actual physical
 Fock, validation and strict correction, plus the accepted reuse/corrected outcome.
 
-The composed resource plan reserves `8 * (32*n*n + 4*n)` additional host bytes
+The composed resource plan reserves `8 * (32*n*n + 8*n)` additional host bytes
 for one serialized item's detached candidates, verified output and bounded
 validation/correction products. The existing per-item device snapshots and
 independent ordinary correction/retry workspace remain separately charged.
+
+The matrix allowance covers both spin channels, canonicality products and W.
+Candidate, corrected and accepted epsilon vectors can coexist; the eight-vector
+allowance includes their six vectors and the ordinary provider result. The
+selection is serialized across items; no per-iteration history is retained.
+
+Molecular qualification exercises Cartesian/spherical RHF water and UHF OH,
+batches one/four, resident/constrained budgets, cold/warm/changed geometry,
+frozen seeds, output transitions and failed neighbors. Independent CPU total
+DF energy differences and translation checks exercise the full force sum,
+including H2+ with empty beta. Polarized H2 reference export compares D, canonical
+energies and full forces against CPU and separates cold/retained/device-rebuild/
+reference-rebuild traces. Timing claims require separate clean endpoint evidence.

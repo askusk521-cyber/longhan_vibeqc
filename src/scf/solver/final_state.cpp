@@ -110,6 +110,8 @@ bool validate_final_state(const FinalStateIdentity& current, const Matrix& overl
     for (std::size_t row = 0; row < n; ++row) electrons += ds[row * n + row];
     for (std::size_t k = 0; k < n * n; ++k) {
       drift = std::hypot(drift, reconstructed[k] - density[spin][k]);
+      diagnostic.maximum_density_error =
+          std::max(diagnostic.maximum_density_error, std::abs(reconstructed[k] - density[spin][k]));
       diagnostic.maximum_commutator =
           std::max(diagnostic.maximum_commutator, std::abs(residual[k]));
       diagnostic.maximum_idempotency_error = std::max(diagnostic.maximum_idempotency_error,
@@ -119,15 +121,33 @@ bool validate_final_state(const FinalStateIdentity& current, const Matrix& overl
     diagnostic.maximum_trace_error =
         std::max(diagnostic.maximum_trace_error,
                  std::abs(static_cast<double>(electrons - weight * current.occupied[spin])));
+    if (limits.require_canonicality) {
+      // Export's absolute canonicality gate can be stricter than the scaled
+      // eigen residual in an ill-conditioned AO metric. Include it in state
+      // selection so rejection enters correction before W/reference output.
+      const auto fc = reference::multiply(fock.spins[spin], frame.vectors, n);
+      const auto cfc = reference::multiply(reference::transpose(frame.vectors, n), fc, n);
+      if (!finite(cfc)) {
+        detail = "nonfinite final-state canonicality products";
+        return false;
+      }
+      for (std::size_t row = 0; row < n; ++row)
+        for (std::size_t column = 0; column < n; ++column)
+          diagnostic.maximum_canonical_error =
+              std::max(diagnostic.maximum_canonical_error,
+                       std::abs(cfc[row * n + column] - (row == column ? frame.values[row] : 0.0)));
+    }
   }
   diagnostic.energy = physical_energy(hcore, nuclear_energy, density, fock);
   if (!std::isfinite(diagnostic.energy) || !std::isfinite(diagnostic.density_rms) ||
       !std::isfinite(diagnostic.maximum_trace_error) || diagnostic.maximum_commutator > tolerance ||
       diagnostic.density_rms > tolerance || diagnostic.maximum_trace_error > 1e-8 ||
-      diagnostic.maximum_idempotency_error > 1e-8) {
+      diagnostic.maximum_idempotency_error > 1e-8 ||
+      (limits.require_canonicality &&
+       (diagnostic.maximum_density_error > 1e-8 || diagnostic.maximum_canonical_error > 1e-8))) {
     detail =
-        "final state failed physical commutator, density, electron trace, idempotency or energy "
-        "checks";
+        "final state failed physical commutator, density, electron trace, idempotency, energy "
+        "or requested canonicality checks";
     return false;
   }
   return true;

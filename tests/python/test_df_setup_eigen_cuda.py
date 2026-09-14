@@ -81,7 +81,7 @@ def test_setup_provider_matches_reference_across_replans(
                     batch_size=batch_size,
                     method=method,
                     reference=False,
-                    strict_energy=method == "rhf" and "forces" not in properties,
+                    strict_final_state=True,
                 )
                 expected = {
                     "overlap": batch_size if step == 0 else int(step >= 2),
