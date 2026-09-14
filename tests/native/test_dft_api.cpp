@@ -15,6 +15,7 @@
 
 #if VIBEQC_HAS_CUDA
 extern "C" void grid_cuda_fail_next_allocation_for_test_v1();
+extern "C" void grid_cuda_fail_next_host_allocation_for_test_v1();
 #endif
 
 namespace {
@@ -369,11 +370,15 @@ int main() {
       vibeqc_system* cuda_system = Fixture::create_system(cuda_context);
       vibeqc_calculation* cuda_calculation = nullptr;
 #if VIBEQC_HAS_CUDA
-      grid_cuda_fail_next_allocation_for_test_v1();
-      require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
-                      VIBEQC_STATUS_OUT_OF_MEMORY &&
-                  cuda_calculation == nullptr,
-              "CUDA grid allocation failure lost its out-of-memory status");
+      // Host ownership and device arena failures share the public OOM contract.
+      for (auto fail : {grid_cuda_fail_next_allocation_for_test_v1,
+                        grid_cuda_fail_next_host_allocation_for_test_v1}) {
+        fail();
+        require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
+                        VIBEQC_STATUS_OUT_OF_MEMORY &&
+                    cuda_calculation == nullptr,
+                "CUDA grid allocation failure lost its out-of-memory status");
+      }
 #endif
       require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
                       VIBEQC_STATUS_SUCCESS &&

@@ -4,6 +4,7 @@
  */
 #include <climits>
 #include <cmath>
+#include <new>
 
 #include "../tensor/cuda_runtime.cuh"
 #include "grid_task_view.cuh"
@@ -13,7 +14,7 @@
 namespace {
 using namespace vibeqc_tensor;
 #if VIBEQC_TEST_HOOKS
-thread_local bool fail_next_grid_allocation = false;
+thread_local unsigned fail_next_grid_allocation = 0;
 #endif
 struct GridPlan {
   Context context;
@@ -43,6 +44,9 @@ int guarded(char* error, size_t size, F operation) noexcept {
   try {
     operation();
     return 0;
+  } catch (const std::bad_alloc& e) {
+    error_text(error, size, e.what());
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
   } catch (const DeviceAllocationError& e) {
     error_text(error, size, e.what());
     return VIBEQC_STATUS_OUT_OF_MEMORY;
@@ -281,16 +285,18 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
                         size_t active_capacity, const size_t* orbital_capacity, size_t orbital_tile,
                         unsigned feature_mask, void** output, char* error, size_t size) {
   return guarded(error, size, [&] {
-#if VIBEQC_TEST_HOOKS
-    if (fail_next_grid_allocation) {
-      fail_next_grid_allocation = false;
-      throw DeviceAllocationError("injected CUDA grid allocation failure");
-    }
-#endif
     if (!output) throw std::invalid_argument("null CUDA grid output");
     *output = nullptr;
     if (!dimensions || !basis || !capacity || capacity > INT_MAX || order > 3)
       throw std::invalid_argument("invalid CUDA grid plan");
+#if VIBEQC_TEST_HOOKS
+    if (fail_next_grid_allocation) {
+      const auto failure = fail_next_grid_allocation;
+      fail_next_grid_allocation = 0;
+      if (failure == 2) throw std::bad_alloc();
+      throw DeviceAllocationError("injected CUDA grid allocation failure");
+    }
+#endif
     auto p = std::make_unique<GridPlan>();
     p->natom = dimensions[0];
     p->nprimitive = dimensions[1];
@@ -384,7 +390,8 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
   });
 }
 #if VIBEQC_TEST_HOOKS
-void grid_cuda_fail_next_allocation_for_test_v1() { fail_next_grid_allocation = true; }
+void grid_cuda_fail_next_allocation_for_test_v1() { fail_next_grid_allocation = 1; }
+void grid_cuda_fail_next_host_allocation_for_test_v1() { fail_next_grid_allocation = 2; }
 #endif
 int grid_cuda_create_v2(int device, int major, int minor, const size_t* dimensions,
                         const double* basis, size_t capacity, unsigned order, size_t expected_bytes,
