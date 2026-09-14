@@ -14,11 +14,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("water_count", (1, 2))
 @pytest.mark.parametrize("method", ("rhf", "uhf"))
 @pytest.mark.parametrize("representation", ("cartesian", "spherical"))
 @pytest.mark.parametrize("route", ("single", "batch-one", "batch-four"))
 def test_diis_retry_provider_and_iteration_limit(
-    method, representation, route, monkeypatch, tmp_path
+    method, representation, route, water_count, monkeypatch, tmp_path
 ):
     """One iteration forces the existing compact-to-DIIS transition.
 
@@ -30,6 +31,16 @@ def test_diis_retry_provider_and_iteration_limit(
     """
     assert os.environ.get("SLURM_JOB_ID")
     atoms = [("O", (0, 0, 0)), ("H", (0, 0, 1.8)), ("H", (1.7, 0, -0.6))]
+    atoms = [
+        (symbol, (x, y, z + 6.0 * i))
+        for i in range(water_count)
+        for symbol, (x, y, z) in atoms
+    ]
+    # Occupied mode executes a dense seed before capture; this gives the
+    # generic provider an ordinary stream boundary even on capture-capable GPUs.
+    monkeypatch.setenv(
+        "VIBEQC_DF_EXCHANGE", "dense" if water_count == 1 else "occupied"
+    )
     spin = int(method == "uhf")
     count = 4 if route == "batch-four" else 1
     calc = Calculator(
@@ -81,6 +92,35 @@ def test_diis_retry_provider_and_iteration_limit(
             if r["key"] == "device_iterations"
         ]
         assert readbacks == [1] * count
+        # A batch solve submits one provider call per spin. Each call solves
+        # count matrices; graph construction is retained separately.
+        providers = [
+            r
+            for r in progress["observations"]
+            if r["name"] == "compact_eigensolve" and r["key"] == "eigen_provider"
+        ]
+        executed = [r for r in providers if r["execution"] == "stream"]
+        replayed = any(
+            r["key"] == "host_graph_replay" for r in progress["observations"]
+        )
+        assert len(executed) == (0 if replayed else 1 + spin)
+        assert (
+            len([r for r in providers if r["execution"] == "graph_capture"]) == 1 + spin
+        )
+        expected_provider = (
+            "cusolverDnDsyevjBatched" if water_count == 1 else "cusolverDnXsyevBatched"
+        )
+        assert providers and all(r["value"] == expected_provider for r in providers)
+        if water_count == 2:
+            assert executed  # The dense seed ran before graph construction.
+        counts = [
+            r["value"]
+            for r in progress["observations"]
+            if r["name"] == "compact_eigensolve"
+            and r["key"] == "eigensystems"
+            and r["execution"] == "stream"
+        ]
+        assert counts == ([] if replayed else [count] * (1 + spin))
         assert any(
             r["key"] == "seed_generation" and r["value"] == "original_caller_density"
             for r in progress["observations"]

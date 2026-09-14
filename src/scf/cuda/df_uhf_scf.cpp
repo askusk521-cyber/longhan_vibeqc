@@ -311,8 +311,9 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
                                   d_alpha_fock, detail);
     }
     if (iteration_status == VIBEQC_STATUS_SUCCESS) {
-      iteration_status = solve_device_batch(state->solver, plan->nbf, batch_size, d_alpha_fock,
-                                            d_alpha_eigenvalues, d_alpha_info, detail);
+      iteration_status =
+          solve_device_batch(*plan, state->solver, plan->nbf, batch_size, d_alpha_fock,
+                             d_alpha_eigenvalues, d_alpha_info, detail);
     }
     if (iteration_status == VIBEQC_STATUS_SUCCESS) {
       iteration_status = scf_gemm(*plan, false, batch_size, plan->nbf, d_orthogonalizer,
@@ -334,8 +335,8 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
                                   d_beta_fock, detail);
     }
     if (iteration_status == VIBEQC_STATUS_SUCCESS) {
-      iteration_status = solve_device_batch(state->solver, plan->nbf, batch_size, d_beta_fock,
-                                            d_beta_eigenvalues, d_beta_info, detail);
+      iteration_status = solve_device_batch(*plan, state->solver, plan->nbf, batch_size,
+                                            d_beta_fock, d_beta_eigenvalues, d_beta_info, detail);
     }
     if (iteration_status == VIBEQC_STATUS_SUCCESS) {
       iteration_status = scf_gemm(*plan, false, batch_size, plan->nbf, d_orthogonalizer,

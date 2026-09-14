@@ -16,9 +16,11 @@ vibeqc_status setup_device_solver(CudaDensityFittingJkPlan& plan, std::size_t nb
                                   std::size_t batch_size, double* eigensystem, double* eigenvalues,
                                   DeviceSolver& solver, std::string& detail);
 
-vibeqc_status solve_device_batch(DeviceSolver& solver, std::size_t nbf, std::size_t batch_size,
-                                 double* eigensystem, double* eigenvalues, int* info,
-                                 std::string& detail);
+/** Submit one eigensystem per system/spin on the owning plan stream.
+ * Diagnostic tracing distinguishes graph construction from ordinary execution. */
+vibeqc_status solve_device_batch(CudaDensityFittingJkPlan& plan, DeviceSolver& solver,
+                                 std::size_t nbf, std::size_t batch_size, double* eigensystem,
+                                 double* eigenvalues, int* info, std::string& detail);
 
 /** After ending a failed capture, clear only expected capture/mode errors.
  * Ordinary launches must start on a noncapturing stream with no stale CUDA

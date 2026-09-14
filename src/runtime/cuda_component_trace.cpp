@@ -100,7 +100,7 @@ struct TraceOperation::State {
       return kMaximumRegions;
     }
     const auto index = regions.size();
-    regions.push_back({.name = name, .parent = current, .begin = Clock::now()});
+    regions.push_back({.name = name, .parent = current, .begin = Clock::now(), .progress = {}});
     auto& region = regions.back();
     if (progress_enabled)
       region.progress =
@@ -309,6 +309,19 @@ void trace_tile(std::size_t system, std::size_t pair_begin, std::size_t pair_cou
                 std::int64_t derivative_coordinate, bool transformed) noexcept {
   auto* active = TraceOperation::active_;
   if (!active || !pair_count || !auxiliary_count) return;
+  if (active->progress_enabled) {
+    // Keep the complete requested range in one closed journal record before
+    // launch, even when the enclosing operation never completes. This is a
+    // JSON object encoded as a label to preserve the scalar VALUE contract.
+    char tile[384];
+    std::snprintf(tile, sizeof(tile),
+                  "{\"system\":%zu,\"pair_begin\":%zu,\"pair_count\":%zu,"
+                  "\"auxiliary_begin\":%zu,\"auxiliary_count\":%zu,"
+                  "\"derivative_coordinate\":%lld,\"transformed\":%s}",
+                  system, pair_begin, pair_count, auxiliary_begin, auxiliary_count,
+                  static_cast<long long>(derivative_coordinate), transformed ? "true" : "false");
+    df_progress::label("tile_submission", tile);
+  }
   try {
     const TraceOperation::State::Tile key{system,
                                           pair_begin,

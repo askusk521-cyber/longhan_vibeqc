@@ -221,6 +221,10 @@ the GEMM route. Both describe submitted work within their execution mode;
 capture counts are construction templates, not executed evaluations. A killed
 kernel's pre-launch counts do not imply it completed. Source-backed J records
 its own two raw passes, independently of K's transformed-panel work.
+`tile_submission` is one JSON-object string per nonempty tile, written before
+launch. Decode its scalar label as JSON to obtain system, pair/auxiliary
+begins/counts, derivative coordinate (-1 for values), and transformed flag.
+It remains available even if the enclosing CUDA operation never completes.
 
 Compact scopes record the solve epoch, caller-density seed, graph construction
 attempts, host graph replays and cumulative per-system device iterations after
@@ -230,6 +234,10 @@ counts by a configured iteration limit, or report only the final retry's
 iteration count as total SCF work. For a killed graph replay the final device
 iteration count is unknown. The journal does not inspect every tail-launched
 kernel; use an independently bounded device timeline when that detail is needed.
+`compact_eigensolve` records provider and the number of submitted eigensystems
+(one per system/spin). Its ordinary stream duration has a distinct CUDA-event
+boundary; capture records describe only constructed nodes. Executed graph
+iteration counts still come from the device readback, not this host scope.
 
 Read a completed or interrupted journal with:
 

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -83,6 +84,11 @@ int main(int argc, char** argv) {
     vibeqc::integrals::IntegralData cartesian;
     check(build_cuda_one_electron_integrals(0, system, cartesian, detail, false, false), detail);
     const auto one_electron = vibeqc::integrals::transform_integrals(cartesian, system);
+    // Reject individual nonfinite entries before maxima: std::max can hide NaN.
+    for (const auto* values : std::initializer_list<const std::vector<double>*>{
+             &coefficients, &reference_overlap, &one_electron.overlap})
+      if (!std::all_of(values->begin(), values->end(), [](double x) { return std::isfinite(x); }))
+        throw std::runtime_error("nonfinite independent orbital/overlap input");
     double overlap_error = 0, orthogonality_error = 0;
     std::vector<double> sc(nbf * rank, 0);
     for (std::size_t i = 0; i < nbf; ++i)
@@ -98,6 +104,7 @@ int main(int argc, char** argv) {
         double value = 0;
         for (std::size_t i = 0; i < nbf; ++i)
           value += coefficients[i * rank + a] * sc[i * rank + b];
+        if (!std::isfinite(value)) throw std::runtime_error("nonfinite orbital qualification");
         orthogonality_error = std::max(orthogonality_error, std::abs(value - (a == b ? 1.0 : 0.0)));
         if (a == b) electrons += 2 * value;
       }

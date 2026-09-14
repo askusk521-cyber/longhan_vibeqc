@@ -267,7 +267,7 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
                                   d_fock, detail);
     }
     if (iteration_status != VIBEQC_STATUS_SUCCESS) return iteration_status;
-    iteration_status = solve_device_batch(state->solver, plan->nbf, batch_size, d_fock,
+    iteration_status = solve_device_batch(*plan, state->solver, plan->nbf, batch_size, d_fock,
                                           d_eigenvalues, d_info, detail);
     if (iteration_status != VIBEQC_STATUS_SUCCESS) return iteration_status;
     iteration_status = scf_gemm(*plan, false, batch_size, plan->nbf, d_orthogonalizer, d_fock,

@@ -138,6 +138,25 @@ int main(int argc, char** argv) {
         assert len(captured_ends) == 2
         assert all(r["status"] == "graph_constructed" for r in captured_ends)
         assert all(r["elapsed_ms"] >= 0 for r in rows)
+        submitted = [
+            (r["execution"], json.loads(r["value"]))
+            for r in rows
+            if r.get("key") == "tile_submission"
+        ]
+        assert len(submitted) == 5
+        assert submitted[-1] == (
+            "graph_capture",
+            {
+                "system": 0,
+                "pair_begin": 0,
+                "pair_count": 3,
+                "auxiliary_begin": 0,
+                "auxiliary_count": 2,
+                "derivative_coordinate": -1,
+                "transformed": True,
+            },
+        )
+        assert submitted[3][1]["derivative_coordinate"] == 0
     else:
         assert not journal.exists()
     executed, captured, failed = map(json.loads, output.read_text().splitlines())
