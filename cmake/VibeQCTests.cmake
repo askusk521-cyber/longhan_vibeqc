@@ -20,7 +20,7 @@ function(vibeqc_native_test target source)
   endif()
 endfunction()
 
-function(vibeqc_add_native_tests)
+macro(vibeqc_add_native_tests)
   enable_testing()
   if(VIBEQC_ENABLE_CUDA)
     set_property(SOURCE "${VIBEQC_GRID_SOURCE}" src/dft/cuda_ks.cpp src/dft/cuda_xc.cpp
@@ -132,4 +132,4 @@ function(vibeqc_add_native_tests)
     vibeqc_native_test(vibeqc_aot_profile_tests tests/native/test_aot_profile.cpp
                        LIBRARIES CUDA::cudart)
   endif()
-endfunction()
+endmacro()
