@@ -47,10 +47,9 @@ void checked(int status, const std::array<char, kErrorSize>& error, const char* 
   if (status == 0) return;
   const std::string detail(error.data());
   if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
-  const std::string message = std::string(operation) + " failed" +
-                              (detail.empty() ? std::string{} : ": " + detail);
-  if (status == VIBEQC_STATUS_CUDA_ERROR)
-    throw vibeqc::Error(VIBEQC_STATUS_CUDA_ERROR, message);
+  const std::string message =
+      std::string(operation) + " failed" + (detail.empty() ? std::string{} : ": " + detail);
+  if (status == VIBEQC_STATUS_CUDA_ERROR) throw vibeqc::Error(VIBEQC_STATUS_CUDA_ERROR, message);
   throw std::runtime_error(message);
 }
 #endif
