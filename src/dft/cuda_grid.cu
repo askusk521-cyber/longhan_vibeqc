@@ -594,8 +594,8 @@ int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, int restri
                     const double* weights, size_t npoint, double* integrals, char* error,
                     size_t size) {
   return guarded(error, size, [&] {
-    if (!pointer || !integrals || (pbe != 0 && pbe != 1) ||
-        (restricted != 0 && restricted != 1) || (npoint && !weights))
+    if (!pointer || !integrals || (pbe != 0 && pbe != 1) || (restricted != 0 && restricted != 1) ||
+        (npoint && !weights))
       throw std::invalid_argument("invalid CUDA XC task");
     auto& p = *static_cast<GridPlan*>(pointer);
     auto& ctx = p.context;
