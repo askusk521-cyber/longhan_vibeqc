@@ -28,13 +28,38 @@ from tools.vibeqc_validation.performance import assess_comparison, measure_inter
 from tools.vibeqc_validation.schema import canonical_hash
 
 
+class AblationBranchMismatch(ValueError):
+    """Retain completed samples without authorizing an unmatched timing claim.
+
+    The CLI publishes this diagnostic payload separately from successful
+    endpoints. All workloads remain available, including the differing SCF
+    branches that caused rejection; no timing assessment is produced.
+    """
+
+    def __init__(self, rows, mismatches):
+        super().__init__(
+            "preparation timing requires matching SCF iteration/retry branches: "
+            + repr(mismatches)
+        )
+        self.evidence = {
+            "schema": "vibeqc.issue206.rejected_host_workloads",
+            "version": 1,
+            "status": "rejected",
+            "reason": "SCF iteration/retry branch mismatch",
+            "mismatched_branches": mismatches,
+            "samples": rows,
+            "timing_assessment": None,
+        }
+
+
 def validate_ablation_branches(rows):
     """Reject timing promotion when either selection took different SCF work.
 
     A frozen seed must give one iteration/retry branch per workload and item.
     Equal energies alone do not justify an iteration-unmatched speed claim.
     """
-    for workload in {row["workload"] for row in rows}:
+    mismatches = {}
+    for workload in sorted({row["workload"] for row in rows}):
         branches = {
             selection: {
                 tuple(
@@ -54,9 +79,11 @@ def validate_ablation_branches(rows):
             len(branches["baseline"]) != 1
             or branches["baseline"] != branches["candidate"]
         ):
-            raise ValueError(
-                "preparation timing requires matching SCF iteration/retry branches"
-            )
+            mismatches[workload] = {
+                selection: sorted(values) for selection, values in branches.items()
+            }
+    if mismatches:
+        raise AblationBranchMismatch(rows, mismatches)
 
 
 def preparation_policies(ablation):
@@ -613,7 +640,21 @@ def host_workloads(
     if _source_metadata(library) != source:
         raise RuntimeError("source/library changed during workload measurement")
     if policies or final_eigen_ablation or setup_eigen_ablation or final_state_ablation:
-        validate_ablation_branches(rows)
+        try:
+            validate_ablation_branches(rows)
+        except AblationBranchMismatch as error:
+            error.evidence.update(
+                source=source,
+                device=device,
+                inputs=inputs,
+                inputs_hash=input_hash,
+                profiled=trace_directory is not None,
+                cold_endpoints={"original": seed, "changed": changed_seed},
+                prepared_setup_seconds=setup_seconds,
+                prepared_destruction_seconds=destruction_seconds,
+                endpoint_integrity="not_checked_after_branch_rejection",
+            )
+            raise
     # Same-model cold endpoints check cache/replay integrity. They are not an
     # independent scientific oracle or a substitute for the matched #206 gate.
     for row in rows:

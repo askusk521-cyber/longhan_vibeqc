@@ -397,7 +397,7 @@ def main() -> None:
         )
     _write(manifest_path, payload)
     if args.run and args.host_workloads:
-        from benchmarks.df_host_workloads import host_workloads
+        from benchmarks.df_host_workloads import AblationBranchMismatch, host_workloads
 
         os.environ["VIBEQC_LIBRARY"] = str(library)
         for entry in payload["matrix"]:
@@ -427,6 +427,10 @@ def main() -> None:
                 entry.update(status="passed", result=str(result_path))
             except Exception as error:
                 entry.update(status="failed", detail=str(error))
+                if isinstance(error, AblationBranchMismatch):
+                    rejected_path = output_dir / f"{stem}.rejected.json"
+                    _write(rejected_path, error.evidence)
+                    entry["rejected_result"] = str(rejected_path)
                 _write(manifest_path, payload)
                 raise
             _write(manifest_path, payload)

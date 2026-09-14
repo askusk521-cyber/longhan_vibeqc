@@ -289,7 +289,10 @@ def test_published_archive_uses_verified_repository_format():
 )
 def test_eager_lazy_timing_rejects_iteration_or_retry_changes(field, value):
     """Equal endpoints cannot hide a different amount of SCF work."""
-    from benchmarks.df_host_workloads import validate_ablation_branches
+    from benchmarks.df_host_workloads import (
+        AblationBranchMismatch,
+        validate_ablation_branches,
+    )
 
     converged = {"iterations": 2, "warm_start_used": True, "warm_start_fallback": False}
     rows = [
@@ -302,8 +305,77 @@ def test_eager_lazy_timing_rejects_iteration_or_retry_changes(field, value):
     ]
     validate_ablation_branches(rows)
     rows[1]["diagnostics"]["convergence"][0][field] = value
-    with pytest.raises(ValueError, match="matching SCF"):
+    with pytest.raises(AblationBranchMismatch, match="matching SCF") as failure:
         validate_ablation_branches(rows)
+    evidence = failure.value.evidence
+    assert evidence["status"] == "rejected"
+    assert evidence["samples"] == rows
+    assert evidence["timing_assessment"] is None
+    assert set(evidence["mismatched_branches"]) == {"unchanged-geometry"}
+
+
+def test_host_branch_rejection_retains_raw_samples_and_failed_manifest(
+    monkeypatch, tmp_path
+):
+    """A mocked measurement checks the CLI publication boundary without a GPU."""
+    from benchmarks import df_host_workloads as host
+
+    rows = [
+        {
+            "workload": "cold-start",
+            "selection": selection,
+            "diagnostics": {
+                "convergence": [
+                    {
+                        "iterations": iterations,
+                        "warm_start_used": False,
+                        "warm_start_fallback": False,
+                    }
+                ]
+            },
+        }
+        for selection, iterations in (
+            ("baseline", 20),
+            ("baseline", 21),
+            ("candidate", 20),
+        )
+    ]
+    with pytest.raises(host.AblationBranchMismatch) as caught:
+        host.validate_ablation_branches(rows)
+    failure = caught.value
+    failure.evidence.update(
+        source={"fixture": "mock measurement"}, inputs={"fixture": "no GPU execution"}
+    )
+
+    def reject(**kwargs):
+        raise failure
+
+    monkeypatch.setattr(host, "host_workloads", reject)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "issue206_df_matrix.py",
+            "--run",
+            "--host-workloads",
+            "--combined-host-ablation",
+            "--case",
+            "water-tetramer-def2-svp-spherical",
+            "--batch",
+            "1",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    with pytest.raises(host.AblationBranchMismatch):
+        matrix.main()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    entry = manifest["matrix"][0]
+    assert entry["status"] == "failed" and entry["result"] is None
+    rejected = Path(entry["rejected_result"])
+    assert rejected.name == "host-96ao-b1.rejected.json"
+    assert json.loads(rejected.read_text()) == json.loads(json.dumps(failure.evidence))
+    assert not (tmp_path / "host-96ao-b1.json").exists()
 
 
 @pytest.mark.parametrize("ablation", ("lazy-core", "overlap-cache", "combined"))
