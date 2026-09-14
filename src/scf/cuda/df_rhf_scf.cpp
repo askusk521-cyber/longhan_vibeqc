@@ -11,6 +11,7 @@
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
 #include "scf/cuda/df_scf_factor.hpp"
+#include "scf/cuda/df_scf_final_state.hpp"
 #include "scf/cuda/df_scf_kernels.hpp"
 #include "scf/cuda/df_scf_library.hpp"
 
@@ -28,6 +29,10 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
     std::vector<double>& final_density, std::vector<CudaDensityFittingDeviceScfItem>& results,
     std::string& detail) {
   detail.clear();
+  if (plan) {
+    const auto epoch_status = begin_scf_final_state_solve(*plan, detail);
+    if (epoch_status != VIBEQC_STATUS_SUCCESS) return epoch_status;
+  }
   if (plan == nullptr || max_iterations == 0 || !(energy_tolerance > 0.0) ||
       !(density_tolerance > 0.0) || !std::isfinite(energy_tolerance) ||
       !std::isfinite(density_tolerance)) {
@@ -165,6 +170,11 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
         return status;
       }
     }
+    status = allocate_scf_final_frames(*plan, *state, detail);
+    if (status != VIBEQC_STATUS_SUCCESS) {
+      delete state;
+      return status;
+    }
     plan->persistent_scf_state = state;
   }
   double* d_hcore = state->d_hcore;
@@ -184,7 +194,9 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
   std::uint8_t* d_converged = state->d_converged;
   std::uint32_t* d_iterations = state->d_iterations;
   int* d_info = state->d_info;
-  vibeqc_status status = VIBEQC_STATUS_SUCCESS;
+  vibeqc_status status =
+      reset_scf_final_frames(*plan, *state, occupied, std::vector<std::int32_t>{}, detail);
+  if (status != VIBEQC_STATUS_SUCCESS) return status;
   const std::size_t matrix_bytes = expected * sizeof(double);
   cuda_error =
       cudaMemcpyAsync(d_hcore, hcore.data(), matrix_bytes, cudaMemcpyHostToDevice, plan->stream);
@@ -260,6 +272,7 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
     launch_build_device_density_kernel(blocks_for(expected), kThreads, 0, plan->stream, batch_size,
                                        plan->nbf, d_occupied, d_temporary, 2.0, d_next_density);
     if (occupied_exchange) store_scf_factor(*plan, *state, d_temporary, false);
+    store_scf_final_frame(*plan, *state, d_temporary, false);
     launch_update_device_convergence_kernel(
         static_cast<unsigned>(batch_size), 32, 0, plan->stream, batch_size, plan->nbf,
         energy_tolerance, density_tolerance, d_energy, d_previous_energy, d_next_density, d_density,
@@ -408,6 +421,7 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
     result.density_rms = host_density_rms[system];
     if (!result.converged) result.status = VIBEQC_STATUS_SCF_NOT_CONVERGED;
   }
+  publish_scf_final_frames(*state, results);
   return VIBEQC_STATUS_SUCCESS;
 }
 

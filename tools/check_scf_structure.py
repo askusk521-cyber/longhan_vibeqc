@@ -131,6 +131,7 @@ CUDA_MODULES["cuda_df_runtime"] = (
     "df_scf_library",
     "df_eigensystem",
     "df_scf_factor",
+    "df_scf_final_state",
     "df_rhf_scf",
     "df_uhf_scf",
 )
@@ -144,6 +145,7 @@ CUDA_ALLOWED["cuda_df_runtime"] = tuple(
     "scf/cuda_density_fitting.hpp",
     "scf/cuda_df_gradient.hpp",
     "scf/cuda_density_fitting_eigen.hpp",
+    "scf/cuda_density_fitting_final_state.hpp",
     "scf/cuda/eigensolver.hpp",
     "scf/cuda_density_fitting_integrals.hpp",
     "scf/density_fitting.hpp",

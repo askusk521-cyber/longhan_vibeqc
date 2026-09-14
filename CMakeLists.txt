@@ -378,6 +378,7 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_exchange.cpp
     src/scf/cuda/df_occupied_exchange.cpp
     src/scf/cuda/df_scf_factor.cpp
+    src/scf/cuda/df_scf_final_state.cpp
     src/runtime/cuda_component_trace.cpp
     src/scf/cuda/df_force_response.cpp
     src/scf/cuda/df_jk.cpp
@@ -946,6 +947,10 @@ if(VIBEQC_BUILD_TESTS)
     add_test(NAME vibeqc_cuda_runtime_tests COMMAND vibeqc_cuda_runtime_tests)
 
     add_executable(vibeqc_df_eigensystem_tests tests/native/test_df_eigensystem.cpp)
+    add_executable(vibeqc_df_final_snapshot_tests tests/native/test_df_final_snapshot.cpp)
+    target_link_libraries(vibeqc_df_final_snapshot_tests PRIVATE vibeqc CUDA::cudart CUDA::cublas CUDA::cusolver)
+    target_include_directories(vibeqc_df_final_snapshot_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_df_final_snapshot_tests COMMAND vibeqc_df_final_snapshot_tests)
     target_link_libraries(vibeqc_df_eigensystem_tests PRIVATE vibeqc CUDA::cudart CUDA::cublas CUDA::cusolver)
     target_include_directories(vibeqc_df_eigensystem_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME vibeqc_df_eigensystem_tests COMMAND vibeqc_df_eigensystem_tests)

@@ -1,7 +1,23 @@
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_eigen.hpp"
+#include "scf/cuda_density_fitting_final_state.hpp"
 
 namespace vibeqc::scf {
+vibeqc_status cuda_density_fitting_final_state_token(const CudaDensityFittingJkPlan*, std::size_t,
+                                                     CudaDfFinalStateToken& token,
+                                                     std::string& detail) {
+  token = {};
+  detail = "CUDA DF final-state snapshots are unavailable in this build";
+  return VIBEQC_STATUS_NOT_IMPLEMENTED;
+}
+vibeqc_status read_cuda_density_fitting_final_state(CudaDensityFittingJkPlan*,
+                                                    const CudaDfFinalStateToken&,
+                                                    CudaDfFinalStateSnapshot& snapshot,
+                                                    std::string& detail) {
+  snapshot = {};
+  detail = "CUDA DF final-state snapshots are unavailable in this build";
+  return VIBEQC_STATUS_NOT_IMPLEMENTED;
+}
 vibeqc_status solve_cuda_density_fitting_eigen(
     CudaDensityFittingJkPlan*, const std::vector<double>& matrix,
     const std::vector<double>* overlap, const std::vector<double>* orthogonalizer,

@@ -7,6 +7,16 @@
 
 namespace vibeqc::scf::cuda_df {
 
+/** Snapshot only active items before their density commit. Device coefficients
+ * retain column-major layout; the detached host reader converts them once. */
+void launch_store_device_final_frame_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
+                                            cudaStream_t stream, std::size_t nbf,
+                                            const double* coefficients, const double* eigenvalues,
+                                            const int* info, const std::uint8_t* active,
+                                            const std::uint32_t* iterations,
+                                            double* retained_coefficients, double* retained_values,
+                                            std::uint64_t* generations, int* retained_info);
+
 /** Preserve the exact C used for next D while the old active mask still holds.
  * The factor generation advances with the subsequent density commit, including
  * the converged iteration. Rank-zero channels still receive a generation tag.
