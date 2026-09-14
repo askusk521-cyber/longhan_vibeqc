@@ -167,6 +167,7 @@ XcIntegral PreparedCudaXcPlan::evaluate_rks(const MolecularGrid& grid,
                                             const std::vector<double>& density) {
   if (density.size() != impl_->nao * impl_->nao)
     throw std::invalid_argument("CUDA RKS density dimensions do not match the AO basis");
+#if VIBEQC_HAS_CUDA
   std::vector<double> spin_density(density.size());
   std::transform(density.begin(), density.end(), spin_density.begin(),
                  [](double value) { return 0.5 * value; });
@@ -188,6 +189,10 @@ XcIntegral PreparedCudaXcPlan::evaluate_rks(const MolecularGrid& grid,
   result.density_diagnostic.owned_numeric_bytes =
       (2 * density.size() + result.potential.size()) * sizeof(double);
   return result;
+#else
+  (void)grid;
+  throw std::runtime_error("CUDA XC execution requires a CUDA-enabled build");
+#endif
 }
 
 }  // namespace vibeqc::dft
