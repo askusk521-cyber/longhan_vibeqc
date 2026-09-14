@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_generated_tiles.hpp"
 #include "scf/cuda/df_jk_internal.hpp"
 #include "scf/cuda/df_jk_kernels.hpp"
@@ -28,6 +29,12 @@ vibeqc_status build_exchange(CudaDensityFittingJkPlan& plan, const double* densi
   TraceOperation trace("ri_k", plan.stream,
                        {system_end - system_begin, plan.nbf, plan.naux,
                         plan.integral_source != nullptr, plan.streamed, system_begin});
+  runtime::df_progress::number("planner_ao_pair_tile", plan.ao_pair_tile);
+  runtime::df_progress::number("planner_auxiliary_tile", plan.auxiliary_tile);
+  if (!plan.streamed) {
+    runtime::df_progress::number("executed_ao_rows", plan.nbf);
+    runtime::df_progress::number("executed_auxiliary_tile", plan.auxiliary_tile);
+  }
   const std::size_t output_elements = (system_end - system_begin) * plan.matrix_elements;
   cudaError_t cuda_error = cudaMemsetAsync(exchange + system_begin * plan.matrix_elements, 0,
                                            output_elements * sizeof(double), plan.stream);
@@ -52,6 +59,10 @@ vibeqc_status build_exchange(CudaDensityFittingJkPlan& plan, const double* densi
       const auto auxiliary_tile =
           full_pairs ? std::min(plan.auxiliary_tile, capacity / plan.matrix_elements)
                      : plan.auxiliary_tile;
+      runtime::df_progress::number("planner_ao_pair_tile", plan.ao_pair_tile);
+      runtime::df_progress::number("planner_auxiliary_tile", plan.auxiliary_tile);
+      runtime::df_progress::number("executed_ao_rows", row_tile);
+      runtime::df_progress::number("executed_auxiliary_tile", auxiliary_tile);
       const auto pair_capacity = row_tile * plan.nbf;
       const auto row_tiles = (plan.nbf + row_tile - 1) / row_tile;
       for (std::size_t system = system_begin; system < system_end; ++system) {

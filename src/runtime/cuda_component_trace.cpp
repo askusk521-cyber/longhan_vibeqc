@@ -13,6 +13,8 @@
 #include <string_view>
 #include <vector>
 
+#include "runtime/df_progress_trace.hpp"
+
 #if __has_include(<nvtx3/nvToolsExt.h>)
 #include <nvtx3/nvToolsExt.h>
 #define VIBEQC_DF_TRACE_NVTX 1
@@ -65,6 +67,7 @@ struct TraceOperation::State {
     Clock::time_point begin{}, end{};
     cudaEvent_t first{}, last{};
     bool finished{};
+    std::unique_ptr<df_progress::Scope> progress;
   };
   using Tile = std::array<std::uint64_t, 7>;
   std::string path;
@@ -75,6 +78,7 @@ struct TraceOperation::State {
   std::int64_t current{-1};
   std::uint64_t id{};
   bool capture{};
+  bool progress_enabled{};
   bool invalid{};
   int cuda_error{};
   std::size_t dropped_regions{}, dropped_tiles{};
@@ -96,8 +100,11 @@ struct TraceOperation::State {
       return kMaximumRegions;
     }
     const auto index = regions.size();
-    regions.push_back({.name = name, .parent = current, .begin = Clock::now()});
+    regions.push_back({.name = name, .parent = current, .begin = Clock::now(), .progress = {}});
     auto& region = regions.back();
+    if (progress_enabled)
+      region.progress =
+          std::make_unique<df_progress::Scope>(name, capture ? "graph_capture" : "stream");
     if (!capture) {
       check(cudaEventCreate(&region.first));
       check(cudaEventCreate(&region.last));
@@ -113,6 +120,16 @@ struct TraceOperation::State {
     auto& region = regions[index];
     if (current != static_cast<std::int64_t>(index)) invalid = true;
     if (!capture && region.last) check(cudaEventRecord(region.last, stream));
+    // This additional fence is strictly opt-in. It makes raw completion and
+    // the following metric GEMM distinguishable even if the process is killed
+    // before the outer operation returns. Never fence a captured region.
+    if (region.progress) {
+      if (!capture && region.last) check(cudaEventSynchronize(region.last));
+      df_progress::number("cuda_error", static_cast<std::uint64_t>(cuda_error));
+      region.progress->finish(invalid   ? "trace_error"
+                              : capture ? "graph_constructed"
+                                        : "stream_complete");
+    }
     region.end = Clock::now();
     region.finished = true;
     current = region.parent;
@@ -127,6 +144,7 @@ struct TraceOperation::State {
   }
 
   void write(double synchronization_ms) {
+    if (path.empty()) return;
     std::vector<double> gpu_ms(regions.size(), -1.0);
     for (std::size_t i = 0; i < regions.size(); ++i) {
       const auto& region = regions[i];
@@ -213,10 +231,12 @@ thread_local TraceOperation::State* TraceOperation::active_ = nullptr;
 TraceOperation::TraceOperation(const char* operation, cudaStream_t stream,
                                TraceShape shape) noexcept {
   const char* path = std::getenv("VIBEQC_DF_TRACE");
-  if (!path || !*path) return;
+  const char* progress = std::getenv("VIBEQC_DF_PROGRESS_TRACE");
+  if ((!path || !*path) && (!progress || !*progress)) return;
   try {
     state_ = std::make_unique<State>();
-    state_->path = path;
+    if (path) state_->path = path;
+    state_->progress_enabled = progress && *progress;
     state_->operation = operation;
     state_->stream = stream;
     state_->shape = shape;
@@ -226,6 +246,12 @@ TraceOperation::TraceOperation(const char* operation, cudaStream_t stream,
     state_->capture = capture != cudaStreamCaptureStatusNone;
     state_->previous = active_;
     state_->begin(operation);
+    df_progress::number("nbf", shape.nbf);
+    df_progress::number("naux", shape.naux);
+    df_progress::number("systems", shape.systems);
+    df_progress::number("system_offset", shape.system_offset);
+    df_progress::number("source_backed", shape.source_backed);
+    df_progress::number("streamed", shape.streamed);
     active_ = state_.get();
   } catch (...) {
     state_.reset();
@@ -264,6 +290,7 @@ void TraceRegion::finish() noexcept {
 }
 
 void trace_counter(const char* name, std::uint64_t count) noexcept {
+  df_progress::number(name, count);
   auto* active = TraceOperation::active_;
   if (!active) return;
   try {
@@ -282,6 +309,19 @@ void trace_tile(std::size_t system, std::size_t pair_begin, std::size_t pair_cou
                 std::int64_t derivative_coordinate, bool transformed) noexcept {
   auto* active = TraceOperation::active_;
   if (!active || !pair_count || !auxiliary_count) return;
+  if (active->progress_enabled) {
+    // Keep the complete requested range in one closed journal record before
+    // launch, even when the enclosing operation never completes. This is a
+    // JSON object encoded as a label to preserve the scalar VALUE contract.
+    char tile[384];
+    std::snprintf(tile, sizeof(tile),
+                  "{\"system\":%zu,\"pair_begin\":%zu,\"pair_count\":%zu,"
+                  "\"auxiliary_begin\":%zu,\"auxiliary_count\":%zu,"
+                  "\"derivative_coordinate\":%lld,\"transformed\":%s}",
+                  system, pair_begin, pair_count, auxiliary_begin, auxiliary_count,
+                  static_cast<long long>(derivative_coordinate), transformed ? "true" : "false");
+    df_progress::label("tile_submission", tile);
+  }
   try {
     const TraceOperation::State::Tile key{system,
                                           pair_begin,

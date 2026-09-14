@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 
-def test_df_trace_disabled_capture_timing_failure_and_logical_tiles(tmp_path):
+@pytest.mark.parametrize("progress", [False, True])
+def test_df_trace_disabled_capture_timing_failure_and_logical_tiles(tmp_path, progress):
     """Capture work cannot masquerade as execution; timing failures invalidate records."""
     nvcc = os.environ.get("VIBEQC_NVCC")
     compiler = shutil.which("c++")
@@ -57,7 +58,9 @@ extern "C" cudaError_t CUDARTAPI cudaEventElapsedTime(float* ms, cudaEvent_t fir
 
 int main(int argc, char** argv) {
   using namespace vibeqc::runtime::cuda_trace;
-  if (argc != 2) return 1;
+  if (argc != 3) return 1;
+  const bool progress = argv[2][0] != '0';
+  unsetenv("VIBEQC_DF_PROGRESS_TRACE");
   const auto stream = reinterpret_cast<cudaStream_t>(std::uintptr_t{1});
   unsetenv("VIBEQC_DF_TRACE");
   {
@@ -67,6 +70,7 @@ int main(int argc, char** argv) {
   }
   if (calls != 0) return 2;
   setenv("VIBEQC_DF_TRACE", argv[1], 1);
+  if (progress) setenv("VIBEQC_DF_PROGRESS_TRACE", argv[2], 1);
   {
     TraceOperation operation("ri_j", stream, {1, 3, 5, true, true});
     {
@@ -86,18 +90,18 @@ int main(int argc, char** argv) {
     }
     TraceRegion other_stream("must_not_be_recorded", nullptr);
   }
-  if (events != 8 || syncs != 1) return 3;
+  if (events != 8 || syncs != (progress ? 5U : 1U)) return 3;
   capturing = true;
   {
     TraceOperation capture("ri_k", stream, {1, 3, 5, true, true});
     TraceRegion generation("transformed_generation", stream);
     trace_tile(0, 0, 3, 0, 2, -1, true);
   }
-  if (events != 8 || syncs != 1) return 4;
+  if (events != 8 || syncs != (progress ? 5U : 1U)) return 4;
   capturing = false;
   fail_elapsed = true;
   { TraceOperation failed("timing_failure", stream, {1, 3, 5, true, true}); }
-  return syncs == 2 ? 0 : 5;
+  return syncs == (progress ? 7U : 2U) ? 0 : 5;
 }
 """
     )
@@ -120,7 +124,41 @@ int main(int argc, char** argv) {
         text=True,
     )
     output = tmp_path / "trace.jsonl"
-    subprocess.run([str(executable), str(output)], check=True)
+    journal = tmp_path / "progress.jsonl"
+    subprocess.run(
+        [str(executable), str(output), str(journal) if progress else "0"], check=True
+    )
+    if progress:
+        rows = [json.loads(line) for line in journal.read_text().splitlines()]
+        starts = {r["id"]: r for r in rows if r["event"] == "BEGIN"}
+        ends = {r["id"]: r for r in rows if r["event"] == "END"}
+        assert starts.keys() == ends.keys()
+        assert any(r["status"] == "stream_complete" for r in ends.values())
+        captured_ends = [r for r in ends.values() if r["execution"] == "graph_capture"]
+        assert len(captured_ends) == 2
+        assert all(r["status"] == "graph_constructed" for r in captured_ends)
+        assert all(r["elapsed_ms"] >= 0 for r in rows)
+        submitted = [
+            (r["execution"], json.loads(r["value"]))
+            for r in rows
+            if r.get("key") == "tile_submission"
+        ]
+        assert len(submitted) == 5
+        assert submitted[-1] == (
+            "graph_capture",
+            {
+                "system": 0,
+                "pair_begin": 0,
+                "pair_count": 3,
+                "auxiliary_begin": 0,
+                "auxiliary_count": 2,
+                "derivative_coordinate": -1,
+                "transformed": True,
+            },
+        )
+        assert submitted[3][1]["derivative_coordinate"] == 0
+    else:
+        assert not journal.exists()
     executed, captured, failed = map(json.loads, output.read_text().splitlines())
     assert executed["valid"] is True
     assert executed["execution"] == "stream"

@@ -50,6 +50,21 @@
       "reason": "Byte-verified compressed independent 96-atom PySCF checkpoint and physical density/overlap/force arrays, with exact input scripts and logs, retained to reproduce strict physical comparisons without repeating the expensive SCF oracle.",
       "sha256": "c369a5128ed36987073f6364290d4be455213e00f54e9cea04873def6d1f8c07"
     },
+    "benchmarks/results/issue308-stage-ledger/historical-followup.zip": {
+      "owner": "issue308-stage-ledger",
+      "reason": "Reviewed compact original 9531/9535/9536/9537 numerical measurements, reproduction source/input and first-24-pair scientific sample. Excludes logs, binaries and bulk exploratory rows; original identities and restoration audit are in historical-followup.json. Not performance promotion.",
+      "sha256": "e987a878948774de9a552b28bef1d45eb95084c34ea1b7a5f33037b1cc7ebe1e"
+    },
+    "benchmarks/results/issue308-stage-ledger/scf-evidence.zip": {
+      "owner": "issue308-stage-ledger",
+      "reason": "Exact completed cold/seeded phase journals, full-array physical validation errors, bounded first-24-row state samples, all orbital energies, and reproduction input/code from job 9540. Full transient exports remain outside Git; every retained member byte-restored. No routine logs or binaries.",
+      "sha256": "999b99a8c326cdfd2b79f72c9a4e97c2ccd1ac93449ba52f280baefc7e6d6e9c"
+    },
+    "benchmarks/results/issue308-stage-ledger/stage-evidence.zip": {
+      "owner": "issue308-stage-ledger",
+      "reason": "Exact accepted/rejected/timeout phase measurements, source/input identities and complete event journals from 9538/9539. The interrupted journal is the scientific evidence locating incomplete K work; no routine build/test logs or executable products.",
+      "sha256": "454914f981bb332f6c27da2915453dfd29be33f46d663321a71f291a5d1a218f"
+    },
     "benchmarks/results/local-spaces-182/states.npz": {
       "owner": "local-spaces-182",
       "reason": "Scientific solver-state/trajectory arrays retained to replay calibration, local-space recovery, or proposal decisions; these are measurement inputs, not temporary restart checkpoints.",

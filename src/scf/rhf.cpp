@@ -1584,6 +1584,7 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
           options.max_iterations, options.energy_tolerance, options.density_tolerance,
           device_final_density, device_records, detail);
     });
+    runtime::df_progress::number("compact_dispatch_status", device_status);
     // A resource rejection must not trigger an undisclosed host SCF retry.
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1600,9 +1601,13 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
       return result;
     }
   }
+  host_trace::Region retry_trace("diis_retry");
+  runtime::df_progress::label("seed_generation", "original_caller_density");
   Diis diis(options.diis_history);
   double previous_energy = std::numeric_limits<double>::infinity();
   for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
+    host_trace::Region retry_iteration("diis_retry_iteration");
+    runtime::df_progress::number("iteration", iteration);
     std::vector<double> coulomb;
     std::vector<double> exchange;
     std::string detail;
@@ -1638,6 +1643,7 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
     previous_energy = energy;
     density = std::move(next_density);
   }
+  retry_trace.finish();
   if (!result.converged) return result;
   // The final diagonalization is intentionally rebuilt from the same CPU
   // oracle tensor used for force response. The SCF iterations above exercise
@@ -1695,6 +1701,7 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
           {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
           options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
     });
+    runtime::df_progress::number("compact_dispatch_status", device_status);
     // A resource rejection must not trigger an undisclosed host SCF retry.
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1713,9 +1720,13 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
       return result;
     }
   }
+  host_trace::Region retry_trace("diis_retry");
+  runtime::df_progress::label("seed_generation", "original_caller_density");
   Diis diis(options.diis_history);
   double previous_energy = std::numeric_limits<double>::infinity();
   for (unsigned iteration = 1; iteration <= options.max_iterations; ++iteration) {
+    host_trace::Region retry_iteration("diis_retry_iteration");
+    runtime::df_progress::number("iteration", iteration);
     std::vector<double> coulomb;
     std::vector<double> alpha_exchange;
     std::vector<double> beta_exchange;
@@ -1768,6 +1779,7 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
     alpha_density = std::move(next_alpha);
     beta_density = std::move(next_beta);
   }
+  retry_trace.finish();
   if (!result.converged) return result;
   finalize_density_fitting_uhf(data, orthogonalizer, alpha_occupied, beta_occupied, alpha_density,
                                beta_density, options, result, plan.get());
@@ -2098,6 +2110,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       return outputs;
     }
+    runtime::df_progress::number("compact_dispatch_status", device_status);
     const bool device_converged =
         device_status == VIBEQC_STATUS_SUCCESS && device_records.size() == data.size() &&
         std::all_of(device_records.begin(), device_records.end(),
@@ -2133,10 +2146,14 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
 
   const std::size_t matrix_size = nbf * nbf;
   std::vector<double> batch_density(data.size() * matrix_size);
+  host_trace::Region retry_trace("diis_retry");
+  runtime::df_progress::label("seed_generation", "original_caller_density");
   std::vector<bool> active(data.size(), true);
   std::size_t active_count = data.size();
   for (unsigned iteration = 1; iteration <= options.max_iterations && active_count != 0;
        ++iteration) {
+    host_trace::Region retry_iteration("diis_retry_iteration");
+    runtime::df_progress::number("iteration", iteration);
     for (std::size_t slot = 0; slot < densities.size(); ++slot) {
       std::copy(densities[slot].begin(), densities[slot].end(),
                 batch_density.begin() + slot * matrix_size);
@@ -2207,6 +2224,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     }
   }
 
+  retry_trace.finish();
   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
     const std::size_t source = source_indices[slot];
     host_trace::Item traced_item(source);
@@ -2557,6 +2575,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       return outputs;
     }
+    runtime::df_progress::number("compact_dispatch_status", device_status);
     const bool device_converged =
         device_status == VIBEQC_STATUS_SUCCESS && device_records.size() == data.size() &&
         std::all_of(device_records.begin(), device_records.end(),
@@ -2596,10 +2615,14 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
   const std::size_t matrix_size = nbf * nbf;
   std::vector<double> batch_alpha(data.size() * matrix_size);
   std::vector<double> batch_beta(data.size() * matrix_size);
+  host_trace::Region retry_trace("diis_retry");
+  runtime::df_progress::label("seed_generation", "original_caller_density");
   std::vector<bool> active(data.size(), true);
   std::size_t active_count = data.size();
   for (unsigned iteration = 1; iteration <= options.max_iterations && active_count != 0;
        ++iteration) {
+    host_trace::Region retry_iteration("diis_retry_iteration");
+    runtime::df_progress::number("iteration", iteration);
     for (std::size_t slot = 0; slot < alpha_densities.size(); ++slot) {
       std::copy(alpha_densities[slot].begin(), alpha_densities[slot].end(),
                 batch_alpha.begin() + slot * matrix_size);
@@ -2689,6 +2712,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     }
   }
 
+  retry_trace.finish();
   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
     const std::size_t source = source_indices[slot];
     host_trace::Item traced_item(source);

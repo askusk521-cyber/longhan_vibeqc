@@ -259,7 +259,12 @@ def main() -> None:
     if not os.environ.get("CUDA_VISIBLE_DEVICES"):
         parser.error("run requires Slurm-provided CUDA_VISIBLE_DEVICES")
     if any(
-        os.environ.get(name) for name in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")
+        os.environ.get(name)
+        for name in (
+            "VIBEQC_DF_TRACE",
+            "VIBEQC_DF_HOST_TRACE",
+            "VIBEQC_DF_PROGRESS_TRACE",
+        )
     ):
         parser.error(
             "use --component-trace-dir so traces cannot silently contaminate timing runs"

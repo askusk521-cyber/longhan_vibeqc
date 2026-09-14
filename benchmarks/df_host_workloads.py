@@ -280,7 +280,10 @@ def host_workloads(
         raise ValueError(
             "at least five paired samples and a positive batch are required"
         )
-    if any(os.environ.get(k) for k in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")):
+    if any(
+        os.environ.get(k)
+        for k in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE", "VIBEQC_DF_PROGRESS_TRACE")
+    ):
         raise ValueError(
             "provide trace_directory explicitly; ambient profiling is not clean timing"
         )

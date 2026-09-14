@@ -221,6 +221,7 @@ vibeqc_status solve_cuda_density_fitting_eigen(
     {
       host::Region actual_solve("device_eigensolve", n);
       trace::TraceRegion solve("device_eigensolve", plan->stream);
+      runtime::df_progress::label("eigen_provider", "cusolverDnXsyevd");
       diagnostic.solver_calls = 1;
       trace::trace_counter("device_eigensolves", 1);
       status = cuda_execution::launch_solver(resources, CudaEigensolverFamily::xsyevd,

@@ -9,6 +9,7 @@
 #include "integrals/ecp_cuda.hpp"
 #include "molecule/basis.hpp"
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/df_progress_trace.hpp"
 #include "runtime/resource_cuda.cuh"
 #include "scf/cuda/one_electron_export_kernels.hpp"
 #include "scf/cuda/one_electron_view.hpp"
@@ -287,6 +288,8 @@ vibeqc_status build_cuda_one_electron_integrals(int device_id, const core::Syste
                                                 integrals::IntegralData& output,
                                                 std::string& detail, bool include_derivatives,
                                                 bool include_nuclear_derivatives) {
+  runtime::df_progress::Scope progress("one_electron");
+  runtime::df_progress::number("include_derivatives", include_derivatives);
   return build_cuda_one_electron_integrals_impl(device_id, system, output, detail,
                                                 include_derivatives, include_nuclear_derivatives);
 }

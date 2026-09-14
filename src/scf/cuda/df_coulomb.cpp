@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_jk_internal.hpp"
 #include "scf/cuda/df_jk_kernels.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
@@ -40,6 +41,10 @@ vibeqc_status build_coulomb(CudaDensityFittingJkPlan& plan, const double* densit
       // independent of the output-auxiliary tile count, and never materializes
       // transformed three-center tiles just to reduce them into one vector.
       const auto pair_tile = std::min(plan.ao_pair_tile, plan.row_tile * plan.nbf);
+      runtime::df_progress::number("planner_ao_pair_tile", plan.ao_pair_tile);
+      runtime::df_progress::number("executed_ao_pairs", pair_tile);
+      runtime::df_progress::number("executed_auxiliary_tile", plan.auxiliary_tile);
+      runtime::df_progress::number("raw_tensor_passes", 2);
       const double one = 1.0, zero = 0.0;
       for (std::size_t system = 0; system < plan.batch_size; ++system) {
         const auto* inverse = plan.inverse_square_roots + system * plan.naux * plan.naux;
