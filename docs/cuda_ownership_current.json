@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10613,
+  "all_handwritten_scientific_lines": 10634,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -20,16 +20,16 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 34873,
+      "bytes": 35419,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 563,
+        "runtime": 569,
         "scientific": 89
       },
       "path": "src/dft/cuda_grid.cu",
-      "physical_lines": 704,
+      "physical_lines": 711,
       "reason": "Native plan/arena ownership around the bounded AO/feature kernels.",
       "regions": [
         {
@@ -43,7 +43,7 @@
         }
       ],
       "role": "runtime",
-      "sha256": "ebb4621c18ec9980fe0d557acb03aaf0f1c5dc5a38ab0c6d0643143020659982",
+      "sha256": "4f8c2139557644fba031d84af1b3d6de43c952d238b0bd9c596bd396e6f48846",
       "subsystem": "ao_grid"
     },
     {
@@ -64,20 +64,20 @@
       "subsystem": "ao_grid"
     },
     {
-      "bytes": 13633,
+      "bytes": 14778,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 248
+        "scientific": 269
       },
       "path": "src/dft/xc_point.hpp",
-      "physical_lines": 310,
+      "physical_lines": 339,
       "reason": "Shared CPU/CUDA semilocal point algebra and forward first derivatives for the explicit scaled-density/spin-boundary domain. Counted as maintained scientific code; this is not a generated-code retirement claim.",
       "regions": [],
       "role": "scientific",
-      "sha256": "3016580b3f62d8c62a5b01f5b7b12473ab8830c21560b23e8352030802d32cf2",
+      "sha256": "e46daa6bee9b93660b33043d6dc58f03fb99434882b077bad19e50c7aefb5db6",
       "subsystem": "xc"
     },
     {
@@ -3188,8 +3188,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8955,
-    "scientific": 10457
+    "runtime": 8961,
+    "scientific": 10478
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3341,7 +3341,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 578,
+      "runtime": 584,
       "scientific": 89
     },
     "df_derivatives": {
@@ -3412,7 +3412,7 @@
       "oracle": 0,
       "performance_exception": 0,
       "runtime": 89,
-      "scientific": 248
+      "scientific": 269
     }
   },
   "schema": "vibeqc.cuda-ownership-report.v1"

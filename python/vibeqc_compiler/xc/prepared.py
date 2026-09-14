@@ -33,7 +33,7 @@ from vibeqc_compiler.dft.spatial_prepared import PreparedSpatialGrid
 from .contractions import GeometryPartials
 from .integration import _tiles
 from .native import NativeContractionProgram
-from .spec import UnsupportedXC
+from .spec import UnsupportedXC, functional
 
 
 class PreparedXCContractions:
@@ -393,12 +393,19 @@ class PreparedXCContractions:
             for index, (_, ids, lease) in enumerate(tasks):
                 active = lease.view.nactive
                 if active:
-                    integrals, potential = lease.xc(
-                        self.spatial.grid.weights[ids],
-                        self.program.spec.identifier,
-                        reset=evaluated == 0,
-                        download=index == last_nonempty,
-                    )
+                    try:
+                        integrals, potential = lease.xc(
+                            self.spatial.grid.weights[ids],
+                            self.program.spec.identifier,
+                            reset=evaluated == 0,
+                            download=index == last_nonempty,
+                        )
+                    except RuntimeError as error:
+                        if str(error) == "invalid or nonfinite CUDA XC output":
+                            raise UnsupportedXC(
+                                "CUDA XC output is outside the audited interior-v1 domain"
+                            ) from error
+                        raise
                     result["energy"] += integrals[0]
                     result["electrons"] += integrals[1:]
                     evaluated += 1
@@ -456,6 +463,8 @@ class PreparedXCContractions:
                 and self.density_grid is not None
                 and observable == "potential"
                 and self.program.spec.identifier in ("LDA_XC_PW", "PBE")
+                and self.program.spec
+                == functional(self.program.spec.identifier, spin=self.program.spec.spin)
             )
             if self.density_grid is not None:
                 before_metrics = self.density_grid.metrics()

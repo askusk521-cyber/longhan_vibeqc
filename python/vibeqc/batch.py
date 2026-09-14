@@ -552,6 +552,12 @@ class PreparedBatch:
         if unknown:
             names = ", ".join(sorted(repr(name) for name in unknown))
             raise ValueError(f"unsupported properties: {names}")
+        unsupported = requested - self._calculator._capabilities.supported_properties
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise ValueError(
+                f"method {self._calculator._method_name!r} does not support properties: {names}"
+            )
         compute_forces = "forces" in requested
         if self._calculator._model_signature() != self._model_signature:
             raise RuntimeError(

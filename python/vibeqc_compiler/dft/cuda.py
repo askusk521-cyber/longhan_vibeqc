@@ -102,11 +102,12 @@ class DeviceGridTask:
         weights = immutable(weights, shape=(view.npoint,))
         integrals = np.empty(3)
         self._owner._call(
-            "grid_cuda_xc_v1",
+            "grid_cuda_xc_v2",
             self._owner._handle,
             view.generation,
             int(functional == "PBE"),
             0,
+            1,
             pointer(weights),
             len(weights),
             pointer(integrals),
@@ -310,9 +311,10 @@ class CudaGrid:
             ct.c_char_p,
             ct.c_size_t,
         ]
-        lib.grid_cuda_xc_v1.argtypes = [
+        lib.grid_cuda_xc_v2.argtypes = [
             ct.c_void_p,
             ct.c_uint64,
+            ct.c_int,
             ct.c_int,
             ct.c_int,
             DOUBLE,

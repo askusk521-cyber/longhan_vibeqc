@@ -275,10 +275,42 @@ VIBEQC_XC_HD inline Value evaluate(bool pbe, const double rho[2], const double g
   return out;
 }
 
+/** Enforce the compiler's interior-v1 potential domain before evaluation.
+ * The production method
+ * endpoints deliberately use broader tail policies;
+ * this entry point is for prepared compiler
+ * programs whose public contract
+ * rejects vacuum derivatives and features outside the audited
+ * interior. */
+VIBEQC_XC_HD inline Value evaluate_interior(bool pbe, const double rho[2],
+                                            const double gradient[2][3]) {
+  Value invalid;
+  const auto value = evaluate(pbe, rho, gradient);
+  if (!value.valid) return value;
+  const double total_density = rho[0] + rho[1];
+  if (!detail::finite(total_density) || total_density < 1.0e-12 || total_density > 1.0e12) {
+    invalid.valid = false;
+    return invalid;
+  }
+  if (::fmin(rho[0], rho[1]) / total_density < 1.0e-10) {
+    invalid.valid = false;
+    return invalid;
+  }
+  if (pbe)
+    for (unsigned spin = 0; spin < 2; ++spin) {
+      const double norm = ::hypot(::hypot(gradient[spin][0], gradient[spin][1]), gradient[spin][2]);
+      if (!detail::finite(norm) || norm > 1.0e6 * ::pow(rho[spin], 4.0 / 3.0)) {
+        invalid.valid = false;
+        return invalid;
+      }
+    }
+  return value;
+}
+
 /** Preserve the production unpolarized PBE tail policy for an RKS density.
- * Interior points use the shared spin evaluator. Outside the declared RKS
- * density/reduced-gradient domain, PBE falls back to equal-spin LDA with zero
- * gradient response, matching integrate_pbe_rks_with_tail. */
+ * Interior points use
+ * the shared spin evaluator. Outside the declared RKS density/reduced-gradient domain, PBE falls
+ * back to equal-spin LDA with zero gradient response, matching integrate_pbe_rks_with_tail. */
 VIBEQC_XC_HD inline Value evaluate_rks(bool pbe, const double rho[2], const double gradient[2][3]) {
   if (!pbe) return evaluate(false, rho, gradient);
   Value invalid;

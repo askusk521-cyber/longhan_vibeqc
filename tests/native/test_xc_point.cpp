@@ -68,6 +68,22 @@ int main() {
       if (vibeqc::dft::point::evaluate_rks(true, rho, gradient).valid)
         throw std::runtime_error("RKS point policy accepted unequal spin features");
     }
+    {
+      double rho[2]{0.5, 0.5}, gradient[2][3]{};
+      if (!vibeqc::dft::point::evaluate_interior(true, rho, gradient).valid)
+        throw std::runtime_error("XC interior policy rejected a valid PBE point");
+      rho[0] = rho[1] = 4.0e-13;
+      if (vibeqc::dft::point::evaluate_interior(true, rho, gradient).valid)
+        throw std::runtime_error("XC interior policy accepted low total density");
+      rho[0] = 1.0;
+      rho[1] = 5.0e-11;
+      if (vibeqc::dft::point::evaluate_interior(false, rho, gradient).valid)
+        throw std::runtime_error("XC interior policy accepted an extreme spin fraction");
+      rho[0] = rho[1] = 0.5;
+      gradient[0][0] = 1.0e6 + 1.0;
+      if (vibeqc::dft::point::evaluate_interior(true, rho, gradient).valid)
+        throw std::runtime_error("XC interior policy accepted excessive reduced gradient");
+    }
     for (bool pbe : {false, true}) {
       double rho[2]{}, gradient[2][3]{};
       const auto vacuum = VIBEQC_TEST_POINT_EVALUATE(pbe, rho, gradient);

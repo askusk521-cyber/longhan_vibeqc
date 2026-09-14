@@ -27,7 +27,7 @@ int grid_cuda_run_selected_v1(void* pointer, const double* points, std::size_t n
                               double* jet_output, char* error, std::size_t size);
 int grid_cuda_view_v1(void* pointer, vibeqc::dft::GridTaskView* output, char* error,
                       std::size_t size);
-int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, int restricted,
+int grid_cuda_xc_v2(void* pointer, std::uint64_t generation, int pbe, int restricted, int interior,
                     const double* weights, std::size_t npoint, double* integrals, char* error,
                     std::size_t size);
 int grid_cuda_scatter_v1(void* pointer, std::uint64_t generation, const double* host_local,
@@ -120,7 +120,7 @@ struct PreparedCudaXcPlan::Impl {
               "CUDA XC grid view");
       std::array<double, 3> integrals{};
       error.fill(0);
-      checked(grid_cuda_xc_v1(handle, view.generation, pbe ? 1 : 0, restricted ? 1 : 0,
+      checked(grid_cuda_xc_v2(handle, view.generation, pbe ? 1 : 0, restricted ? 1 : 0, 0,
                               grid.weights().data() + begin, count, integrals.data(), error.data(),
                               error.size()),
               error, "CUDA XC contraction");

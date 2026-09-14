@@ -98,3 +98,18 @@ def test_invalid_batch_properties_reject_before_execution(
         monkeypatch.setattr(batch._library, "vibeqc_batch_execute", forbidden)
         with pytest.raises(error):
             batch.execute(properties=properties)
+
+
+@pytest.mark.parametrize("method", ["lda-rks", "pbe-rks", "lda-uks", "pbe-uks"])
+def test_energy_only_dft_batch_rejects_forces_before_execution(method, monkeypatch):
+    preparation = (
+        {"charges": [-1], "multiplicities": [2]} if method.endswith("uks") else {}
+    )
+    with Calculator(method=method).prepare_batch(SYSTEMS[:1], **preparation) as batch:
+
+        def forbidden(*args):
+            pytest.fail("unsupported force request reached native execution")
+
+        monkeypatch.setattr(batch._library, "vibeqc_batch_execute", forbidden)
+        with pytest.raises(ValueError, match="does not support properties: forces"):
+            batch.execute(properties=("energy", "forces"))
