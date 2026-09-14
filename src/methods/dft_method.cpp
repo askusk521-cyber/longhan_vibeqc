@@ -278,7 +278,7 @@ class DftPreparedBatch final : public PreparedBatch {
           retain(item, current_coordinates, native);
         output.calculation = adapt_result(std::move(native), context_->requested_backend);
       } catch (...) {
-        if (use_warm) {
+        if (use_warm && item.calculation) {
           try {
             output.warm_start_fallback = true;
             auto native = item.calculation->solve(false, nullptr);

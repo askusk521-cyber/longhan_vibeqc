@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10634,
+  "all_handwritten_scientific_lines": 10712,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -25,8 +25,8 @@
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 583,
-        "scientific": 89
+        "runtime": 505,
+        "scientific": 167
       },
       "path": "src/dft/cuda_grid.cu",
       "physical_lines": 725,
@@ -40,6 +40,15 @@
           "role": "scientific",
           "start": "__global__ void ao_kernel",
           "stop": "// Gather every local matrix element"
+        },
+        {
+          "code_lines": 78,
+          "first_line": 186,
+          "last_line": 270,
+          "reason": "Native CUDA LDA/PBE point dispatch, deterministic energy/electron integration and spin-potential matrix contraction. Scalar XC algebra is shared with the CPU implementation, but this endpoint-specific device contraction remains maintained scientific glue.",
+          "role": "scientific",
+          "start": "__device__ vibeqc::dft::point::Value evaluate_xc_point",
+          "stop": "extern \"C\" {"
         }
       ],
       "role": "runtime",
@@ -3188,8 +3197,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8976,
-    "scientific": 10478
+    "runtime": 8898,
+    "scientific": 10556
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3323,17 +3332,20 @@
       "status": "native_baseline"
     },
     "xc": {
-      "current_default": "generated scalar expressions and shared compact CPU potential/response contractions; explicit bounded native CPU candidate",
+      "current_default": "generated scalar expressions, shared CPU/CUDA point algebra and compact CPU potential/response contractions; prepared conventional CUDA DFT uses bounded native grid tiles and explicit device XC contraction",
       "evidence": [
         "docs/xc_expressions.md",
         "docs/xc_contractions.md",
-        "benchmarks/results/xc-contractions/README.md"
+        "benchmarks/results/xc-contractions/README.md",
+        "tests/python/test_spatial_density_cuda.py",
+        "tests/python/test_dft_cuda.py",
+        "tools/validate_dft_endpoints.py"
       ],
-      "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials",
-      "missing_capability": "native GPU XC contractions and complete stationary method integration/promotion remain with #162/#163/#168",
+      "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials; compiler-owned AO/feature policies feed canonical prepared CUDA LDA/PBE contractions",
+      "missing_capability": "CUDA XC contraction and host-controlled energy-only RKS/UKS integration are present for conventional exact-J preparation. Forces/gradients, density-fitted DFT, a generated device contraction owner and a fully GPU-resident SCF driver remain outside this slice (#163/#168).",
       "owner": "xc",
-      "retirement_condition": "duplicated CPU coefficient/response formulas retired after independent E/V and derivative gates; retain external/formula oracles; GPU promotion requires its own complete endpoint evidence",
-      "status": "partial"
+      "retirement_condition": "duplicated CPU coefficient/response formulas retired after independent E/V and derivative gates; retain external/formula oracles. Keep the native CUDA contraction classified as scientific glue until an equivalent compiler-owned device contraction passes independent numerical, resource and complete endpoint gates.",
+      "status": "prepared_cuda_energy_only"
     }
   },
   "per_subsystem": {
@@ -3341,8 +3353,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 598,
-      "scientific": 89
+      "runtime": 520,
+      "scientific": 167
     },
     "df_derivatives": {
       "fallback": 0,
