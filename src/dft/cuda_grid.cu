@@ -15,6 +15,7 @@ namespace {
 using namespace vibeqc_tensor;
 #if VIBEQC_TEST_HOOKS
 thread_local unsigned fail_next_grid_allocation = 0;
+thread_local bool fail_next_grid_runtime = false;
 #endif
 struct GridPlan {
   Context context;
@@ -50,6 +51,9 @@ int guarded(char* error, size_t size, F operation) noexcept {
   } catch (const DeviceAllocationError& e) {
     error_text(error, size, e.what());
     return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const DeviceRuntimeError& e) {
+    error_text(error, size, e.what());
+    return VIBEQC_STATUS_CUDA_ERROR;
   } catch (const std::exception& e) {
     error_text(error, size, e.what());
     return 1;
@@ -392,6 +396,7 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
 #if VIBEQC_TEST_HOOKS
 void grid_cuda_fail_next_allocation_for_test_v1() { fail_next_grid_allocation = 1; }
 void grid_cuda_fail_next_host_allocation_for_test_v1() { fail_next_grid_allocation = 2; }
+void grid_cuda_fail_next_runtime_for_test_v1() { fail_next_grid_runtime = true; }
 #endif
 int grid_cuda_create_v2(int device, int major, int minor, const size_t* dimensions,
                         const double* basis, size_t capacity, unsigned order, size_t expected_bytes,
@@ -415,6 +420,12 @@ int grid_cuda_density_v1(void* pointer, const double* density, size_t elements, 
     auto& ctx = p.context;
     std::lock_guard<std::mutex> lock(ctx.mutex);
     ctx.check_device();
+#if VIBEQC_TEST_HOOKS
+    if (fail_next_grid_runtime) {
+      fail_next_grid_runtime = false;
+      throw DeviceRuntimeError("injected CUDA grid runtime failure");
+    }
+#endif
     p.view_ready = false;
     ++p.generation;
     if (elements != 2 * p.nao * p.nao) throw std::invalid_argument("density size mismatch");

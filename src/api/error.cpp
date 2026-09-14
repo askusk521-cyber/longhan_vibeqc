@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "methods/method.hpp"
+#include "vibeqc/vibeqc.hpp"
 
 namespace vibeqc::api {
 
@@ -12,6 +13,9 @@ vibeqc_status map_exception(std::string* detail) noexcept {
   try {
     throw;
   } catch (const methods::MethodError& error) {
+    if (detail != nullptr) *detail = error.what();
+    return error.status();
+  } catch (const vibeqc::Error& error) {
     if (detail != nullptr) *detail = error.what();
     return error.status();
   } catch (const std::bad_alloc& error) {

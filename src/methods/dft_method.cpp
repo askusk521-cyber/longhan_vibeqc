@@ -19,6 +19,7 @@
 #include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
+#include "vibeqc/vibeqc.hpp"
 
 namespace vibeqc::methods::detail {
 namespace {
@@ -60,6 +61,8 @@ vibeqc_status exception_status() {
   try {
     throw;
   } catch (const MethodError& error) {
+    return error.status();
+  } catch (const vibeqc::Error& error) {
     return error.status();
   } catch (const std::bad_alloc&) {
     return VIBEQC_STATUS_OUT_OF_MEMORY;
@@ -278,9 +281,13 @@ class DftPreparedBatch final : public PreparedBatch {
           retain(item, current_coordinates, native);
         output.calculation = adapt_result(std::move(native), context_->requested_backend);
       } catch (...) {
+        const vibeqc_status first_status = exception_status();
         // A throwing replacement constructor can leave the old owner alive.
-        // Retry only a calculation prepared for this execution's geometry.
-        if (use_warm && item.calculation && item.prepared_coordinates == current_coordinates) {
+        // Retry only a numerical warm-seed failure on a calculation prepared
+        // for this geometry. Resource/device failures retain their first status.
+        if (use_warm && first_status != VIBEQC_STATUS_CUDA_ERROR &&
+            first_status != VIBEQC_STATUS_OUT_OF_MEMORY && item.calculation &&
+            item.prepared_coordinates == current_coordinates) {
           try {
             output.warm_start_fallback = true;
             auto native = item.calculation->solve(false, nullptr);
@@ -294,7 +301,7 @@ class DftPreparedBatch final : public PreparedBatch {
             output.status = exception_status();
           }
         } else {
-          output.status = exception_status();
+          output.status = first_status;
         }
       }
     }
