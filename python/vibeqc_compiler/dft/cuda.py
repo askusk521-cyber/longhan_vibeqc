@@ -129,13 +129,18 @@ def compile_cuda(compiler, cache):
     if path.exists() and path.read_text() != source:
         raise ValueError("generated grid source identity mismatch")
     path.write_text(source)
+    include_root = headers[-1].parents[1]
     return compile_runtime(
         compiler,
         cache,
         path,
         headers=headers,
         libraries=("cublas",),
-        options=("--fmad=false", f"-I{headers[0].parent}"),
+        options=(
+            "--fmad=false",
+            f"-I{headers[0].parent}",
+            f"-I{include_root}",
+        ),
     )
 
 
