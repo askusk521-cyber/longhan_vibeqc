@@ -149,3 +149,25 @@ This instrumentation alone does not complete #282, #283 or #284. Resident and
 streamed reuse, force optimizations, occupied-factor exchange, numerical gates,
 and the full batch-1/batch-4 #206 matrix require separate implementation and
 evidence.
+
+The final-state integration adds two explicit host workload comparisons:
+
+- `--final-state-ablation` pairs actual forced ordinary-device final rebuilding
+  with verified candidate retention (or necessary ordinary-device correction).
+  Both selections use the same lazy/cache preparation and frozen density.
+- `--combined-host-ablation` pairs eager core guesses, rebuilt overlap,
+  reference setup providers and forced reference final correction with the
+  combined lazy/cache/device/verified-state path. Both sides enforce the current
+  strict physical-state gates. This diagnostic baseline is not the historical
+  legacy finalizer, which had a weaker single-rebuild sequence.
+
+Each flag is exclusive with other ablation flags and requires `--host-workloads`.
+The trace gates require a candidate read, current physical F evaluation and
+validation for every item, even at zero eigensolves. UHF counts two provider
+leaves per joint correction; forces require one verified W construction and one
+force-response consumer per item. A necessary cold/changed correction is valid
+on either side; omitted checks, accidental reuse in a forced sample or hidden
+reference fallback fail the gate. Source/library identities and SCF iteration/
+retry branches must match. Run at least five interleaved samples in clean and
+separate traced invocations; never multiply ratios from historical binaries to
+claim the combined improvement. External parity remains the matched #206 gate.
