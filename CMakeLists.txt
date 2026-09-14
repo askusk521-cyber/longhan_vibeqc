@@ -754,7 +754,8 @@ if(VIBEQC_BUILD_TESTS)
   if(VIBEQC_ENABLE_CUDA)
     # Only these owners contain fault injection; keep unrelated CUDA translation
     # units and generated integral bundles free of test hooks.
-    set_property(SOURCE "${VIBEQC_GRID_SOURCE}" src/dft/cuda_ks.cpp APPEND PROPERTY
+    set_property(SOURCE "${VIBEQC_GRID_SOURCE}" src/dft/cuda_ks.cpp src/dft/cuda_xc.cpp
+                 APPEND PROPERTY
                  COMPILE_DEFINITIONS VIBEQC_TEST_HOOKS=1)
     # Manual numerical/performance tier: invoked through the Slurm validator,
     # never registered as an unallocated login-node GPU test.

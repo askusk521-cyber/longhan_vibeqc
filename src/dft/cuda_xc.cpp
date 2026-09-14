@@ -6,7 +6,18 @@
 #include <stdexcept>
 #include <string>
 
+#include "tensor/cuda_error.hpp"
 #include "vibeqc/vibeqc.hpp"
+
+#if defined(VIBEQC_TEST_HOOKS)
+namespace {
+thread_local cudaError_t fail_next_xc_status = cudaSuccess;
+}  // namespace
+extern "C" void xc_cuda_fail_next_runtime_for_test_v1() { fail_next_xc_status = cudaErrorUnknown; }
+extern "C" void xc_cuda_fail_next_allocation_for_test_v1() {
+  fail_next_xc_status = cudaErrorMemoryAllocation;
+}
+#endif
 
 namespace vibeqc::dft {
 namespace {
@@ -135,8 +146,23 @@ void CudaXcPlan::enqueue(const double* density, std::size_t elements, std::uint6
   // Invalidate a previously exported view even when a subsequent launch fails.
   generation_ = 0;
   submitted_generation_ = generation;
-  cuda_xc_detail::enqueue(layout_, stream_, basis_, points_, weights_, density, ao_, work_,
-                          features_, coefficients_, point_totals_, potential_, totals_, error_);
+  try {
+#if defined(VIBEQC_TEST_HOOKS)
+    // Exercise the generated executor's real exception types without leaving a
+    // failed CUDA context behind; explicit replay must retain the last-good seed.
+    const auto injected = fail_next_xc_status;
+    fail_next_xc_status = cudaSuccess;
+    vibeqc_tensor::cuda_check(injected);
+#endif
+    cuda_xc_detail::enqueue(layout_, stream_, basis_, points_, weights_, density, ao_, work_,
+                            features_, coefficients_, point_totals_, potential_, totals_, error_);
+  } catch (const vibeqc_tensor::DeviceAllocationError&) {
+    // The generated executor has a separate exception vocabulary. Translate at
+    // this native owner boundary so both single-point and batch APIs preserve it.
+    throw std::bad_alloc();
+  } catch (const vibeqc_tensor::DeviceRuntimeError& error) {
+    throw vibeqc::Error(VIBEQC_STATUS_CUDA_ERROR, error.what());
+  }
   generation_ = generation;
   ++transfers_.evaluations;
 }

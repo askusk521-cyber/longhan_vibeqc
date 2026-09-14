@@ -15,6 +15,8 @@
 
 #if VIBEQC_HAS_CUDA
 extern "C" void ks_cuda_fail_next_runtime_for_test_v1();
+extern "C" void xc_cuda_fail_next_runtime_for_test_v1();
+extern "C" void xc_cuda_fail_next_allocation_for_test_v1();
 #endif
 
 namespace {
@@ -542,44 +544,50 @@ int main() {
                 std::abs(cuda_result.energy - cold.energy) < 1e-11,
             "public CUDA KS compatible replay changed the endpoint");
         if (ks == VIBEQC_METHOD_LDA_RKS) {
-          ks_cuda_fail_next_runtime_for_test_v1();
-          require(vibeqc_calculation_execute(cuda_calculation, &cuda_result) ==
-                      VIBEQC_STATUS_CUDA_ERROR,
-                  "CUDA KS runtime failure lost its public status");
-          require(
-              vibeqc_calculation_execute(cuda_calculation, &cuda_result) == VIBEQC_STATUS_SUCCESS,
-              "CUDA KS runtime failure prevented single-point recovery");
-          vibeqc_system* cuda_systems[]{cuda_system};
-          vibeqc_batch* cuda_batch = nullptr;
-          require(vibeqc_batch_prepare(cuda_context, cuda_systems, 1, &method,
-                                       VIBEQC_BATCH_ENABLE_WARM_STARTS,
-                                       &cuda_batch) == VIBEQC_STATUS_SUCCESS &&
-                      cuda_batch != nullptr,
-                  "LDA RKS CUDA warm batch preparation failed");
-          vibeqc_batch_item_result_descriptor cuda_item{};
-          cuda_item.struct_size = sizeof(cuda_item);
-          cuda_item.abi_version = VIBEQC_ABI_VERSION;
-          require(vibeqc_batch_execute(cuda_batch, nullptr, 0, &cuda_item, 1) ==
-                          VIBEQC_STATUS_SUCCESS &&
-                      cuda_item.status == VIBEQC_STATUS_SUCCESS,
-                  "LDA RKS CUDA warm batch did not establish a seed");
-          cuda_item = {};
-          cuda_item.struct_size = sizeof(cuda_item);
-          cuda_item.abi_version = VIBEQC_ABI_VERSION;
-          ks_cuda_fail_next_runtime_for_test_v1();
-          require(vibeqc_batch_execute(cuda_batch, nullptr, 0, &cuda_item, 1) ==
-                          VIBEQC_STATUS_SUCCESS &&
-                      cuda_item.status == VIBEQC_STATUS_CUDA_ERROR && cuda_item.warm_start_used &&
-                      !cuda_item.warm_start_fallback,
-                  "CUDA warm replay retried or misclassified a device failure");
-          cuda_item = {};
-          cuda_item.struct_size = sizeof(cuda_item);
-          cuda_item.abi_version = VIBEQC_ABI_VERSION;
-          require(vibeqc_batch_execute(cuda_batch, nullptr, 0, &cuda_item, 1) ==
-                          VIBEQC_STATUS_SUCCESS &&
-                      cuda_item.status == VIBEQC_STATUS_SUCCESS && cuda_item.warm_start_used,
-                  "CUDA warm replay did not recover after a device failure");
-          vibeqc_batch_destroy(cuda_batch);
+          // Cover both the owner and generated-XC error boundaries. Neither
+          // runtime nor allocation failure may be hidden by a cold warm retry.
+          for (const auto& [fail, expected_status] :
+               {std::pair{ks_cuda_fail_next_runtime_for_test_v1, VIBEQC_STATUS_CUDA_ERROR},
+                std::pair{xc_cuda_fail_next_runtime_for_test_v1, VIBEQC_STATUS_CUDA_ERROR},
+                std::pair{xc_cuda_fail_next_allocation_for_test_v1, VIBEQC_STATUS_OUT_OF_MEMORY}}) {
+            fail();
+            require(vibeqc_calculation_execute(cuda_calculation, &cuda_result) == expected_status,
+                    "CUDA KS runtime failure lost its public status");
+            require(
+                vibeqc_calculation_execute(cuda_calculation, &cuda_result) == VIBEQC_STATUS_SUCCESS,
+                "CUDA KS runtime failure prevented single-point recovery");
+            vibeqc_system* cuda_systems[]{cuda_system};
+            vibeqc_batch* cuda_batch = nullptr;
+            require(vibeqc_batch_prepare(cuda_context, cuda_systems, 1, &method,
+                                         VIBEQC_BATCH_ENABLE_WARM_STARTS,
+                                         &cuda_batch) == VIBEQC_STATUS_SUCCESS &&
+                        cuda_batch != nullptr,
+                    "LDA RKS CUDA warm batch preparation failed");
+            vibeqc_batch_item_result_descriptor cuda_item{};
+            cuda_item.struct_size = sizeof(cuda_item);
+            cuda_item.abi_version = VIBEQC_ABI_VERSION;
+            require(vibeqc_batch_execute(cuda_batch, nullptr, 0, &cuda_item, 1) ==
+                            VIBEQC_STATUS_SUCCESS &&
+                        cuda_item.status == VIBEQC_STATUS_SUCCESS,
+                    "LDA RKS CUDA warm batch did not establish a seed");
+            cuda_item = {};
+            cuda_item.struct_size = sizeof(cuda_item);
+            cuda_item.abi_version = VIBEQC_ABI_VERSION;
+            fail();
+            require(vibeqc_batch_execute(cuda_batch, nullptr, 0, &cuda_item, 1) ==
+                            VIBEQC_STATUS_SUCCESS &&
+                        cuda_item.status == expected_status && cuda_item.warm_start_used &&
+                        !cuda_item.warm_start_fallback,
+                    "CUDA warm replay retried or misclassified a device failure");
+            cuda_item = {};
+            cuda_item.struct_size = sizeof(cuda_item);
+            cuda_item.abi_version = VIBEQC_ABI_VERSION;
+            require(vibeqc_batch_execute(cuda_batch, nullptr, 0, &cuda_item, 1) ==
+                            VIBEQC_STATUS_SUCCESS &&
+                        cuda_item.status == VIBEQC_STATUS_SUCCESS && cuda_item.warm_start_used,
+                    "CUDA warm replay did not recover after a device failure");
+            vibeqc_batch_destroy(cuda_batch);
+          }
         }
         cuda_result.forces = forces.data();
         cuda_result.force_count = static_cast<uint32_t>(forces.size());
