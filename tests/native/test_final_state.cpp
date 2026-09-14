@@ -197,6 +197,31 @@ void degenerate_gauge() {
   near(result.state->weighted_density[0][3], -.5, "degenerate W changed with gauge");
 }
 
+void physical_reference_caps() {
+  Fixture a;
+  a.s = {1e-8, 0, 0, 1};
+  a.x = {1e4, 0, 0, 1};
+  a.c.spins[0] = {{-1, 3}, a.x};
+  a.f.spins[0] = {-1e-8 + 1e-15, 0, 0, 3};
+  a.d = {{2e8, 0, 0, 0}};
+  require(a.valid(), "analytic scaled-residual fixture failed the generic contract");
+  a.limits.require_canonicality = true;
+  require(!a.valid(), "physical-reference CFC amplification escaped absolute canonicality");
+  a = Fixture{};
+  a.s = a.x = {1, 0, 0, 1};
+  a.c.spins[0] = {{-1, -.9}, a.x};
+  a.f.spins[0] = {-1, 0, 0, -.9};
+  // The occupied/virtual perturbation cancels to first order in idempotency
+  // and has sub-gate RMS/commutator, but exceeds export's maximum D drift.
+  a.d = {{2, 1.1e-8, 1.1e-8, 0}};
+  require(a.valid(), "analytic maximum-density fixture failed the generic contract");
+  a.limits.require_canonicality = true;
+  require(!a.valid(), "physical-reference maximum density drift was replaced by RMS");
+  a = Fixture{};
+  a.limits.require_canonicality = true;
+  require(a.select(true).state.has_value(), "canonical analytic state could not supply W/export");
+}
+
 void corrections_and_factor_invalidation() {
   Fixture a;
   // The first projection reaches the stationary D, but its energy differs
@@ -301,6 +326,7 @@ int main() {
     identity_and_physical_origin();
     malformed_states_and_strict_gates();
     degenerate_gauge();
+    physical_reference_caps();
     corrections_and_factor_invalidation();
     provider_failure_and_nonlinear_exhaustion();
   } catch (const std::exception& error) {

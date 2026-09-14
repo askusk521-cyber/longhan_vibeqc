@@ -11,7 +11,10 @@ import pytest
 from benchmarks import issue206_df_matrix as matrix
 
 
-def test_strict_provider_ablation_requires_actual_fock_validation_and_correction():
+@pytest.mark.parametrize("method", ("rhf", "uhf"))
+def test_strict_provider_ablation_requires_actual_fock_validation_and_correction(
+    method,
+):
     """Several real corrections are valid; missing current-F work never is."""
     import copy
 
@@ -19,7 +22,9 @@ def test_strict_provider_ablation_requires_actual_fock_validation_and_correction
 
     record = {
         "eigensolves_by_reason": {},
-        "device_eigensolves_by_reason": {"final_fock": {"calls": 5}},
+        "device_eigensolves_by_reason": {
+            "final_fock": {"calls": 5 * (2 if method == "uhf" else 1)}
+        },
         "exclusive_phases": {
             "final_state_fock_build": {"calls": 7},
             "strict_final_correction": {"calls": 5},
@@ -29,9 +34,9 @@ def test_strict_provider_ablation_requires_actual_fock_validation_and_correction
     }
     kwargs = {
         "batch_size": 2,
-        "method": "rhf",
+        "method": method,
         "reference": False,
-        "strict_energy": True,
+        "strict_final_state": True,
     }
     validate_final_eigen_counts(record, **kwargs)
     for phase in record["exclusive_phases"]:
