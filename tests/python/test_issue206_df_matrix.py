@@ -11,7 +11,88 @@ import pytest
 from benchmarks import issue206_df_matrix as matrix
 
 
-def test_strict_provider_ablation_requires_actual_fock_validation_and_correction():
+@pytest.mark.parametrize("method", ("rhf", "uhf"))
+@pytest.mark.parametrize("forces", (False, True))
+@pytest.mark.parametrize("mode", ("reuse", "mixed", "forced", "cold_correction"))
+def test_final_state_work_ablation_requires_current_physics_and_all_spin_leaves(
+    method, forces, mode
+):
+    """Zero final solves must not let missing validation or W pass the ledger."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_final_state_counts
+
+    corrections, corrected = {
+        "reuse": (0, 0),
+        "mixed": (3, 1),
+        "forced": (5, 2),
+        "cold_correction": (5, 2),
+    }[mode]
+    for reference in (False, True) if mode == "forced" else (False,):
+        count = corrections * (2 if method == "uhf" else 1)
+        record = {
+            "eigensolves_by_reason": {
+                "final_fock": {"calls": count if reference else 0}
+            },
+            "device_eigensolves_by_reason": {
+                "final_fock": {"calls": 0 if reference else count}
+            },
+            "exclusive_phases": {
+                "final_state_read": {"calls": 2},
+                "final_state_fock_build": {"calls": 2 + corrections},
+                "final_state_validation": {"calls": 2 + corrections},
+                "strict_final_correction": {"calls": corrections},
+                "final_state_corrected": {"calls": corrected},
+                "final_state_reuse": {"calls": 2 - corrected},
+                "final_state_weighted_density": {"calls": 2 if forces else 0},
+                "force_response": {"calls": 2 if forces else 0},
+            },
+        }
+        kwargs = {
+            "batch_size": 2,
+            "method": method,
+            "force": mode == "forced",
+            "reference": reference,
+            "compute_forces": forces,
+        }
+        validate_final_state_counts(record, **kwargs)
+        for group, name in [
+            ("exclusive_phases", name) for name in record["exclusive_phases"]
+        ] + [
+            ("eigensolves_by_reason", "final_fock"),
+            ("device_eigensolves_by_reason", "final_fock"),
+            ("eigensolves_by_reason", "fallback"),
+        ]:
+            changed = copy.deepcopy(record)
+            changed[group].setdefault(name, {"calls": 0})["calls"] += 1
+            with pytest.raises(RuntimeError, match="final state ablation"):
+                validate_final_state_counts(changed, **kwargs)
+        changed = copy.deepcopy(record)
+        changed["exclusive_phases"] = {}
+        with pytest.raises(RuntimeError, match="current-F"):
+            validate_final_state_counts(changed, **kwargs)
+        # A force-rebuild flag cannot silently accept two reused candidates.
+        if mode == "reuse":
+            with pytest.raises(RuntimeError, match="correction"):
+                validate_final_state_counts(record, **{**kwargs, "force": True})
+
+
+@pytest.mark.parametrize("flag", ("--final-state-ablation", "--combined-host-ablation"))
+def test_new_host_ablation_cli_rejects_ambiguous_or_non_host_requests(
+    flag, monkeypatch
+):
+    """Reject protocol ambiguity before any hardware or output is touched."""
+    for extra in ([], ["--host-workloads", "--final-eigen-ablation"]):
+        monkeypatch.setattr(sys, "argv", ["issue206_df_matrix.py", flag, *extra])
+        with pytest.raises(SystemExit) as error:
+            matrix.main()
+        assert error.value.code == 2
+
+
+@pytest.mark.parametrize("method", ("rhf", "uhf"))
+def test_strict_provider_ablation_requires_actual_fock_validation_and_correction(
+    method,
+):
     """Several real corrections are valid; missing current-F work never is."""
     import copy
 
@@ -19,7 +100,9 @@ def test_strict_provider_ablation_requires_actual_fock_validation_and_correction
 
     record = {
         "eigensolves_by_reason": {},
-        "device_eigensolves_by_reason": {"final_fock": {"calls": 5}},
+        "device_eigensolves_by_reason": {
+            "final_fock": {"calls": 5 * (2 if method == "uhf" else 1)}
+        },
         "exclusive_phases": {
             "final_state_fock_build": {"calls": 7},
             "strict_final_correction": {"calls": 5},
@@ -29,9 +112,9 @@ def test_strict_provider_ablation_requires_actual_fock_validation_and_correction
     }
     kwargs = {
         "batch_size": 2,
-        "method": "rhf",
+        "method": method,
         "reference": False,
-        "strict_energy": True,
+        "strict_final_state": True,
     }
     validate_final_eigen_counts(record, **kwargs)
     for phase in record["exclusive_phases"]:

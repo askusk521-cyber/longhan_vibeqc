@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "molecule/basis.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "runtime/resource_ledger.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda_density_fitting.hpp"
@@ -259,45 +260,66 @@ void device_overlap_cutoff() {
 }
 
 void physical_reference_export() {
-  core::System system;
-  system.atoms = {{1, {0, 0, -.7}}, {1, {0, 0, .7}}};
-  const std::vector<core::Primitive> primitives{
-      {3.42525091, .1543289673}, {.62391373, .5353281423}, {.1688554, .4446345422}};
-  system.shells = {{0, 0, primitives}, {1, 0, primitives}};
-  std::string detail;
-  require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS, detail);
-  ScfOptions options;
-  options.export_physical_reference = true;
-  options.screening_tolerance = 0;  // Physical-reference export requires an unscreened model.
-  options.energy_tolerance = 1e-12;
-  options.density_tolerance = 1e-10;
-  options.reference_memory_budget_bytes = 256ULL << 20;
-  // CPU DF is an independent scientific oracle, including its finalizer and
-  // derivative assembly. Compare invariant densities, never orbital signs.
-  const auto expected = run_rhf_density_fitting(system, system, options);
-  for (bool forces : {false, true}) {
-    options.compute_forces = forces;
-    const auto actual = run_rhf_density_fitting_cuda(system, system, options, 0);
-    require(actual.converged && actual.reference && expected.reference,
-            "DF reference export did not retain a converged frame");
-    auto frame = *actual.reference;
-    validate_physical_reference(frame);
-    require(std::abs(actual.energy - expected.energy) < 1e-9, "DF reference energy changed");
-    for (std::size_t i = 0; i < actual.density.size(); ++i)
-      require(std::abs(actual.density[i] - expected.density[i]) < 1e-9,
-              "DF reference density changed");
-    for (std::size_t i = 0; i < frame.orbital_energies.size(); ++i)
-      require(std::abs(frame.orbital_energies[i] - expected.reference->orbital_energies[i]) < 1e-9,
+  // Explicit d polarization distinguishes the two layouts without relying on
+  // the device/reference solver to construct any expected invariant.
+  for (auto representation : {VIBEQC_BASIS_CARTESIAN, VIBEQC_BASIS_SPHERICAL}) {
+    core::System system;
+    system.atoms = {{1, {0, 0, -.7}}, {1, {0, 0, .7}}};
+    const std::vector<core::Primitive> primitives{
+        {3.42525091, .1543289673}, {.62391373, .5353281423}, {.1688554, .4446345422}};
+    system.shells = {
+        {0, 0, primitives}, {1, 0, primitives}, {0, 2, {{.6, 1.0}}}, {1, 2, {{.6, 1.0}}}};
+    system.basis_representation = representation;
+    std::string detail;
+    require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS, detail);
+    ScfOptions options;
+    options.export_physical_reference = true;
+    options.screening_tolerance = 0;
+    options.energy_tolerance = 1e-12;
+    options.density_tolerance = 1e-10;
+    options.reference_memory_budget_bytes = 256ULL << 20;
+    // CPU DF owns its independent finalizer and complete derivative assembly.
+    const auto expected = run_rhf_density_fitting(system, system, options);
+    for (bool forces : {false, true}) {
+      options.compute_forces = forces;
+      const char* labels[] = {"test_cuda_export_cold", "test_cuda_export_retained",
+                              "test_cuda_export_device_rebuild",
+                              "test_cuda_export_reference_rebuild"};
+      for (unsigned mode = 0; mode < 4; ++mode) {
+        setenv("VIBEQC_DF_FORCE_FINAL_REBUILD", mode >= 2 ? "1" : "0", 1);
+        setenv("VIBEQC_DF_REFERENCE_FINAL_EIGEN", mode == 3 ? "1" : "0", 1);
+        ScfResult actual;
+        {
+          runtime::host_trace::Region trace(labels[mode]);
+          actual = run_rhf_density_fitting_cuda(system, system, options, 0,
+                                                mode ? &expected.density : nullptr);
+        }
+        unsetenv("VIBEQC_DF_FORCE_FINAL_REBUILD");
+        unsetenv("VIBEQC_DF_REFERENCE_FINAL_EIGEN");
+        require(actual.converged && actual.reference && expected.reference,
+                "DF reference export did not retain a converged frame");
+        auto frame = *actual.reference;
+        validate_physical_reference(frame);
+        require(std::abs(actual.energy - expected.energy) < 1e-9, "DF reference energy changed");
+        for (std::size_t i = 0; i < actual.density.size(); ++i)
+          require(std::abs(actual.density[i] - expected.density[i]) < 1e-9,
+                  "DF reference density changed");
+        for (std::size_t i = 0; i < frame.orbital_energies.size(); ++i)
+          require(
+              std::abs(frame.orbital_energies[i] - expected.reference->orbital_energies[i]) < 1e-9,
               "DF physical canonical energies changed");
-    if (forces) {
-      require(actual.forces.size() == expected.forces.size(), "DF force extent changed");
-      for (std::size_t i = 0; i < actual.forces.size(); ++i)
-        require(std::abs(actual.forces[i] - expected.forces[i]) < 1e-8,
-                "DF physical-reference complete force changed");
-    } else
-      require(actual.forces.empty(), "energy-only reference export computed forces");
+        if (forces) {
+          require(actual.forces.size() == expected.forces.size(), "DF force extent changed");
+          for (std::size_t i = 0; i < actual.forces.size(); ++i)
+            require(std::abs(actual.forces[i] - expected.forces[i]) < 1e-8,
+                    "DF physical-reference complete force changed");
+        } else
+          require(actual.forces.empty(), "energy-only reference export computed forces");
+      }
+    }
   }
 }
+
 }  // namespace
 
 int main() {

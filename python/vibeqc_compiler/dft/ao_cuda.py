@@ -88,5 +88,6 @@ def emit_grid_source(*, native_ks=False):
             asset_path("src/tensor/cuda_runtime.cuh"),
             asset_path("src/dft/grid_task_view.cuh"),
             asset_path("src/dft/xc_point.hpp"),
+            asset_path("include/vibeqc/vibeqc.h"),
         ),
     )

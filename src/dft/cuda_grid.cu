@@ -4,13 +4,18 @@
  */
 #include <climits>
 #include <cmath>
+#include <new>
 
 #include "../tensor/cuda_runtime.cuh"
 #include "grid_task_view.cuh"
+#include "vibeqc/vibeqc.h"
 #include "xc_point.hpp"
 
 namespace {
 using namespace vibeqc_tensor;
+#if VIBEQC_TEST_HOOKS
+thread_local unsigned fail_next_grid_allocation = 0;
+#endif
 struct GridPlan {
   Context context;
   bool density_ready = false;
@@ -39,6 +44,12 @@ int guarded(char* error, size_t size, F operation) noexcept {
   try {
     operation();
     return 0;
+  } catch (const std::bad_alloc& e) {
+    error_text(error, size, e.what());
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const DeviceAllocationError& e) {
+    error_text(error, size, e.what());
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
   } catch (const std::exception& e) {
     error_text(error, size, e.what());
     return 1;
@@ -275,6 +286,14 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
     *output = nullptr;
     if (!dimensions || !basis || !capacity || capacity > INT_MAX || order > 3)
       throw std::invalid_argument("invalid CUDA grid plan");
+#if VIBEQC_TEST_HOOKS
+    if (fail_next_grid_allocation) {
+      const auto failure = fail_next_grid_allocation;
+      fail_next_grid_allocation = 0;
+      if (failure == 2) throw std::bad_alloc();
+      throw DeviceAllocationError("injected CUDA grid allocation failure");
+    }
+#endif
     auto p = std::make_unique<GridPlan>();
     p->natom = dimensions[0];
     p->nprimitive = dimensions[1];
@@ -367,6 +386,10 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
     *output = p.release();
   });
 }
+#if VIBEQC_TEST_HOOKS
+void grid_cuda_fail_next_allocation_for_test_v1() { fail_next_grid_allocation = 1; }
+void grid_cuda_fail_next_host_allocation_for_test_v1() { fail_next_grid_allocation = 2; }
+#endif
 int grid_cuda_create_v2(int device, int major, int minor, const size_t* dimensions,
                         const double* basis, size_t capacity, unsigned order, size_t expected_bytes,
                         size_t active_capacity, void** output, char* error, size_t size) {

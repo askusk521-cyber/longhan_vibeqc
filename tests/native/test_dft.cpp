@@ -12,6 +12,13 @@
 #include "dft/xc.hpp"
 #include "molecule/basis.hpp"
 
+#if VIBEQC_HAS_CUDA
+extern "C" void grid_cuda_fail_next_allocation_for_test_v1();
+extern "C" void grid_cuda_fail_next_host_allocation_for_test_v1();
+extern "C" int grid_cuda_create_v1(int, int, int, const std::size_t*, const double*, std::size_t,
+                                   unsigned, std::size_t, void**, char*, std::size_t);
+#endif
+
 namespace {
 void require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
@@ -49,6 +56,23 @@ int main() {
             "small DFT grid Becke weight differs from GridSpec v1");
 
     const vibeqc::dft::AoBasis basis(system);
+#if VIBEQC_HAS_CUDA
+    // The compiler grid boundary survives the resident-KS replacement. Its
+    // host/device failures must preserve OOM and clear unpublished ownership.
+    // These injected failures precede device setup; KS arena OOM behavior is
+    // separately exercised through the public resource-budget tests.
+    const std::size_t dimensions[]{basis.natom, basis.nprimitive, basis.nao};
+    for (auto fail : {grid_cuda_fail_next_allocation_for_test_v1,
+                      grid_cuda_fail_next_host_allocation_for_test_v1}) {
+      char error[256]{};
+      void* failed_owner = error;
+      fail();
+      require(grid_cuda_create_v1(0, 8, 0, dimensions, basis.packed.data(), 7, 0, 0, &failed_owner,
+                                  error, sizeof(error)) == VIBEQC_STATUS_OUT_OF_MEMORY &&
+                  failed_owner == nullptr,
+              "compiler CUDA grid allocation failure lost its status or output invariant");
+    }
+#endif
     const std::vector<double> density{0.8, 0.2, 0.2, 0.6};
     const auto reference = vibeqc::dft::integrate_lda_xc_pw_rks(basis, grid, density, 7);
     require(std::isfinite(reference.energy) && reference.energy < 0.0,
