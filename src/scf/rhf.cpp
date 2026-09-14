@@ -422,6 +422,20 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
   };
 }
 
+/** The host DIIS retry changes SCF orchestration, not the eigen provider.
+ * Reuse the prepared ordinary device operation when the compact loop needs
+ * DIIS; a large supported matrix must not return to the reference Jacobi loop.
+ * The explicit diagnostic control preserves an independent causal comparison. */
+[[maybe_unused]] EigenResult iteration_df_eigen(const Matrix& fock, const Matrix& overlap,
+                                                const Matrix& orthogonalizer, std::size_t n,
+                                                CudaDensityFittingJkPlan* plan,
+                                                std::size_t system_index = 0) {
+  const char* reference = std::getenv("VIBEQC_DF_REFERENCE_ITERATION_EIGEN");
+  if (!plan || (reference && reference[0] == '1' && reference[1] == '\0'))
+    return generalized_eigen(fock, orthogonalizer, n);
+  return device_df_eigen(fock, &overlap, &orthogonalizer, plan, system_index);
+}
+
 /** Keep CPU/reference execution explicit. CUDA finalization uses the plan's
  * ordinary device provider; a rejection never silently re-enters Jacobi. The
  * diagnostic control restores the independent oracle for causal comparison. */
@@ -1606,7 +1620,8 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
     const Matrix residual = commutator_residual(fock, density, data.one_electron.overlap, n);
     const Matrix effective_fock = diis.update(fock, residual);
     orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
-      return generalized_eigen(effective_fock, orthogonalizer, n);
+      return iteration_df_eigen(effective_fock, data.one_electron.overlap, orthogonalizer, n,
+                                plan.get());
     });
     Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
     result.iterations = iteration;
@@ -1727,10 +1742,12 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
         diis.update(concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
     std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, n * n);
     alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
-      return generalized_eigen(alpha_fock, orthogonalizer, n);
+      return iteration_df_eigen(alpha_fock, data.one_electron.overlap, orthogonalizer, n,
+                                plan.get());
     });
     beta_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
-      return generalized_eigen(beta_fock, orthogonalizer, n);
+      return iteration_df_eigen(beta_fock, data.one_electron.overlap, orthogonalizer, n,
+                                plan.get());
     });
     Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
     Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
@@ -2155,7 +2172,8 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
             commutator_residual(fock, densities[slot], data[slot].one_electron.overlap, nbf);
         const Matrix effective_fock = diis[slot].update(fock, residual);
         orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
-          return generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
+          return iteration_df_eigen(effective_fock, data[slot].one_electron.overlap,
+                                    orthogonalizers[slot], nbf, plan, slot);
         });
         Matrix next_density =
             density_from_orbitals(orbitals[slot].vectors, nbf,
@@ -2628,10 +2646,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
             concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
         std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, matrix_size);
         alpha_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
-          return generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
+          return iteration_df_eigen(alpha_fock, data[slot].one_electron.overlap,
+                                    orthogonalizers[slot], nbf, plan, slot);
         });
         beta_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
-          return generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
+          return iteration_df_eigen(beta_fock, data[slot].one_electron.overlap,
+                                    orthogonalizers[slot], nbf, plan, slot);
         });
         Matrix next_alpha =
             density_from_orbitals(alpha_orbitals[slot].vectors, nbf, alpha_occupied, 1.0);
