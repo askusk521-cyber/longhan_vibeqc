@@ -1,10 +1,11 @@
 # Strict DF final-state contract
 
 The internal `scf/solver/final_state.hpp` contract implements slice A of issue
-#311. It is independent of an eigensolver backend. CUDA snapshot production,
-SCF finalizer integration, resource accounting and complete-force endpoint
-qualification remain subsequent slices. This contract alone changes no public
-C/Python result layout or production finalization behavior.
+#311. It is independent of an eigensolver backend. The CUDA snapshot producer
+below retains candidates for this contract; SCF finalizer integration and
+complete-force endpoint qualification remain subsequent slices. These internal
+interfaces change no public C/Python result layout or production finalization
+behavior.
 
 A candidate binds its prepared basis/geometry/representation/device owner,
 source item, solve epoch, orbital and density generations, resolved J/K model
@@ -61,3 +62,45 @@ numerical faults, actual rebuild counts, old-factor rejection and an oscillating
 nonlinear Fock. Neither production nor reference diagonalization constructs the
 expected answers. Molecular forces, device snapshot lifecycle and performance
 claims require the later integrated paths and their independent qualification.
+
+## CUDA candidate snapshots
+
+`cuda_density_fitting_final_state.hpp` exposes a version-one eligibility token
+and detached snapshot reader. The existing persistent SCF owner now stores full
+C/epsilon separately for each spin and item, together with the producing solver
+status and output-density generation. The copy runs under the old active mask,
+before the density commit can deactivate an item. UHF alpha is saved before
+beta overwrites shared coefficient scratch. Ordinary launches and captured
+graphs execute the same masked store; graph construction counts no real copy.
+
+Every attempted device solve invalidates the previous eligibility and advances
+a plan-owned epoch before input checks. The epoch survives persistent-storage
+rebuilds and fails closed at saturation. Only converged successful items are
+published after the final density readback. Imported D has generation one;
+after `iterations` committed projections, the candidate density has generation
+`iterations + 1` and its physical-origin Fock was evaluated at generation
+`iterations`. This explicit offset is separate from the occupied-K kernel's
+local iteration counter.
+
+The token includes the immutable source owner/item, solve epoch, determinant
+generations, the compact loop's canonical FP64 full-range DF HF model and spin
+occupations. Snapshot reads require its exact current identity before transfers,
+then check retained device generation, solver status and finite data. The reader
+copies only that item's C/epsilon and actual retained D, converts coefficient
+columns to the row-major host convention and drains the plan stream before
+releasing any destination. It rejects capture and never treats these candidates
+as a verified final physical Fock. All operations borrow a serialized plan owner.
+
+Both native planners and the composed Python resource plan charge the two-spin
+upper bound `batch * [16 * (n*n + n) + 24]` device bytes. Actual RHF allocation
+uses one spin; UHF uses both, including empty beta. This capacity is per item,
+and the independent cold retry receives a complete single-item share in addition
+to its own ordinary solver allowance. Host eligibility metadata is also reserved.
+No unbounded history or force-only W is retained by the snapshot owner.
+
+`test_df_final_snapshot.cpp` exercises analytic rotated RHF/UHF frames in batches
+one/four, early inactive neighbors, scratch poisoning, distinct alpha/beta
+storage, stale owner/model/epoch/generation/occupation tokens, corrupt device
+generation/info, invalid and nonconverged replay, epoch exhaustion and recovery.
+Physical candidate checks use the independent contract and analytic F/S/D.
+Production selection and complete-force performance remain the next integration.
