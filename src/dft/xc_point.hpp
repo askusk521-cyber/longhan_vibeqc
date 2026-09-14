@@ -274,6 +274,37 @@ VIBEQC_XC_HD inline Value evaluate(bool pbe, const double rho[2], const double g
   out.valid = out.valid && detail::finite(out.energy);
   return out;
 }
+
+/** Preserve the production unpolarized PBE tail policy for an RKS density.
+ * Interior points use the shared spin evaluator. Outside the declared RKS
+ * density/reduced-gradient domain, PBE falls back to equal-spin LDA with zero
+ * gradient response, matching integrate_pbe_rks_with_tail. */
+VIBEQC_XC_HD inline Value evaluate_rks(bool pbe, const double rho[2],
+                                      const double gradient[2][3]) {
+  if (!pbe) return evaluate(false, rho, gradient);
+  Value invalid;
+  if (rho[0] != rho[1]) {
+    invalid.valid = false;
+    return invalid;
+  }
+  for (unsigned axis = 0; axis < 3; ++axis)
+    if (gradient[0][axis] != gradient[1][axis]) {
+      invalid.valid = false;
+      return invalid;
+    }
+  const double total_density = rho[0] + rho[1];
+  if (!detail::finite(total_density) || total_density <= 0.0)
+    return evaluate(true, rho, gradient);
+  const double gx = gradient[0][0] + gradient[1][0];
+  const double gy = gradient[0][1] + gradient[1][1];
+  const double gz = gradient[0][2] + gradient[1][2];
+  const bool outside_density = total_density < 1.0e-12 || total_density > 1.0e12;
+  const double gradient_norm = ::hypot(::hypot(gx, gy), gz);
+  const bool outside_gradient =
+      !outside_density &&
+      gradient_norm > 1.0e6 * ::pow(total_density, 4.0 / 3.0);
+  return evaluate(outside_density || outside_gradient ? false : true, rho, gradient);
+}
 }  // namespace vibeqc::dft::point
 
 #undef VIBEQC_XC_HD

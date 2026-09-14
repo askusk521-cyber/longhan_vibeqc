@@ -183,27 +183,29 @@ __global__ void scatter_matrix(const double* local, const size_t* ids, I nao, I 
   }
 }
 
-__device__ vibeqc::dft::point::Value evaluate_xc_point(bool pbe, const double* features, I npoint,
-                                                       I point) {
+__device__ vibeqc::dft::point::Value evaluate_xc_point(bool pbe, bool restricted,
+                                                       const double* features, I npoint, I point) {
   const double rho[2]{features[point], features[5 * npoint + point]};
   double gradient[2][3]{};
   if (pbe)
     for (int spin = 0; spin < 2; ++spin)
       for (int axis = 0; axis < 3; ++axis)
         gradient[spin][axis] = features[(5 * spin + axis + 1) * npoint + point];
-  return vibeqc::dft::point::evaluate(pbe, rho, gradient);
+  return restricted ? vibeqc::dft::point::evaluate_rks(pbe, rho, gradient)
+                    : vibeqc::dft::point::evaluate(pbe, rho, gradient);
 }
 
 /** Deterministic scalar reduction. This correctness baseline intentionally
  * uses one device thread; matrix assembly remains parallel and later tuning
  * may replace only this reduction after endpoint-equivalence evidence.
  */
-__global__ void xc_integrals_kernel(bool pbe, const double* features, const double* weights,
-                                    I npoint, double* integrals, int* error) {
+__global__ void xc_integrals_kernel(bool pbe, bool restricted, const double* features,
+                                    const double* weights, I npoint, double* integrals,
+                                    int* error) {
   if (blockIdx.x || threadIdx.x) return;
   double energy = 0.0, electrons[2]{};
   for (I point = 0; point < npoint; ++point) {
-    const auto xc = evaluate_xc_point(pbe, features, npoint, point);
+    const auto xc = evaluate_xc_point(pbe, restricted, features, npoint, point);
     if (!xc.valid) {
       atomicCAS(error, 0, 3);
       return;
@@ -218,15 +220,15 @@ __global__ void xc_integrals_kernel(bool pbe, const double* features, const doub
   integrals[2] = finite(electrons[1], error, 3);
 }
 
-__global__ void xc_local_potential_kernel(bool pbe, const double* features, const double* ao,
-                                          const double* weights, I npoint, I active,
-                                          double* potential, int* error) {
+__global__ void xc_local_potential_kernel(bool pbe, bool restricted, const double* features,
+                                          const double* ao, const double* weights, I npoint,
+                                          I active, double* potential, int* error) {
   for (I index = I(blockIdx.x) * blockDim.x + threadIdx.x; index < 2 * active * active;
        index += I(blockDim.x) * gridDim.x) {
     const I spin = index / (active * active), row = index / active % active, col = index % active;
     double value = 0.0;
     for (I point = 0; point < npoint; ++point) {
-      const auto xc = evaluate_xc_point(pbe, features, npoint, point);
+      const auto xc = evaluate_xc_point(pbe, restricted, features, npoint, point);
       if (!xc.valid) {
         atomicCAS(error, 0, 3);
         return;
@@ -588,10 +590,12 @@ int grid_cuda_view_v1(void* pointer, vibeqc::dft::GridTaskView* output, char* er
   });
 }
 
-int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const double* weights,
-                    size_t npoint, double* integrals, char* error, size_t size) {
+int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, int restricted,
+                    const double* weights, size_t npoint, double* integrals, char* error,
+                    size_t size) {
   return guarded(error, size, [&] {
-    if (!pointer || !integrals || (pbe != 0 && pbe != 1) || (npoint && !weights))
+    if (!pointer || !integrals || (pbe != 0 && pbe != 1) ||
+        (restricted != 0 && restricted != 1) || (npoint && !weights))
       throw std::invalid_argument("invalid CUDA XC task");
     auto& p = *static_cast<GridPlan*>(pointer);
     auto& ctx = p.context;
@@ -621,13 +625,14 @@ int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const doub
     });
     if (npoint) {
       ctx.section(true, ctx.metrics.kernel_ms, [&] {
-        xc_integrals_kernel<<<1, 1, 0, ctx.stream>>>(pbe != 0, p.features, device_weights, npoint,
-                                                     device_integrals, ctx.error);
+        xc_integrals_kernel<<<1, 1, 0, ctx.stream>>>(pbe != 0, restricted != 0, p.features,
+                                                     device_weights, npoint, device_integrals,
+                                                     ctx.error);
         cuda_check(cudaGetLastError());
         if (matrix_elements) {
           xc_local_potential_kernel<<<blocks(matrix_elements, 128), 128, 0, ctx.stream>>>(
-              pbe != 0, p.features, p.ao, device_weights, npoint, p.last_active, p.local_potential,
-              ctx.error);
+              pbe != 0, restricted != 0, p.features, p.ao, device_weights, npoint, p.last_active,
+              p.local_potential, ctx.error);
           cuda_check(cudaGetLastError());
         }
       });

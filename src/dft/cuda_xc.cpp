@@ -27,8 +27,9 @@ int grid_cuda_run_selected_v1(void* pointer, const double* points, std::size_t n
                               double* jet_output, char* error, std::size_t size);
 int grid_cuda_view_v1(void* pointer, vibeqc::dft::GridTaskView* output, char* error,
                       std::size_t size);
-int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const double* weights,
-                    std::size_t npoint, double* integrals, char* error, std::size_t size);
+int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, int restricted,
+                    const double* weights, std::size_t npoint, double* integrals, char* error,
+                    std::size_t size);
 int grid_cuda_scatter_v1(void* pointer, std::uint64_t generation, const double* host_local,
                          int reset, double* host_global, char* error, std::size_t size);
 }
@@ -89,7 +90,7 @@ struct PreparedCudaXcPlan::Impl {
 
 #if VIBEQC_HAS_CUDA
   SpinXcIntegral evaluate(const MolecularGrid& grid, const std::vector<double>& alpha,
-                          const std::vector<double>& beta) {
+                          const std::vector<double>& beta, bool restricted) {
     if (alpha.size() != nao * nao || beta.size() != nao * nao)
       throw std::invalid_argument("CUDA XC density dimensions do not match the AO basis");
     std::lock_guard<std::mutex> lock(mutex);
@@ -119,8 +120,9 @@ struct PreparedCudaXcPlan::Impl {
               "CUDA XC grid view");
       std::array<double, 3> integrals{};
       error.fill(0);
-      checked(grid_cuda_xc_v1(handle, view.generation, pbe ? 1 : 0, grid.weights().data() + begin,
-                              count, integrals.data(), error.data(), error.size()),
+      checked(grid_cuda_xc_v1(handle, view.generation, pbe ? 1 : 0, restricted ? 1 : 0,
+                              grid.weights().data() + begin, count, integrals.data(), error.data(),
+                              error.size()),
               error, "CUDA XC contraction");
       result.energy += integrals[0];
       result.electrons[0] += integrals[1];
@@ -152,7 +154,7 @@ SpinXcIntegral PreparedCudaXcPlan::evaluate_uks(const MolecularGrid& grid,
                                                 const std::vector<double>& alpha_density,
                                                 const std::vector<double>& beta_density) {
 #if VIBEQC_HAS_CUDA
-  return impl_->evaluate(grid, alpha_density, beta_density);
+  return impl_->evaluate(grid, alpha_density, beta_density, false);
 #else
   (void)grid;
   (void)alpha_density;
@@ -168,7 +170,7 @@ XcIntegral PreparedCudaXcPlan::evaluate_rks(const MolecularGrid& grid,
   std::vector<double> spin_density(density.size());
   std::transform(density.begin(), density.end(), spin_density.begin(),
                  [](double value) { return 0.5 * value; });
-  auto spin = evaluate_uks(grid, spin_density, spin_density);
+  auto spin = impl_->evaluate(grid, spin_density, spin_density, true);
   XcIntegral result;
   result.energy = spin.energy;
   result.electrons = spin.electrons[0] + spin.electrons[1];

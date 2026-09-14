@@ -11,6 +11,7 @@ extern "C" {
  * returned. The local spin potentials remain in the borrowed task buffer and
  * are consumed by grid_cuda_scatter_v1.
  */
-int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const double* weights,
-                    std::size_t npoint, double* integrals, char* error, std::size_t size);
+int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, int restricted,
+                    const double* weights, std::size_t npoint, double* integrals, char* error,
+                    std::size_t size);
 }

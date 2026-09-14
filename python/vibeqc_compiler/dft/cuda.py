@@ -106,6 +106,7 @@ class DeviceGridTask:
             self._owner._handle,
             view.generation,
             int(functional == "PBE"),
+            0,
             pointer(weights),
             len(weights),
             pointer(integrals),
@@ -312,6 +313,7 @@ class CudaGrid:
         lib.grid_cuda_xc_v1.argtypes = [
             ct.c_void_p,
             ct.c_uint64,
+            ct.c_int,
             ct.c_int,
             DOUBLE,
             ct.c_size_t,
