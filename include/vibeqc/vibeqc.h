@@ -560,6 +560,27 @@ typedef struct vibeqc_ks_diagnostic {
   double physical_residual_max;
 } vibeqc_ks_diagnostic;
 
+/** Cumulative transport performed by one prepared CUDA KS owner.
+ *
+ * Counts are measured at native copy/synchronization sites rather than
+ * inferred from SCF iterations. They include immutable setup, explicit seed
+ * uploads, scalar iteration records, changed-geometry warm-density exports,
+ * discarded warm attempts, and occupation-control proposals. Routine
+ * iteration matrices remain resident and do not contribute matrix D2H bytes.
+ * CPU and non-KS owners report this diagnostic as unavailable.
+ */
+typedef struct vibeqc_ks_transport_diagnostic {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint64_t setup_h2d_bytes;
+  uint64_t density_h2d_bytes;
+  uint64_t scalar_d2h_bytes;
+  uint64_t matrix_d2h_bytes;
+  uint64_t synchronizations;
+  uint64_t iterations;
+  uint64_t occupation_stabilized_proposals;
+} vibeqc_ks_transport_diagnostic;
+
 /** Optional per-system coordinates for a prepared ragged batch execution. */
 typedef struct vibeqc_batch_input_descriptor {
   uint32_t struct_size;
@@ -775,6 +796,11 @@ VIBEQC_API vibeqc_status vibeqc_calculation_get_ks_diagnostic(const vibeqc_calcu
                                                               vibeqc_ks_iteration* history,
                                                               uint32_t history_capacity);
 
+/** Query cumulative prepared-owner CUDA KS transport. Available immediately
+ * after CUDA KS preparation so callers can separate setup from phase deltas. */
+VIBEQC_API vibeqc_status vibeqc_calculation_get_ks_transport_diagnostic(
+    const vibeqc_calculation* calculation, vibeqc_ks_transport_diagnostic* out);
+
 /**
  * Read the precision policy that resolved for a prepared run. Both the
  * availability query (a NULL \p out) and the copy-out are gated on whether a
@@ -924,6 +950,11 @@ VIBEQC_API vibeqc_status vibeqc_batch_get_ks_diagnostic(const vibeqc_batch* batc
                                                         vibeqc_ks_diagnostic* out,
                                                         vibeqc_ks_iteration* history,
                                                         uint32_t history_capacity);
+
+/** Input-ordered cumulative CUDA KS transport. Geometry rebuilds retain the
+ * retired owner's counters and add the replacement owner's setup. */
+VIBEQC_API vibeqc_status vibeqc_batch_get_ks_transport_diagnostic(
+    const vibeqc_batch* batch, uint32_t index, vibeqc_ks_transport_diagnostic* out);
 
 /**
  * Enable or disable replacement of retained warm-start densities.

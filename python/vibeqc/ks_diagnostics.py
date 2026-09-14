@@ -69,6 +69,22 @@ class KsDiagnostic:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class KsTransportDiagnostic:
+    """Cumulative measured transfers and synchronization for prepared CUDA KS."""
+
+    setup_h2d_bytes: int
+    density_h2d_bytes: int
+    scalar_d2h_bytes: int
+    matrix_d2h_bytes: int
+    synchronizations: int
+    iterations: int
+    occupation_stabilized_proposals: int
+
+    def to_payload(self):
+        return asdict(self)
+
+
 def _components(value):
     return KsEnergyComponents(
         value.nuclear_energy,
@@ -132,4 +148,31 @@ def read_ks_diagnostic(library, handle, index=None):
         density_change_max=summary.density_change_max,
         physical_residual_max=summary.physical_residual_max,
         history=tuple(rows),
+    )
+
+
+def read_ks_transport_diagnostic(library, handle, index=None):
+    """Snapshot cumulative CUDA movement; old/CPU libraries return None."""
+    name = (
+        "vibeqc_calculation_get_ks_transport_diagnostic"
+        if index is None
+        else "vibeqc_batch_get_ks_transport_diagnostic"
+    )
+    query = getattr(library, name, None)
+    if query is None:
+        return None
+    prefix = (handle,) if index is None else (handle, index)
+    value = _native.KsTransportDiagnosticDescriptor(
+        ctypes.sizeof(_native.KsTransportDiagnosticDescriptor), _native.ABI_VERSION
+    )
+    status = query(*prefix, ctypes.byref(value))
+    if status == _native.STATUS_NOT_IMPLEMENTED:
+        return None
+    _native.check(library, status)
+    return KsTransportDiagnostic(
+        **{
+            field: getattr(value, field)
+            for field, _ in value._fields_
+            if field not in ("struct_size", "abi_version")
+        }
     )

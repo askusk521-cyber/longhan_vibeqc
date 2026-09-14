@@ -119,6 +119,30 @@ vibeqc_status vibeqc_calculation_get_ks_diagnostic(const vibeqc_calculation* cal
                                          history_capacity);
 }
 
+vibeqc_status vibeqc_calculation_get_ks_transport_diagnostic(
+    const vibeqc_calculation* calculation, vibeqc_ks_transport_diagnostic* out) {
+  if (!calculation) return VIBEQC_STATUS_INVALID_ARGUMENT;
+  if (out && !vibeqc::api::valid_descriptor(out)) return VIBEQC_STATUS_ABI_MISMATCH;
+  std::lock_guard<std::recursive_mutex> lock(calculation->context->mutex);
+  try {
+    const auto source = calculation->plan->ks_transport_diagnostic();
+    if (!source) return VIBEQC_STATUS_NOT_IMPLEMENTED;
+    if (out)
+      *out = {sizeof(*out),
+              VIBEQC_ABI_VERSION,
+              source->setup_h2d_bytes,
+              source->density_h2d_bytes,
+              source->scalar_d2h_bytes,
+              source->matrix_d2h_bytes,
+              source->synchronizations,
+              source->iterations,
+              source->occupation_stabilized_proposals};
+    return VIBEQC_STATUS_SUCCESS;
+  } catch (...) {
+    return vibeqc::api::map_exception(&calculation->context->last_detail);
+  }
+}
+
 vibeqc_status vibeqc_calculation_get_precision_provenance(const vibeqc_calculation* calculation,
                                                           vibeqc_precision_provenance* out) {
   if (calculation == nullptr) {
