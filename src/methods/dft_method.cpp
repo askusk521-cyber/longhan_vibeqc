@@ -558,8 +558,7 @@ class KsPreparedBatch final : public PreparedBatch {
 
   void set_warm_start_updates(bool enabled) override { warm_updates_ = enabled; }
 
-  std::optional<KsTransportDiagnostic> ks_transport_diagnostic(
-      std::size_t index) const override {
+  std::optional<KsTransportDiagnostic> ks_transport_diagnostic(std::size_t index) const override {
     const auto& item = items_.at(index);
 #if VIBEQC_HAS_CUDA
     if (auto* cuda = item.plan ? item.plan->cuda_plan() : nullptr) {

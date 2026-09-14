@@ -84,8 +84,8 @@ vibeqc_status vibeqc_batch_get_ks_diagnostic(const vibeqc_batch* batch, uint32_t
                                          history_capacity);
 }
 
-vibeqc_status vibeqc_batch_get_ks_transport_diagnostic(
-    const vibeqc_batch* batch, uint32_t index, vibeqc_ks_transport_diagnostic* out) {
+vibeqc_status vibeqc_batch_get_ks_transport_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                                       vibeqc_ks_transport_diagnostic* out) {
   if (!batch || index >= batch->plan->size()) return VIBEQC_STATUS_INVALID_ARGUMENT;
   if (out && !vibeqc::api::valid_descriptor(out)) return VIBEQC_STATUS_ABI_MISMATCH;
   std::lock_guard<std::recursive_mutex> lock(batch->context->mutex);
