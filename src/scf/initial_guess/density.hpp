@@ -4,6 +4,7 @@
 #include <optional>
 #include <utility>
 
+#include "scf/initial_guess/eigen_operation.hpp"
 #include "scf/reference/linalg.hpp"
 
 namespace vibeqc::core {
@@ -33,6 +34,15 @@ void mix_open_shell_frontier_orbitals(Matrix& beta_coefficients, std::size_t n,
 /** Restore a warm spin density's symmetry and Tr(D S), clearing empty spins. */
 void normalize_spin_density(Matrix& density, const Matrix& overlap, std::size_t n,
                             std::size_t target_electrons);
+/** Validate and normalize supplied D independently of X/hcore or a provider.
+ * Batch owners may reject malformed warm inputs before allocating shared CUDA
+ * resources. These functions have no eigensolve or tracing side effects. */
+Matrix normalized_warm_density(const core::System& system, const integrals::IntegralData& ints,
+                               const Matrix& input);
+std::pair<Matrix, Matrix> normalized_warm_uhf_density(const integrals::IntegralData& ints,
+                                                      std::size_t alpha_occupied,
+                                                      std::size_t beta_occupied,
+                                                      const Matrix& input);
 /** Prepare a restricted core guess or a finite, normalized warm density.
  * Supplied density is validated/normalized without reading hcore. Its optional
  * core frame is empty unless explicitly requested; a cold density always has
@@ -44,13 +54,15 @@ Matrix prepare_initial_density(
     const core::System& system, const integrals::IntegralData& ints, const Matrix& orthogonalizer,
     std::size_t occupied, const std::vector<double>* initial_density,
     std::optional<EigenResult>& orbitals,
-    InitialOrbitalRequest request = InitialOrbitalRequest::ColdDensityOnly);
+    InitialOrbitalRequest request = InitialOrbitalRequest::ColdDensityOnly,
+    const EigenOperation& eigen = {});
 /** Prepare independent unit-occupation spin guesses with the same warm-state contract. */
 std::pair<Matrix, Matrix> prepare_initial_uhf_density(
     const integrals::IntegralData& ints, const Matrix& orthogonalizer, std::size_t alpha_occupied,
     std::size_t beta_occupied, const std::vector<double>* initial_density,
     std::optional<EigenResult>& alpha_orbitals, std::optional<EigenResult>& beta_orbitals,
-    InitialOrbitalRequest request = InitialOrbitalRequest::ColdDensityOnly);
+    InitialOrbitalRequest request = InitialOrbitalRequest::ColdDensityOnly,
+    const EigenOperation& eigen = {});
 
 }  // namespace vibeqc::scf::initial_guess
 #endif

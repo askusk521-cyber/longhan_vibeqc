@@ -292,7 +292,10 @@ def validate_host_record(record: dict) -> dict:
                 raise ValueError("unknown eigensolve reason")
             _integer(row["item"], "item", -1)
             _integer(row["nbf"], "nbf")
-            if row["name"] == "reference_eigensolve" and not row["nbf"]:
+            if (
+                row["name"] in {"reference_eigensolve", "device_eigensolve"}
+                and not row["nbf"]
+            ):
                 raise ValueError("empty actual eigensolve dimension")
             if row["finished"] is not True or type(row["failed"]) is not bool:
                 raise ValueError("unfinished host trace region")
@@ -343,7 +346,10 @@ def aggregate_host(records: list[dict]) -> dict:
     if not records:
         raise ValueError("missing host trace records")
     phases = defaultdict(lambda: {"calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0})
-    solves = []
+    solves, device_solves = [], []
+    device_totals = defaultdict(
+        lambda: {"calls": 0, "failed_calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0}
+    )
     totals = defaultdict(
         lambda: {"calls": 0, "failed_calls": 0, "wall_ms": 0.0, "cpu_ms": 0.0}
     )
@@ -358,14 +364,17 @@ def aggregate_host(records: list[dict]) -> dict:
                 phase["cpu_ms"] = None
             elif phase["cpu_ms"] is not None:
                 phase["cpu_ms"] += values["cpu_exclusive_ms"][index]
-            if row["name"] != "reference_eigensolve":
+            if row["name"] not in {"reference_eigensolve", "device_eigensolve"}:
                 continue
             path, parent = [], row["parent"]
             while parent >= 0:
                 path.append({"region": parent, "name": rows[parent]["name"]})
                 parent = rows[parent]["parent"]
-            solves.append({"root_id": record["id"], "ancestors": path[::-1], **row})
-            total = totals[row["reason"]]
+            is_device = row["name"] == "device_eigensolve"
+            (device_solves if is_device else solves).append(
+                {"root_id": record["id"], "ancestors": path[::-1], **row}
+            )
+            total = (device_totals if is_device else totals)[row["reason"]]
             total["calls"] += 1
             total["failed_calls"] += row["failed"]
             total["wall_ms"] += row["wall_ms"]
@@ -380,6 +389,8 @@ def aggregate_host(records: list[dict]) -> dict:
         ],
         "reference_eigensolves": solves,
         "eigensolves_by_reason": dict(totals),
+        "device_eigensolves": device_solves,
+        "device_eigensolves_by_reason": dict(device_totals),
         "interpretation": (
             "Reference eigensolve leaf rows count actual calls, including failures. "
             "Item indices are local to the enclosing native bucket; root and ancestor IDs "

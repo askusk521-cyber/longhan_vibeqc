@@ -1002,6 +1002,26 @@ int main() {
             require_matrix_close(replay[0].scf.forces, initial_forces, 5.0e-9,
                                  "DF cache budget change altered forces");
           }
+          // A post-plan overlap failure must shrink the runnable subset,
+          // preserve source ordering and release the incompatible fixed stride.
+          require(prepared_cache.size() == 2 && prepared_cache[1], "missing fault-injection cache");
+          auto& bad_overlap = prepared_cache[1]->one_electron.overlap;
+          std::fill(bad_overlap.begin(), bad_overlap.end(), 0.0);
+          const auto isolated = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
+                                    bucket_initial, 0, nullptr, &prepared_cache, &overlap_views);
+          require(isolated[0].status == VIBEQC_STATUS_SUCCESS &&
+                      isolated[1].status == VIBEQC_STATUS_NUMERICAL_FAILURE &&
+                      vibeqc::scf::cuda_density_fitting_jk_plan_batch_size(cached.plan) == 1,
+                  "failed device setup poisoned its neighbor or kept the old stride");
+          require_matrix_close(isolated[0].scf.forces, initial_forces, 5e-9,
+                               "failed setup changed a neighbor's complete forces");
+          require(prepared_cache.empty() && overlap_owners[1].numeric_capacity_bytes() == 0,
+                  "failed subset published stale prepared state");
+          const auto recovered = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
+                                     bucket_initial, 0, nullptr, &prepared_cache, &overlap_views);
+          require(recovered[0].status == VIBEQC_STATUS_SUCCESS &&
+                      recovered[1].status == VIBEQC_STATUS_SUCCESS,
+                  "device setup subset did not recover its original source map");
           // A changed metric cutoff is a changed Hamiltonian even at fixed
           // geometry. Compare cached replay with an independently built plan
           // in both resident and source-backed storage modes.

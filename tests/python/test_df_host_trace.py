@@ -13,6 +13,14 @@ from benchmarks.df_component_ledger import (
 )
 
 
+def actual_calls(components, reason):
+    """Work-elimination tests count leaves from either qualified provider."""
+    return sum(
+        components[key].get(reason, {}).get("calls", 0)
+        for key in ("eigensolves_by_reason", "device_eigensolves_by_reason")
+    )
+
+
 def host_record():
     base = {"reason": "overlap", "item": 0, "nbf": 2, "finished": True, "failed": False}
     return {
@@ -49,6 +57,18 @@ def test_host_ledger_counts_actual_leaves_and_keeps_clocks_separate(tmp_path):
     path.write_text(path.read_text() * 2)
     with pytest.raises(ValueError, match="duplicate"):
         read_host_trace(path)
+
+
+def test_device_solver_reasons_separate_setup_and_finalization(tmp_path):
+    """Adding cold setup calls must not inflate the final-provider ablation."""
+    record = host_record()
+    record["regions"][1]["name"] = "device_eigensolve"
+    path = tmp_path / "device.host.jsonl"
+    path.write_text(json.dumps(record) + "\n")
+    summary = aggregate_host(read_host_trace(path))
+    assert summary["eigensolves_by_reason"] == {}
+    assert summary["device_eigensolves_by_reason"]["overlap"]["calls"] == 1
+    assert summary["device_eigensolves"][0]["item"] == 0
 
 
 @pytest.mark.parametrize("suffix", ("", "\n{"))
@@ -152,7 +172,7 @@ def test_native_solver_calls_include_warm_preparation_and_finalization(
             monkeypatch.setenv("VIBEQC_DF_EAGER_CORE_GUESS", "1")
             eager = batch.execute(strict=True, properties=("energy",))
             eager_components = aggregate_host(read_host_trace(eager_path))
-            assert eager_components["eigensolves_by_reason"]["core_guess"]["calls"] == 2
+            assert actual_calls(eager_components, "core_guess") == 2
             assert eager.energies == pytest.approx(warm.energies, abs=1e-10)
 
 
@@ -194,7 +214,7 @@ def test_overlap_cache_survives_output_replans_and_isolates_changed_items(
         return result, aggregate_host(read_host_trace(path))
 
     def overlap_calls(summary):
-        return summary["eigensolves_by_reason"].get("overlap", {}).get("calls", 0)
+        return actual_calls(summary, "overlap")
 
     with calculator.prepare_batch([atoms, atoms]) as batch:
         cold, cold_trace = traced(batch)
@@ -307,10 +327,8 @@ def test_prepared_single_overlap_survives_energy_force_dispatch(
             )
             monkeypatch.delenv("VIBEQC_DF_HOST_TRACE")
             trace = aggregate_host(read_host_trace(path))
-            assert trace["eigensolves_by_reason"].get("overlap", {}).get(
-                "calls", 0
-            ) == (step == 0)
-            assert trace["eigensolves_by_reason"]["core_guess"]["calls"] == 1
+            assert actual_calls(trace, "overlap") == (step == 0)
+            assert actual_calls(trace, "core_guess") == 1
             values.append(out.energy)
             if force:
                 gradients.append(list(forces))
@@ -363,9 +381,7 @@ def test_independent_fock_overlap_owners_distinguish_same_size_basis(
             finally:
                 monkeypatch.delenv("VIBEQC_DF_HOST_TRACE")
             trace = aggregate_host(read_host_trace(path))
-            return result, trace["eigensolves_by_reason"].get("overlap", {}).get(
-                "calls", 0
-            )
+            return result, actual_calls(trace, "overlap")
 
         cold_a, count_a = traced(first, compute_forces=False)
         cold_b, count_b = traced(second, compute_forces=False)

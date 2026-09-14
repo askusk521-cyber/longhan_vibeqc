@@ -285,6 +285,11 @@ def main() -> None:
         help="compare original eager/rebuilt preparation with one #309 increment",
     )
     parser.add_argument(
+        "--setup-eigen-ablation",
+        action="store_true",
+        help="compare reference/device cold setup with identical preparation work and device finalization",
+    )
+    parser.add_argument(
         "--final-eigen-ablation",
         action="store_true",
         help="compare CPU-reference and ordinary device final eigen providers with identical preparation",
@@ -326,6 +331,14 @@ def main() -> None:
         parser.error("--preparation-ablation requires --host-workloads")
     if args.preparation_ablation and args.eager_core_ablation:
         parser.error("select one preparation ablation")
+    if args.setup_eigen_ablation and not args.host_workloads:
+        parser.error("--setup-eigen-ablation requires --host-workloads")
+    if args.setup_eigen_ablation and (
+        args.preparation_ablation
+        or args.eager_core_ablation
+        or args.final_eigen_ablation
+    ):
+        parser.error("select one preparation, final eigen or setup eigen ablation")
     if args.final_eigen_ablation and not args.host_workloads:
         parser.error("--final-eigen-ablation requires --host-workloads")
     if args.final_eigen_ablation and (
@@ -362,7 +375,9 @@ def main() -> None:
         payload["execution"]["benchmark"] = "issue206_df_matrix.py --host-workloads"
         payload["execution"]["profiled"] = args.host_trace_dir is not None
         payload["matched_contract"]["comparison"] = (
-            "reference versus ordinary device final eigen provider; no external parity claim"
+            "reference/device setup provider ablation; no external parity claim"
+            if args.setup_eigen_ablation
+            else "reference versus ordinary device final eigen provider; no external parity claim"
             if args.final_eigen_ablation
             else f"original eager/rebuilt preparation versus {args.preparation_ablation}; no external parity claim"
             if args.preparation_ablation
@@ -391,6 +406,7 @@ def main() -> None:
                     eager_core_ablation=args.eager_core_ablation,
                     preparation_ablation=args.preparation_ablation,
                     final_eigen_ablation=args.final_eigen_ablation,
+                    setup_eigen_ablation=args.setup_eigen_ablation,
                     trace_directory=None
                     if args.host_trace_dir is None
                     else args.host_trace_dir.resolve() / stem,

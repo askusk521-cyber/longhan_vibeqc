@@ -24,7 +24,9 @@ def test_final_provider_ablation_rejects_missing_or_unexpected_solves(
     count = 4 * (2 if method == "uhf" else 1)
     record = {
         "eigensolves_by_reason": {"final_fock": {"calls": count if reference else 0}},
-        "exclusive_phases": {"device_eigensolve": {"calls": 0 if reference else count}},
+        "device_eigensolves_by_reason": {
+            "final_fock": {"calls": 0 if reference else count}
+        },
     }
     validate_final_eigen_counts(
         record, batch_size=4, method=method, reference=reference
@@ -32,7 +34,7 @@ def test_final_provider_ablation_rejects_missing_or_unexpected_solves(
     for group, name in (
         ("eigensolves_by_reason", "final_fock"),
         ("eigensolves_by_reason", "fallback"),
-        ("exclusive_phases", "device_eigensolve"),
+        ("device_eigensolves_by_reason", "final_fock"),
     ):
         changed = copy.deepcopy(record)
         changed[group].setdefault(name, {"calls": 0})["calls"] += 1
@@ -44,7 +46,7 @@ def test_final_provider_ablation_rejects_missing_or_unexpected_solves(
     group, name = (
         ("eigensolves_by_reason", "final_fock")
         if reference
-        else ("exclusive_phases", "device_eigensolve")
+        else ("device_eigensolves_by_reason", "final_fock")
     )
     missing[group][name]["calls"] = 0
     with pytest.raises(RuntimeError, match="declared provider"):
@@ -240,3 +242,38 @@ def test_preparation_ablation_rejects_wrong_actual_counts(
         broken[group][name]["calls"] += 1
         with pytest.raises(RuntimeError, match="declared solve/cache policy"):
             validate(broken)
+
+
+@pytest.mark.parametrize("reference", (False, True))
+@pytest.mark.parametrize(
+    "workload,overlap,core",
+    (("cold-start", 4, 4), ("energy-only", 0, 0), ("changed-geometry", 1, 0)),
+)
+def test_setup_provider_counts_reject_wrong_provider(
+    reference, workload, overlap, core
+):
+    """Missing or unexpectedly substituted leaves cannot pass setup promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_setup_eigen_counts
+
+    record = {
+        key: {
+            "overlap": {"calls": overlap if selected else 0},
+            "core_guess": {"calls": core if selected else 0},
+        }
+        for key, selected in (
+            ("eigensolves_by_reason", reference),
+            ("device_eigensolves_by_reason", not reference),
+        )
+    }
+    validate_setup_eigen_counts(
+        record, batch_size=4, workload=workload, reference=reference
+    )
+    for key in record:
+        changed = copy.deepcopy(record)
+        changed[key]["overlap"]["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared provider"):
+            validate_setup_eigen_counts(
+                changed, batch_size=4, workload=workload, reference=reference
+            )
