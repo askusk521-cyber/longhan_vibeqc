@@ -9,7 +9,7 @@ After the capture repair in #324, the 28-GiB resident plan still did not finish
 cold energy after more than 15 minutes (Slurm 9521). The 100-second follow-up
 (9526) sampled GPU waiting in resident three-center materialization at both
 30 and 60 seconds, before SCF. The GPU stayed near full utilization with about
-14.8 GiB allocated. The requested CUDA trace did not appear because its first
+14,680–14,782 MiB allocated. The requested CUDA trace did not appear because its first
 operation never completed. These are failed/terminated diagnostics, not endpoints.
 
 Independent PySCF RHF DF energy and complete analytic forces converged with
