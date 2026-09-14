@@ -29,11 +29,16 @@ inline vibeqc_status generate_metric_panel(CudaDensityFittingJkPlan& plan, std::
   // it uses the same output capacity and avoids a cascade of tiny GEMMs.
   if (auxiliaries <= 4) {
     runtime::cuda_trace::trace_counter("fused_metric_panel_productions", 1);
+    // Logical (pair,Q,P) work, not an assertion about instruction count or
+    // elapsed-time amplification. Capture counters describe construction only.
+    runtime::cuda_trace::trace_counter("fused_source_auxiliary_evaluations",
+                                       pairs * auxiliaries * plan.naux);
     return generate_cuda_density_fitting_transformed_tile(
         plan.integral_source, system, pair_begin, pairs, auxiliary_begin, auxiliaries, -1,
         plan.inverse_square_roots + system * plan.naux * plan.naux,
         reinterpret_cast<void*>(plan.stream), output, detail);
   }
+  runtime::cuda_trace::trace_counter("raw_panel_source_auxiliary_evaluations", pairs * plan.naux);
   const double one = 1, zero = 0;
   runtime::cuda_trace::TraceRegion transform("transformed_three_center_generation", plan.stream);
   for (std::size_t begin = 0; begin < plan.naux; begin += raw_tile) {

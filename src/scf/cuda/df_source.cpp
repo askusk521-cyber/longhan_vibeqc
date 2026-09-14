@@ -7,6 +7,7 @@
 
 #include "molecule/basis.hpp"
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/df_progress_trace.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/checked_layout.hpp"
 #include "scf/cuda/df_source_internal.hpp"
@@ -183,6 +184,7 @@ vibeqc_status create_cuda_density_fitting_integral_source(
     int device_id, const std::vector<core::System>& orbital_systems,
     const std::vector<core::System>& auxiliary_systems, CudaDensityFittingIntegralSource** source,
     std::vector<double>& metrics, std::size_t& nbf, std::size_t& naux, std::string& detail) {
+  runtime::df_progress::Scope progress("source_setup");
   if (source == nullptr) {
     detail = "bounded DF source output handle is null";
     return VIBEQC_STATUS_INVALID_ARGUMENT;

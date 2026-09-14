@@ -194,3 +194,84 @@ reference fallback fail the gate. Source/library identities and SCF iteration/
 retry branches must match. Run at least five interleaved samples in clean and
 separate traced invocations; never multiply ratios from historical binaries to
 claim the combined improvement. External parity remains the matched #206 gate.
+
+## Incomplete-stage journal for #308
+
+`VIBEQC_DF_PROGRESS_TRACE=/absolute/fresh.jsonl` writes a separate append-only
+journal. Every BEGIN, VALUE and END line is closed immediately. A killed process
+therefore leaves its active stage visible without waiting for the enclosing
+operation to finish. This guarantees process-exit visibility, not power-loss
+persistence (`fsync` is not used). Missing END records and partial last lines
+remain incomplete evidence.
+
+The journal covers existing host scopes (including final validation and force
+response), one-electron/source setup, metric factorization, raw generation,
+metric GEMM, compact SCF and host DIIS retry. CUDA component boundaries wait on
+their own event **only when progress tracing is enabled**; this adds intrusive
+synchronization beyond ordinary component tracing. Graph construction never
+records or waits on CUDA events and ends as `graph_constructed`. A stream END
+means submitted work completed; a host END means the scope returned or unwound.
+Neither status asserts numerical convergence. Dispatch statuses and device
+convergence readbacks remain separate observations.
+
+K records planner AO-pair/auxiliary tiles and executed AO rows/output auxiliary
+widths. `fused_source_auxiliary_evaluations` counts logical `(pair,Q,P)` recurrence
+work, while `raw_panel_source_auxiliary_evaluations` counts `(pair,P)` work for
+the GEMM route. Both describe submitted work within their execution mode;
+capture counts are construction templates, not executed evaluations. A killed
+kernel's pre-launch counts do not imply it completed. Source-backed J records
+its own two raw passes, independently of K's transformed-panel work.
+
+Compact scopes record the solve epoch, caller-density seed, graph construction
+attempts, host graph replays and cumulative per-system device iterations after
+synchronization. Retry scopes identify their original caller-density seed and
+own iteration numbers. Do not sum cumulative readbacks, multiply graph replay
+counts by a configured iteration limit, or report only the final retry's
+iteration count as total SCF work. For a killed graph replay the final device
+iteration count is unknown. The journal does not inspect every tail-launched
+kernel; use an independently bounded device timeline when that detail is needed.
+
+Read a completed or interrupted journal with:
+
+```bash
+python -m benchmarks.df_progress_ledger /path/progress.jsonl \
+  --output /path/new-progress-summary.json
+```
+
+The summary subtracts immediate completed children for exclusive diagnostic
+wall intervals, and leaves open scopes explicit. Its observations preserve
+parent IDs, execution modes and ordering. Concurrent root wall times must not
+be summed into endpoint time. Existing clean #206 runners reject an ambient
+progress trace, just as they reject ambient component tracing.
+
+`benchmarks/issue308_stage_probe.py` and `benchmarks/df_stage_probe.cpp` provide
+bounded setup/fixed-D J/dense-K/occupied-K experiments. Prepare an input with
+`python -m benchmarks.issue308_stage_probe --prepare --case CASE --output INPUT`.
+The input stores independently converged PySCF orbitals, overlap, J/K and the
+metric rank policy. An optional `--checkpoint` must match the exact geometry
+and basis and pass the same physical-state checks. The native probe checks its
+full overlap and imported occupied S-orthogonality before constructing a DF
+plan. Its D is a diagnostic seed, not a cold-start endpoint.
+
+Compile the probe against the unified Release library, then execute through a
+finite Slurm allocation. For example, from the repository root:
+
+```bash
+c++ -std=c++20 -O3 -Iinclude -Isrc -I/path/to/cuda/include \
+  benchmarks/df_stage_probe.cpp -Lbuild/cuda -Wl,-rpath,"$PWD/build/cuda" \
+  -lvibeqc -ldl -o .artifacts/df-stage-probe
+srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 --time=00:06:00 \
+  env PYTHONPATH=python:. python -m benchmarks.issue308_stage_probe \
+  --input INPUT --output NEW_RUN --library build/cuda/libvibeqc.so \
+  --probe .artifacts/df-stage-probe --progress --timeout 300
+```
+
+Zero probe tile arguments request full dimensions, not a public budget-policy
+change. `--ao-pairs 8192 --auxiliary-tile 128` at 768 AOs exercises the previously
+reported planner shape and its rounded 7680-pair allocation. Use
+`--operation dense` or `--operation occupied` for a bounded K-only probe. The runner retains
+source/library identity, actual loaded-library identity from the probe, input
+hashes, build cache, all DF diagnostic variables, Slurm visibility, memory
+samples, completed rows and timeout/failure disposition. Its memory sampling
+makes all its timings diagnostic, even without `--progress`; existing #206
+runners own separate clean endpoint timing.

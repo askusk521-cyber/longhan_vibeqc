@@ -2,6 +2,7 @@
 #include <new>
 
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_generated_tiles.hpp"
 #include "scf/cuda/df_jk_internal.hpp"
 #include "scf/cuda/df_jk_kernels.hpp"
@@ -37,6 +38,10 @@ vibeqc_status build_occupied_exchange(CudaDensityFittingJkPlan& plan, std::size_
   const auto auxiliary_tile = full_pairs && plan.streamed
                                   ? std::min(plan.auxiliary_tile, capacity / plan.matrix_elements)
                                   : plan.auxiliary_tile;
+  runtime::df_progress::number("planner_ao_pair_tile", plan.ao_pair_tile);
+  runtime::df_progress::number("planner_auxiliary_tile", plan.auxiliary_tile);
+  runtime::df_progress::number("executed_ao_rows", rows);
+  runtime::df_progress::number("executed_auxiliary_tile", auxiliary_tile);
   const auto row_tiles = (plan.nbf + rows - 1) / rows;
   std::vector<double> host_tile;
   if (plan.streamed && !plan.integral_source) {

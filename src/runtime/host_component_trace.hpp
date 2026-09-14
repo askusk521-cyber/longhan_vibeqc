@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "runtime/df_progress_trace.hpp"
 #include "scf/reference/observation.hpp"
 
 namespace vibeqc::runtime::host_trace {
@@ -160,7 +161,9 @@ inline void write(const State& state) {
  */
 class Region {
  public:
-  explicit Region(const char* name, std::size_t nbf = 0) noexcept {
+  explicit Region(const char* name, std::size_t nbf = 0) noexcept : progress_(name) {
+    df_progress::number("nbf", nbf);
+    df_progress::number("item_plus_one", static_cast<std::uint64_t>(active_item + 1));
     auto* state = detail::active;
     try {
       if (!state) {
@@ -197,6 +200,7 @@ class Region {
   }
   ~Region() { finish(); }
   void finish() noexcept {
+    progress_.finish();
     if (!state_) return;
     detail::end(index_, state_->regions[index_].exceptions);
     state_ = nullptr;
@@ -214,6 +218,7 @@ class Region {
   Region& operator=(const Region&) = delete;
 
  private:
+  df_progress::Scope progress_;
   std::unique_ptr<detail::State> owner_;
   detail::State* state_{};
   const observation::Observer* previous_observer_{};

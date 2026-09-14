@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
 #include "scf/cuda/df_scf_factor.hpp"
@@ -30,6 +31,7 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
     double density_tolerance, std::vector<double>& final_alpha_density,
     std::vector<double>& final_beta_density, std::vector<CudaDensityFittingDeviceScfItem>& results,
     std::string& detail) {
+  runtime::df_progress::Scope progress("compact_uhf_scf");
   detail.clear();
   if (plan) {
     const auto epoch_status = begin_scf_final_state_solve(*plan, detail);
@@ -41,6 +43,8 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
     detail = "CUDA DF device UHF SCF arguments are invalid";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  runtime::df_progress::number("solve_epoch", plan->final_state_solve_epoch);
+  runtime::df_progress::label("seed_generation", "caller_density");
   const std::size_t batch_size = plan->batch_size;
   const std::size_t matrix_elements = plan->matrix_elements;
   const std::size_t expected = batch_size * matrix_elements;
@@ -375,6 +379,7 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
       cuda_error = cudaStreamBeginCapture(plan->stream, cudaStreamCaptureModeThreadLocal);
     }
     if (cuda_error == cudaSuccess) {
+      runtime::df_progress::number("graph_construction_attempt", 1);
       status = launch_iteration(occupied_exchange, true);
       // As in RHF, capture records but does not execute an SCF update.
       cudaGraph_t captured = nullptr;
@@ -420,6 +425,7 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
     if (occupied_exchange && iteration == 0) {
       // The already-executed dense seed needs its convergence/limit readback.
     } else if (graph_replay) {
+      runtime::df_progress::number("host_graph_replay", 1);
       cuda_error = cudaGraphLaunch(iteration_graph.executable, plan->stream);
       if (cuda_error != cudaSuccess) {
         return cuda_failure(cuda_error, "replay CUDA DF UHF SCF Graph", detail);
@@ -456,6 +462,12 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
     if (cuda_error == cudaSuccess) cuda_error = cudaStreamSynchronize(plan->stream);
     if (cuda_error != cudaSuccess)
       return cuda_failure(cuda_error, "read CUDA DF device UHF SCF records", detail);
+    for (std::size_t system = 0; system < batch_size; ++system) {
+      runtime::df_progress::Scope readback("compact_iteration_readback");
+      runtime::df_progress::number("system", system);
+      runtime::df_progress::number("device_iterations", host_iterations[system]);
+      runtime::df_progress::number("converged", host_converged[system]);
+    }
     if (std::any_of(host_alpha_info.begin(), host_alpha_info.end(),
                     [](int value) { return value != 0; }) ||
         std::any_of(host_beta_info.begin(), host_beta_info.end(),

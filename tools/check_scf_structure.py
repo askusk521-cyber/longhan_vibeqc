@@ -153,8 +153,16 @@ CUDA_ALLOWED["cuda_df_runtime"] = tuple(
     "molecule/basis.hpp",
     "runtime/",
 )
-CUDA_MODULES["cuda_component_trace"] = ("runtime/cuda_component_trace",)
-CUDA_ALLOWED["cuda_component_trace"] = ("runtime/cuda_component_trace.hpp",)
+CUDA_MODULES["cuda_component_trace"] = (
+    "runtime/cuda_component_trace",
+    "runtime/df_progress_trace",
+)
+# The journal is a host-only sink shared by both collectors; it may not depend
+# on an SCF provider, plan, or scientific implementation.
+CUDA_ALLOWED["cuda_component_trace"] = (
+    "runtime/cuda_component_trace.hpp",
+    "runtime/df_progress_trace.hpp",
+)
 CUDA_MODULES["cuda_df_kernels"] = (
     "df_metric_kernels",
     "df_jk_kernels",

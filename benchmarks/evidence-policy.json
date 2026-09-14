@@ -50,6 +50,11 @@
       "reason": "Byte-verified compressed independent 96-atom PySCF checkpoint and physical density/overlap/force arrays, with exact input scripts and logs, retained to reproduce strict physical comparisons without repeating the expensive SCF oracle.",
       "sha256": "c369a5128ed36987073f6364290d4be455213e00f54e9cea04873def6d1f8c07"
     },
+    "benchmarks/results/issue308-stage-ledger/historical-followup.zip": {
+      "owner": "issue308-stage-ledger",
+      "reason": "Reviewed compact original 9531/9535/9536/9537 numerical measurements, reproduction source/input and first-24-pair scientific sample. Excludes logs, binaries and bulk exploratory rows; original identities and restoration audit are in historical-followup.json. Not performance promotion.",
+      "sha256": "e987a878948774de9a552b28bef1d45eb95084c34ea1b7a5f33037b1cc7ebe1e"
+    },
     "benchmarks/results/local-spaces-182/states.npz": {
       "owner": "local-spaces-182",
       "reason": "Scientific solver-state/trajectory arrays retained to replay calibration, local-space recovery, or proposal decisions; these are measurement inputs, not temporary restart checkpoints.",

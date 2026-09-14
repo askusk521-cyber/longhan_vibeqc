@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_metric_kernels.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
@@ -67,6 +68,9 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
     double relative_threshold, std::size_t auxiliary_tile, std::size_t ao_pair_tile,
     CudaDensityFittingJkPlan** plan, std::vector<CudaDensityFittingMetricDiagnostic>& diagnostics,
     std::string& detail, CudaDensityFittingIntegralSource* integral_source) {
+  runtime::df_progress::Scope preparation("df_plan_setup");
+  runtime::df_progress::number("planner_ao_pair_tile", ao_pair_tile);
+  runtime::df_progress::number("planner_auxiliary_tile", auxiliary_tile);
   // `integral_source` is transferred into this routine by the source-backed
   // wrapper.  Dispose of it on every pre-plan failure as well as failures
   // after `candidate` has taken ownership; this makes the transfer atomic
@@ -325,6 +329,8 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
     return fail_plan(candidate, cuda_failure(cuda_error, "symmetrize CUDA DF metrics", detail));
   }
 
+  runtime::df_progress::Scope metric_progress("metric_factorization");
+  runtime::df_progress::label("provider", "cusolverDnXsyevd");
   std::size_t solver_device_workspace_bytes = 0;
   std::size_t solver_host_workspace_bytes = 0;
   solver_status = cusolverDnXsyevd_bufferSize(
@@ -466,6 +472,14 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
           cuda_failure(cuda_error, "retain source-backed CUDA DF metric inverse", detail));
     }
   }
+  if (metric_progress.enabled()) {
+    // The journal needs a completed boundary before raw generation starts.
+    // The ordinary, unprofiled path retains its existing stream ordering.
+    cuda_error = cudaStreamSynchronize(candidate->stream);
+    if (cuda_error != cudaSuccess)
+      return fail_plan(candidate, cuda_failure(cuda_error, "trace metric completion", detail));
+  }
+  metric_progress.finish("stream_complete");
   if (!candidate->streamed && candidate->integral_source) {
     status = materialize_generated_tensor(*candidate, setup.inverse_square_roots, detail);
     if (status != VIBEQC_STATUS_SUCCESS) return fail_plan(candidate, status);

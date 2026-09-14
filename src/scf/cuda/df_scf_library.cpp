@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
 
@@ -134,6 +135,8 @@ vibeqc_status setup_device_solver(CudaDensityFittingJkPlan& plan, std::size_t nb
 vibeqc_status solve_device_batch(DeviceSolver& solver, std::size_t nbf, std::size_t batch_size,
                                  double* eigensystem, double* eigenvalues, int* info,
                                  std::string& detail) {
+  runtime::df_progress::label("eigen_provider",
+                              solver.xsyev ? "cusolverDnXsyevBatched" : "cusolverDnDsyevjBatched");
   cusolverStatus_t status = CUSOLVER_STATUS_SUCCESS;
   if (!solver.xsyev) {
     status = cusolverDnDsyevjBatched(

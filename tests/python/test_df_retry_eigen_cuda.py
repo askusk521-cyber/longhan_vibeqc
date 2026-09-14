@@ -6,6 +6,7 @@ import pytest
 from vibeqc import Calculator
 
 from benchmarks.df_component_ledger import aggregate_host, read_host_trace
+from benchmarks.df_progress_ledger import read_progress, summarize_progress
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1",
@@ -44,6 +45,8 @@ def test_diis_retry_provider_and_iteration_limit(
     )
     for reference in (True, False):
         path = tmp_path / f"retry-{reference}.jsonl"
+        progress_path = tmp_path / f"progress-{reference}.jsonl"
+        monkeypatch.setenv("VIBEQC_DF_PROGRESS_TRACE", str(progress_path))
         monkeypatch.setenv("VIBEQC_DF_REFERENCE_ITERATION_EIGEN", str(int(reference)))
         monkeypatch.setenv("VIBEQC_DF_HOST_TRACE", str(path))
         try:
@@ -65,8 +68,23 @@ def test_diis_retry_provider_and_iteration_limit(
                     assert result.failure_indices == tuple(range(count))
                     assert all(item.iterations == 1 for item in result.items)
         finally:
+            monkeypatch.delenv("VIBEQC_DF_PROGRESS_TRACE")
             monkeypatch.delenv("VIBEQC_DF_HOST_TRACE")
             monkeypatch.delenv("VIBEQC_DF_REFERENCE_ITERATION_EIGEN")
+        journal = read_progress(progress_path)
+        assert journal["complete"]
+        progress = summarize_progress(journal)
+        assert progress["phases"]["host:diis_retry_iteration"]["calls"] == 1
+        readbacks = [
+            r["value"]
+            for r in progress["observations"]
+            if r["key"] == "device_iterations"
+        ]
+        assert readbacks == [1] * count
+        assert any(
+            r["key"] == "seed_generation" and r["value"] == "original_caller_density"
+            for r in progress["observations"]
+        )
         components = aggregate_host(read_host_trace(path))
         expected = count * (1 + spin)
         for key, active in (
