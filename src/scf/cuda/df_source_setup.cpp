@@ -152,7 +152,11 @@ vibeqc_status create_cuda_density_fitting_integral_source_impl(
   HostBatch host;
   std::vector<const std::vector<double>*> no_warm(batch_size, nullptr);
   try {
-    if (!pack_host_batch(combined, no_warm, host, false) ||
+    // DF consumes only normalized basis metadata. The ordinary Direct packer
+    // also builds resident four-center task tables, which this source never
+    // uploads or replays and which grow rapidly with the shell count. Reuse
+    // matrix packing to preserve AO/primitive ordering without those tables.
+    if (!pack_host_batch(combined, no_warm, host, false, true) ||
         host.nbf != cartesian_nbf + cartesian_naux + 1U) {
       detail = "bounded DF source Cartesian packing failed";
       return VIBEQC_STATUS_INVALID_ARGUMENT;
