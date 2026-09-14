@@ -3,6 +3,9 @@
 #include "scf/cuda_density_fitting_final_state.hpp"
 
 namespace vibeqc::scf {
+std::uint64_t cuda_density_fitting_solve_epoch(const CudaDensityFittingJkPlan*) noexcept {
+  return 0;
+}
 vibeqc_status cuda_density_fitting_final_state_token(const CudaDensityFittingJkPlan*, std::size_t,
                                                      CudaDfFinalStateToken& token,
                                                      std::string& detail) {

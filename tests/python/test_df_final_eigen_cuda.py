@@ -24,6 +24,8 @@ def test_tiny_final_provider_budget_rejects_without_reference_retry(
     from vibeqc import _native
 
     assert os.environ.get("SLURM_JOB_ID")
+    # Provider substitution must hold final work fixed after candidate reuse.
+    monkeypatch.setenv("VIBEQC_DF_FORCE_FINAL_REBUILD", "1")
     atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
     calc = Calculator(
         method=method,
@@ -58,6 +60,8 @@ def test_final_provider_matches_reference_across_replans(
     final frame. A bad neighbor must not overwrite an earlier good item.
     """
     assert os.environ.get("SLURM_JOB_ID")
+    # Provider substitution must hold final work fixed after candidate reuse.
+    monkeypatch.setenv("VIBEQC_DF_FORCE_FINAL_REBUILD", "1")
     atoms = [("O", (0, 0, 0)), ("H", (0, 0, 1.8))]
     if method == "rhf":
         atoms.append(("H", (1.7, 0, -0.6)))
@@ -108,6 +112,7 @@ def test_final_provider_matches_reference_across_replans(
                     batch_size=batch_size,
                     method=method,
                     reference=reference,
+                    strict_energy=method == "rhf" and "forces" not in properties,
                 )
                 assert all(item.executed_backend == "cuda" for item in result.items)
                 outputs.append(result)

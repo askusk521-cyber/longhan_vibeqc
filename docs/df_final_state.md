@@ -2,10 +2,9 @@
 
 The internal `scf/solver/final_state.hpp` contract implements slice A of issue
 #311. It is independent of an eigensolver backend. The CUDA snapshot producer
-below retains candidates for this contract; SCF finalizer integration and
-complete-force endpoint qualification remain subsequent slices. These internal
-interfaces change no public C/Python result layout or production finalization
-behavior.
+below retains candidates for this contract. RHF energy-only CUDA finalization
+now consumes it; UHF, complete forces and physical-reference export remain
+subsequent consumers. The public C/Python result layout is unchanged.
 
 A candidate binds its prepared basis/geometry/representation/device owner,
 source item, solve epoch, orbital and density generations, resolved J/K model
@@ -104,3 +103,36 @@ storage, stale owner/model/epoch/generation/occupation tokens, corrupt device
 generation/info, invalid and nonconverged replay, epoch exhaustion and recovery.
 Physical candidate checks use the independent contract and analytic F/S/D.
 Production selection and complete-force performance remain the next integration.
+
+
+## RHF energy-only selection
+
+CUDA RHF energy-only requests now read the explicitly successful device
+candidate, verify its exact returned-D witness, evaluate current physical J/K,
+and run strict selection. A qualifying state uses one physical Fock evaluation
+and no final solve. Necessary corrections use the qualified ordinary provider,
+project and re-evaluate D, and must pass all invariants and the energy-change
+gate within sixteen corrections. The larger consumer budget covers the strict
+current-F convergence observed after cold and changed-geometry SCF; no numerical
+gate is relaxed. Provider failures propagate without a hidden
+host J/K substitution. Failed strict selection clears the convergence claim.
+
+Host DIIS recovery supplies no compact candidate. Its current solve epoch and
+an offset generation range distinguish recovered D from compact iterations
+without invalidating another item's token. It therefore enters real correction.
+RHF force/reference requests and UHF retain their separately qualified consumers
+until the next integration; energy-only selection never constructs W or invokes
+DF derivative consumers.
+
+`VIBEQC_DF_FORCE_FINAL_REBUILD=1` forces actual solve/project/evaluate work even
+when a candidate qualifies. `VIBEQC_DF_REFERENCE_FINAL_EIGEN=1` additionally
+selects the independent reference provider and also forces that work. Existing
+setup/final provider ablations explicitly force final rebuilding on both sides
+so their execution remains provider substitution. Normal preparation ablations
+retain the normal selection path. The host ledger records every actual physical
+Fock, validation and strict correction, plus the accepted reuse/corrected outcome.
+
+The composed resource plan reserves `8 * (32*n*n + 4*n)` additional host bytes
+for one serialized item's detached candidates, verified output and bounded
+validation/correction products. The existing per-item device snapshots and
+independent ordinary correction/retry workspace remain separately charged.

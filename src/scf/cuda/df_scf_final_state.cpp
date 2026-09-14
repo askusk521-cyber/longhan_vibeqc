@@ -113,6 +113,13 @@ void publish_scf_final_frames(PersistentScfState& state,
 
 namespace vibeqc::scf {
 using namespace cuda_df;
+std::uint64_t cuda_density_fitting_solve_epoch(const CudaDensityFittingJkPlan* plan) noexcept {
+  // Recovery cannot manufacture another valid solve after epoch exhaustion.
+  // Conservatively exclude the saturated value from the host-recovery path.
+  return plan && plan->final_state_solve_epoch != std::numeric_limits<std::uint64_t>::max()
+             ? plan->final_state_solve_epoch
+             : 0;
+}
 vibeqc_status cuda_density_fitting_final_state_token(const CudaDensityFittingJkPlan* plan,
                                                      std::size_t item, CudaDfFinalStateToken& token,
                                                      std::string& detail) {
