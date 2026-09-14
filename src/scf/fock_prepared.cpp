@@ -1,11 +1,13 @@
 #include "scf/fock_prepared.hpp"
 
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
 #include "molecule/basis.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/rhf_policy.hpp"
+#include "scf/cuda_density_fitting_eigen.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/initial_guess/overlap.hpp"
 
@@ -242,13 +244,35 @@ const core::System& PreparedFockPlan::system() const noexcept { return impl_->or
 const integrals::IntegralData& PreparedFockPlan::one_electron() const noexcept {
   return impl_->one_electron();
 }
+initial_guess::EigenOperation PreparedFockPlan::eigen_operation(EigenUse use) const {
+  auto* plan = impl_->cuda_df.get();
+  if (!plan) return {};
+  const char* control = use == EigenUse::Setup          ? "VIBEQC_DF_REFERENCE_SETUP_EIGEN"
+                        : use == EigenUse::Finalization ? "VIBEQC_DF_REFERENCE_FINAL_EIGEN"
+                                                        : nullptr;
+  const char* value = control ? std::getenv(control) : nullptr;
+  if (value && value[0] == '1' && value[1] == '\0') return {};
+  const auto n = impl_->diagnostic.nbf;
+  return [plan, n](const auto& matrix, const auto* overlap, const auto* x, std::size_t dimension) {
+    if (dimension != n)
+      throw std::invalid_argument("prepared DF eigen operation belongs to another AO dimension");
+    reference::EigenResult frame;
+    CudaDfEigenDiagnostic diagnostic;
+    std::string detail;
+    checked(solve_cuda_density_fitting_eigen(plan, matrix, overlap, x, frame.values, frame.vectors,
+                                             diagnostic, detail),
+            detail);
+    return frame;
+  };
+}
 std::vector<double> PreparedFockPlan::overlap_orthogonalizer(
     initial_guess::OverlapOrthogonalizer* external_cache) const {
   const auto& data = one_electron();
   auto* cache = impl_->cuda_view && impl_->fitted
                     ? (external_cache ? external_cache : &impl_->overlap_cache)
                     : nullptr;
-  return initial_guess::prepare_overlap_orthogonalizer(system(), data.overlap, data.nbf, cache);
+  return initial_guess::prepare_overlap_orthogonalizer(system(), data.overlap, data.nbf, cache,
+                                                       eigen_operation(EigenUse::Setup));
 }
 const DensityFittingScfData* PreparedFockPlan::cpu_fitted_data() const noexcept {
   return impl_->cpu_view && impl_->fitted ? &*impl_->fitted : nullptr;

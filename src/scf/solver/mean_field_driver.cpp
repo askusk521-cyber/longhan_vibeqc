@@ -6,6 +6,7 @@
 #include <tuple>
 #include <utility>
 
+#include "runtime/host_component_trace.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/fock_prepared.hpp"
 #include "scf/gradient/hf_gradient.hpp"
@@ -51,12 +52,28 @@ Matrix build_fock(const PreparedFockPlan& plan, const Matrix& hcore, const Matri
   return assemble_fock(plan.strategy(), hcore, plan.build(density)).alpha;
 }
 
+/** Substitute only the provider of this actual matrix. Iterative matrices may
+ * be DIIS-extrapolated, so their frames never authorize physical-state reuse. */
+EigenResult diagonalize(const PreparedFockPlan& plan, const Matrix& matrix,
+                        const integrals::IntegralData& ints, const Matrix& orthogonalizer,
+                        PreparedFockPlan::EigenUse use) {
+  namespace trace = runtime::host_trace;
+  trace::Reason reason(use == PreparedFockPlan::EigenUse::Iteration
+                           ? trace::EigenReason::iteration
+                           : trace::EigenReason::final_fock);
+  const auto operation = plan.eigen_operation(use);
+  return operation ? operation(matrix, &ints.overlap, &orthogonalizer, ints.nbf)
+                   : generalized_eigen(matrix, orthogonalizer, ints.nbf);
+}
+
 void finalize_scf(const PreparedFockPlan& plan, const integrals::IntegralData& ints,
                   const Matrix& orthogonalizer, std::size_t occupied, Matrix& density,
                   bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
+  runtime::host_trace::Region final_trace("host_finalization", n);
   Matrix final_fock = build_fock(plan, ints.hcore, density);
-  EigenResult orbitals = generalized_eigen(final_fock, orthogonalizer, n);
+  EigenResult orbitals =
+      diagonalize(plan, final_fock, ints, orthogonalizer, PreparedFockPlan::EigenUse::Finalization);
   density = density_from_orbitals(orbitals.vectors, n, occupied);
   final_fock = build_fock(plan, ints.hcore, density);
   result.energy = electronic_energy(density, ints.hcore, final_fock) + ints.nuclear_repulsion;
@@ -73,9 +90,12 @@ void finalize_uhf(const PreparedFockPlan& plan, const integrals::IntegralData& i
                   std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
                   bool compute_forces, ScfResult& result) {
   const std::size_t n = ints.nbf;
+  runtime::host_trace::Region final_trace("host_finalization", n);
   auto [alpha_fock, beta_fock] = build_uhf_focks(plan, ints.hcore, alpha_density, beta_density);
-  EigenResult alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-  EigenResult beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
+  EigenResult alpha_orbitals =
+      diagonalize(plan, alpha_fock, ints, orthogonalizer, PreparedFockPlan::EigenUse::Finalization);
+  EigenResult beta_orbitals =
+      diagonalize(plan, beta_fock, ints, orthogonalizer, PreparedFockPlan::EigenUse::Finalization);
   alpha_density = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
   beta_density = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
   std::tie(alpha_fock, beta_fock) = build_uhf_focks(plan, ints.hcore, alpha_density, beta_density);
@@ -108,13 +128,15 @@ ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& option
   const Matrix orthogonalizer = plan.overlap_orthogonalizer(overlap_cache);
   std::optional<EigenResult> initial_orbitals;
   Matrix density = prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density,
-                                           initial_orbitals);
+                                           initial_orbitals,
+                                           initial_guess::InitialOrbitalRequest::ColdDensityOnly,
+                                           plan.eigen_operation(PreparedFockPlan::EigenUse::Setup));
   // Only a cold seed carries a core frame. Warm consumers solve their first
   // target Fock before reading orbitals; RKS packs its initial factor cold-only.
   EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n, {static_cast<unsigned>(system.electron_count)},
-                  2.0);
+                  2.0, plan.eigen_operation(PreparedFockPlan::EigenUse::Setup));
     density = *initial_density;
   }
   Diis diis(options.diis_history);
@@ -130,7 +152,8 @@ ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& option
     const double energy = electronic_energy(density, ints.hcore, fock) + ints.nuclear_repulsion;
     const Matrix residual = commutator_residual(fock, density, ints.overlap, n);
     const Matrix effective_fock = diis.update(fock, residual);
-    orbitals = generalized_eigen(effective_fock, orthogonalizer, n);
+    orbitals = diagonalize(plan, effective_fock, ints, orthogonalizer,
+                           PreparedFockPlan::EigenUse::Iteration);
     Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
 
     sample_scf_buffers(plan, diis, orthogonalizer, density, fock, residual, effective_fock,
@@ -189,15 +212,16 @@ ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& option
   }
   const Matrix orthogonalizer = plan.overlap_orthogonalizer(overlap_cache);
   std::optional<EigenResult> initial_alpha, initial_beta;
-  auto [alpha_density, beta_density] =
-      prepare_initial_uhf_density(ints, orthogonalizer, alpha_occupied, beta_occupied,
-                                  initial_density, initial_alpha, initial_beta);
+  auto [alpha_density, beta_density] = prepare_initial_uhf_density(
+      ints, orthogonalizer, alpha_occupied, beta_occupied, initial_density, initial_alpha,
+      initial_beta, initial_guess::InitialOrbitalRequest::ColdDensityOnly,
+      plan.eigen_operation(PreparedFockPlan::EigenUse::Setup));
   EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
   EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n,
                   {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)},
-                  1.0);
+                  1.0, plan.eigen_operation(PreparedFockPlan::EigenUse::Setup));
     std::tie(alpha_density, beta_density) = split_spin_matrices(*initial_density, n * n);
   }
   Diis diis(options.diis_history);
@@ -219,8 +243,10 @@ ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& option
     const Matrix physical_residual = concatenate(alpha_residual, beta_residual);
     const Matrix effective_joined = diis.update(physical_fock, physical_residual);
     std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, n * n);
-    alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-    beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
+    alpha_orbitals =
+        diagonalize(plan, alpha_fock, ints, orthogonalizer, PreparedFockPlan::EigenUse::Iteration);
+    beta_orbitals =
+        diagonalize(plan, beta_fock, ints, orthogonalizer, PreparedFockPlan::EigenUse::Iteration);
     Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
     Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
 

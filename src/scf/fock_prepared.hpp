@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "scf/cuda_fock_provider.hpp"
+#include "scf/initial_guess/eigen_operation.hpp"
 
 namespace vibeqc::scf {
 namespace initial_guess {
@@ -54,6 +55,14 @@ class PreparedFockPlan {
   const ResolvedFockBuild& strategy() const noexcept;
   const core::System& system() const noexcept;
   const integrals::IntegralData& one_electron() const noexcept;
+  /** The stage selects only explicit diagnostic provider controls; it never
+   * changes the mathematical Fock operator or authorizes a reference retry. */
+  enum class EigenUse { Setup, Iteration, Finalization };
+  /** Borrow the qualified ordinary device provider from a CUDA fitted owner.
+   * CPU/exact-only owners return an empty callback for the independent oracle.
+   * The callback shares this owner's serialized lifetime and reserved scratch.
+   * An iterative DIIS frame is not a verified physical final-state snapshot. */
+  initial_guess::EigenOperation eigen_operation(EigenUse use) const;
   /** CUDA fitted SCF retains validated X on this immutable source. A containing
    * calculation may supply its own cache to survive value/force source replans;
    * its ordered basis and device must remain fixed. CPU/exact plans preserve

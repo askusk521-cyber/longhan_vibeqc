@@ -898,8 +898,10 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
     ref->density = result.density;
     host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
     host_trace::Region export_trace("reference_export", n);
-    const auto orthogonalizer = symmetric_orthogonalizer(ref->overlap, n);
-    auto canonical = generalized_eigen(ref->fock, orthogonalizer, n);
+    const auto orthogonalizer = plan.overlap_orthogonalizer(overlap_cache);
+    const auto eigen = plan.eigen_operation(PreparedFockPlan::EigenUse::Finalization);
+    auto canonical = eigen ? eigen(ref->fock, &ref->overlap, &orthogonalizer, n)
+                           : generalized_eigen(ref->fock, orthogonalizer, n);
     ref->coefficients = std::move(canonical.vectors);
     ref->orbital_energies = std::move(canonical.values);
     ref->energy = electronic_energy(ref->density, ref->hcore, ref->fock) +

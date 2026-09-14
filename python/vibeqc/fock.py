@@ -655,7 +655,9 @@ class FockPlan:
     ):
         """Run shared SCF for the declared J/K energy, with no XC contribution.
 
-        CUDA plans use host DIIS/eigensolves with CUDA integral consumers.
+        CUDA plans retain host DIIS and use CUDA integral consumers. Plans
+        containing a fitted term also borrow their prepared device eigensolver;
+        exact-only and CPU plans keep the independent reference eigensolver.
         Omit ``initial_density`` for a core guess or pass an explicit density
         with the same layout as ``evaluate``. The native ensemble guard rejects
         incorrect overlap-metric occupation or electron/spin trace; it does

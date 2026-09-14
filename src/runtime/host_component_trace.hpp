@@ -66,6 +66,10 @@ inline const char* reason_name(EigenReason reason) noexcept {
       return "reference_export";
     case EigenReason::fallback:
       return "fallback";
+    case EigenReason::iteration:
+      return "iteration";
+    case EigenReason::seed_validation:
+      return "seed_validation";
     default:
       return "unspecified";
   }

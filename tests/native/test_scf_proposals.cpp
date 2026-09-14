@@ -7,6 +7,7 @@
 #include "molecule/basis.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/proposals.hpp"
+#include "scf/solver/proposal_control.hpp"
 
 namespace {
 void require(bool condition, const char* message) {
@@ -31,6 +32,49 @@ vibeqc::core::System molecule(bool uhf) {
 int main() {
   using namespace vibeqc::scf;
   try {
+    {
+      // Qualified symmetric seeds use the supplied operation for S and each
+      // spin occupation frame. Tolerated asymmetry preserves the old validator
+      // and original bytes; backend failures are never converted to a retry.
+      using reference::Matrix;
+      const Matrix overlap = reference::identity(2);
+      const Matrix seed{0.5, 0.0, 0.0, 0.5};
+      unsigned calls = 0;
+      const initial_guess::EigenOperation eigen = [&](const auto& matrix, const auto* s,
+                                                      const auto* x, std::size_t n) {
+        require(!s && !x && n == 2, "seed callback requested a generalized solve");
+        ++calls;
+        return reference::symmetric_eigen(matrix, n);
+      };
+      solver::validate_seed(overlap, seed, 2, {1}, 1.0, eigen);
+      require(calls == 2, "strict seed bypassed its qualified eigen operation");
+      Matrix asymmetric = seed;
+      asymmetric[1] = 2e-8;
+      const Matrix original = asymmetric;
+      calls = 0;
+      solver::validate_seed(overlap, asymmetric, 2, {1}, 1.0, eigen);
+      require(calls == 1 && asymmetric == original,
+              "legacy seed symmetry tolerance was tightened or repaired");
+      asymmetric[1] = 2e-6;
+      bool rejected = false;
+      try {
+        solver::validate_seed(overlap, asymmetric, 2, {1}, 1.0, eigen);
+      } catch (const std::invalid_argument&) {
+        rejected = true;
+      }
+      require(rejected, "strict seed symmetry gate was relaxed");
+      const initial_guess::EigenOperation failing = [](const auto&, const auto*, const auto*,
+                                                       std::size_t) -> reference::EigenResult {
+        throw std::runtime_error("qualified provider failure");
+      };
+      rejected = false;
+      try {
+        solver::validate_seed(overlap, seed, 2, {1}, 1.0, failing);
+      } catch (const std::runtime_error& error) {
+        rejected = std::string(error.what()) == "qualified provider failure";
+      }
+      require(rejected, "strict seed retried a failed qualified provider");
+    }
     for (bool uhf : {false, true}) {
       for (bool df : {false, true}) {
         const auto system = molecule(uhf);

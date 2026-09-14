@@ -47,13 +47,28 @@ ledger. The two clocks are reported separately. Setting either trace variable
 implicitly on a clean force-probe invocation is rejected.
 
 Each `reference_eigensolve` leaf records its dimension, reason (`overlap`,
-`core_guess`, `final_fock`, `reference_export`, `fallback`, or `unspecified`),
+`core_guess`, `iteration`, `seed_validation`, `final_fock`, `reference_export`, `fallback`, or `unspecified`),
 item, host wall milliseconds, thread CPU milliseconds and exceptional exit.
 Only the actual oracle entry emits this leaf; an intended solve, cache flag or
 graph declaration cannot count as executed work. The Jacobi arithmetic and
 overlap singularity threshold are unchanged. A small observer interface keeps
 the independent reference and initial-guess modules free of runtime/CUDA
 dependencies. The runtime owns timers, bounded records and file output.
+
+Independent CUDA `FockPlan.solve()` consumers with either fitted J or K borrow
+the same prepared ordinary device provider for setup, host-driven SCF iterations,
+finalization and applicable RHF reference export. The `iteration` reason counts
+each actual spin solve, including DIIS matrices. These frames do not carry the
+compact CUDA solver's physical-state identity and do not authorize retained-state
+reuse. Strict warm-seed checks also use that provider for S and each spin's
+metric occupations, recorded as `seed_validation`. The existing 1e-7 seed
+symmetry tolerance is preserved: inputs outside the device frame's tighter
+symmetry contract select the original reference validation before submission
+and record `fallback`. No density is repaired and device failures propagate.
+Host DIIS and the independent finalization sequence remain in place.
+Exact-only CUDA plans and the CPU oracle keep their reference provider. Explicit
+reference setup/finalization controls affect only those stages; they never
+silently retry a failed device operation.
 
 `benchmarks/df_component_ledger.py` validates the host JSONL and subtracts
 immediate children within each root to produce exclusive host phases. Root

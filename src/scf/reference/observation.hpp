@@ -14,7 +14,16 @@ struct Observer {
   void (*end)(std::size_t, int) noexcept;
 };
 inline thread_local const Observer* active{};
-enum class EigenReason { unspecified, overlap, core_guess, final_fock, reference_export, fallback };
+enum class EigenReason {
+  unspecified,
+  overlap,
+  core_guess,
+  final_fock,
+  reference_export,
+  fallback,
+  iteration,
+  seed_validation
+};
 inline thread_local EigenReason active_reason = EigenReason::unspecified;
 
 class Reason {

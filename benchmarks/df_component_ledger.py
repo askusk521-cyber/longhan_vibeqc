@@ -288,6 +288,8 @@ def validate_host_record(record: dict) -> dict:
                 "final_fock",
                 "reference_export",
                 "fallback",
+                "iteration",
+                "seed_validation",
             }:
                 raise ValueError("unknown eigensolve reason")
             _integer(row["item"], "item", -1)
