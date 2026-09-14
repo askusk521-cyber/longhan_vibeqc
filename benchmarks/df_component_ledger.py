@@ -314,9 +314,12 @@ def validate_host_record(record: dict) -> dict:
 
 def read_host_trace(path: Path) -> list[dict]:
     """Read one process's fresh JSONL ledger, preserving every attempted solve."""
-    records = [
-        json.loads(line) for line in path.read_text().splitlines() if line.strip()
-    ]
+    raw = path.read_bytes()
+    # The writer terminates each record only after emitting its whole body.
+    # A parseable final JSON object alone is insufficient evidence of completion.
+    if not raw or not raw.endswith(b"\n"):
+        raise ValueError("missing or incomplete host trace")
+    records = [json.loads(line) for line in raw.splitlines() if line.strip()]
     if not records:
         raise ValueError("missing host trace")
     seen = set()
