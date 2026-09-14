@@ -2,7 +2,7 @@
 
 No optimization is included. This records the baseline before #309/#310/#311,
 using `15d6936390723edf9e9eb0c91fecde4390490573` plus the exact
-`measured-source.patch`. Every sample identifies that patch and the actual
+`measured-source.patch` retained in `raw-evidence.zip`. Every sample identifies that patch and the actual
 shared-library SHA-256. The library's embedded scientific source identity was
 also checked against the checkout: see `summary.json`.
 
@@ -55,7 +55,20 @@ matrix is still required, along with the independent reference gates and
 individual optimization ablations. This slice makes no speedup, external
 parity or issue-completion claim.
 
-## Reproduction
+## Evidence retention and reproduction
+
+The standard archive retains the eight original result, trace, profile and
+source-patch files without changing their bytes. `raw-evidence.manifest.json`
+pins the archive and every member; the original `files.json` remains inside
+it. All members were restored and compared byte for byte before removing the
+expanded copies. `summary.json` and this README remain directly reviewable.
+The retention change reruns no scientific experiment and changes no result.
+
+```bash
+python -m tools.unpack_evidence benchmarks/results/issue308-host-baseline \
+  --output /tmp/issue308-baseline-evidence
+```
+
 
 Apply the measured patch to a clean checkout of the baseline revision. Build
 Release with CUDA 12.9.1, architecture 120, and AOT shells disabled, then use
