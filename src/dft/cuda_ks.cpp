@@ -20,16 +20,28 @@
 #include "scf/initial_guess/density.hpp"
 #include "scf/reference/mean_field.hpp"
 #include "scf/solver/proposal_control.hpp"
+#include "vibeqc/vibeqc.hpp"
+
+#if defined(VIBEQC_TEST_HOOKS)
+namespace {
+// One-shot injection uses the real status mapper without poisoning the CUDA
+// context, allowing the public API to verify explicit recovery and seed reuse.
+thread_local bool fail_next_ks_runtime = false;
+}  // namespace
+extern "C" void ks_cuda_fail_next_runtime_for_test_v1() { fail_next_ks_runtime = true; }
+#endif
 
 namespace vibeqc::dft {
 namespace {
 using namespace scf::cuda_execution;
 void check(cudaError_t status) {
   if (status == cudaErrorMemoryAllocation) throw std::bad_alloc();
-  if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+  if (status != cudaSuccess)
+    throw vibeqc::Error(VIBEQC_STATUS_CUDA_ERROR, cudaGetErrorString(status));
 }
 void check(vibeqc_status status, const std::string& detail) {
   if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+  if (status == VIBEQC_STATUS_CUDA_ERROR) throw vibeqc::Error(status, detail);
   if (status == VIBEQC_STATUS_INVALID_ARGUMENT) throw std::invalid_argument(detail);
   if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
 }
@@ -241,6 +253,12 @@ struct CudaKsPlan::Impl : KsStateStorage {
 
   void begin(const std::vector<double>* input, bool reuse_warm) {
     current_device();
+#if defined(VIBEQC_TEST_HOOKS)
+    if (fail_next_ks_runtime) {
+      fail_next_ks_runtime = false;
+      check(cudaErrorUnknown);
+    }
+#endif
     if (is_pending) throw std::logic_error("cannot replace a pending CUDA KS iteration");
     const bool use_warm = !input && reuse_warm && warm_ready;
     std::vector<double> prepared;

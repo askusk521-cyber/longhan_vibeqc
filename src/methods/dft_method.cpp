@@ -16,6 +16,7 @@
 #include "scf/initial_guess/density.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
+#include "vibeqc/vibeqc.hpp"
 
 #if VIBEQC_HAS_CUDA
 #include "dft/cuda_ks.hpp"
@@ -300,6 +301,8 @@ vibeqc_status item_exception_status() {
     throw;
   } catch (const MethodError& error) {
     return error.status();
+  } catch (const vibeqc::Error& error) {
+    return error.status();
   } catch (const std::bad_alloc&) {
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   } catch (const std::invalid_argument&) {
@@ -400,9 +403,12 @@ class KsPreparedBatch final : public PreparedBatch {
       std::vector<bool> running(size(), false);
       for (std::size_t i = 0; i < size(); ++i) {
         auto& result = results[i];
-        if (!ready[i] ||
-            (attempt && (!result.warm_start_used || result.status == VIBEQC_STATUS_SUCCESS)))
-          continue;
+        // Retry only seed-related failures. Resource/driver failures preserve
+        // their first status and leave the last-good seed for explicit replay.
+        const bool seed_failure = result.status == VIBEQC_STATUS_NOT_CONVERGED ||
+                                  result.status == VIBEQC_STATUS_NUMERICAL_FAILURE ||
+                                  result.status == VIBEQC_STATUS_INVALID_ARGUMENT;
+        if (!ready[i] || (attempt && (!result.warm_start_used || !seed_failure))) continue;
         if (attempt) {
           result.warm_start_fallback = true;
           // Release the failed attempt's exported history before starting another

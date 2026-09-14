@@ -6,10 +6,14 @@
 #include <stdexcept>
 #include <string>
 
+#include "vibeqc/vibeqc.hpp"
+
 namespace vibeqc::dft {
 namespace {
 void check(cudaError_t status) {
-  if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+  if (status == cudaErrorMemoryAllocation) throw std::bad_alloc();
+  if (status != cudaSuccess)
+    throw vibeqc::Error(VIBEQC_STATUS_CUDA_ERROR, cudaGetErrorString(status));
 }
 std::size_t multiply(std::size_t a, std::size_t b) {
   if (b && a > std::numeric_limits<std::size_t>::max() / b)
