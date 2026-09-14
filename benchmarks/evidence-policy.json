@@ -45,6 +45,11 @@
       "reason": "Exact fixed-D/K arrays, complete same-D and cross-engine matrices, executed factor provenance, source/library identities and retained failed experiments. Every member is hash-verified and byte-restored.",
       "sha256": "e578bc6fa798189ef84b9286c427befefc5cebb1dde5fc44f58ca9c366a57f90"
     },
+    "benchmarks/results/issue308-large-diagnostics/reference.zip": {
+      "owner": "issue308-large-diagnostics",
+      "reason": "Byte-verified compressed independent 96-atom PySCF checkpoint and physical density/overlap/force arrays, with exact input scripts and logs, retained to reproduce strict physical comparisons without repeating the expensive SCF oracle.",
+      "sha256": "c369a5128ed36987073f6364290d4be455213e00f54e9cea04873def6d1f8c07"
+    },
     "benchmarks/results/local-spaces-182/states.npz": {
       "owner": "local-spaces-182",
       "reason": "Scientific solver-state/trajectory arrays retained to replay calibration, local-space recovery, or proposal decisions; these are measurement inputs, not temporary restart checkpoints.",
