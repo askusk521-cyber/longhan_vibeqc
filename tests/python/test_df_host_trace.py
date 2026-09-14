@@ -51,6 +51,15 @@ def test_host_ledger_counts_actual_leaves_and_keeps_clocks_separate(tmp_path):
         read_host_trace(path)
 
 
+@pytest.mark.parametrize("suffix", ("", "\n{"))
+def test_host_trace_rejects_missing_record_terminator(tmp_path, suffix):
+    """Even valid JSON must carry the writer's final record terminator."""
+    path = tmp_path / "interrupted.host.jsonl"
+    path.write_text(json.dumps(host_record()) + suffix)
+    with pytest.raises(ValueError, match="incomplete host trace"):
+        read_host_trace(path)
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
