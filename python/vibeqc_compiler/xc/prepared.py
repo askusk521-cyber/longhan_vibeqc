@@ -36,14 +36,25 @@ from .native import NativeContractionProgram
 from .spec import UnsupportedXC, functional
 
 
+def _native_device_xc(program, spatial, density_grid):
+    """Keep feature validation and execution on the same canonical CUDA route."""
+    return (
+        spatial is not None
+        and density_grid is not None
+        and program.contract.request.observable == "potential"
+        and program.spec.identifier in ("LDA_XC_PW", "PBE")
+        and program.spec == functional(program.spec.identifier, spin=program.spec.spin)
+    )
+
+
 class PreparedXCContractions:
     """Compose a compiled contraction program with immutable basis/quadrature.
 
     Output matrices retain functional-spin layout; the existing method adapter
     owns averaging for total-density input. Geometry returns independent point,
     AO-center and weight partials. A spatial adapter keeps its fixed mask and
-    must cover the requested jet domain. CUDA spatial collocation supports
-    fixed-density E/V with explicit per-tile transfers to native CPU XC.
+    must cover the requested jet domain. Canonical LDA/PBE potentials on CUDA
+    spatial owners use native device XC; other compositions retain CPU XC.
     """
 
     def __init__(
@@ -124,11 +135,13 @@ class PreparedXCContractions:
                 )
             if program.contract.request.observable != "potential":
                 raise ValueError("CUDA density adapter supports fixed-density E/V only")
-            required = (
-                {"rho"}
-                if program.contract.ingredients.family == "lda"
-                else {"rho", "gradient", "sigma"}
-            )
+            required = {"rho"}
+            if program.contract.ingredients.family != "lda":
+                required.add("gradient")
+                # Native CUDA XC forms sigma from gradients. The CPU fallback
+                # consumes an explicit sigma feature in its collocation tiles.
+                if not _native_device_xc(program, spatial, density_grid):
+                    required.add("sigma")
             if (
                 density_grid.basis_identity != basis.identity
                 or density_grid.plan.nao != basis.nao
@@ -459,14 +472,7 @@ class PreparedXCContractions:
                 raise UnsupportedXC(
                     "unpolarized native XC requires equal spin matrices and directions"
                 )
-            device_xc = (
-                self.spatial is not None
-                and self.density_grid is not None
-                and observable == "potential"
-                and self.program.spec.identifier in ("LDA_XC_PW", "PBE")
-                and self.program.spec
-                == functional(self.program.spec.identifier, spin=self.program.spec.spin)
-            )
+            device_xc = _native_device_xc(self.program, self.spatial, self.density_grid)
             if self.density_grid is not None:
                 before_metrics = self.density_grid.metrics()
                 if not device_xc:

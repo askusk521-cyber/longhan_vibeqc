@@ -47,7 +47,7 @@ def test_native_cuda_dft_matches_independently_converged_cpu_endpoint(
 
 def test_cuda_dft_force_request_remains_outside_issue_162():
     calculator = Calculator(method="lda-rks", basis="sto-3g", device="cuda")
-    with pytest.raises(ValueError, match="does not support properties.*forces"):
+    with pytest.raises(ValueError, match=r"does not support properties.*forces"):
         calculator.singlepoint(
             [("He", (0.0, 0.0, 0.0))], properties=("energy", "forces")
         )
