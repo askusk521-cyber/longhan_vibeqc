@@ -188,6 +188,7 @@ add_library(vibeqc SHARED
   src/scf/solver/diis.cpp
   src/scf/solver/proposal_control.cpp
   src/scf/solver/mean_field_driver.cpp
+  src/scf/solver/eigen_frame.cpp
   src/scf/gradient/hf_gradient.cpp
   src/scf/reference/linalg.cpp
   src/scf/reference/mean_field.cpp
@@ -387,6 +388,7 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_runtime.cpp
     src/scf/cuda/df_scf_kernels.cu
     src/scf/cuda/df_scf_library.cpp
+    src/scf/cuda/df_eigensystem.cpp
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cpp
@@ -773,6 +775,11 @@ if(VIBEQC_BUILD_TESTS)
   # The Windows shared-library ABI intentionally exports only the public C
   # surface; this internal contract target requires private C++ symbols.
   if(NOT WIN32)
+    add_executable(vibeqc_eigen_frame_tests tests/native/test_eigen_frame.cpp)
+    target_link_libraries(vibeqc_eigen_frame_tests PRIVATE vibeqc)
+    target_include_directories(vibeqc_eigen_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_eigen_frame_tests COMMAND vibeqc_eigen_frame_tests)
+
     add_executable(vibeqc_initial_density_tests tests/native/test_initial_density.cpp)
     target_link_libraries(vibeqc_initial_density_tests PRIVATE vibeqc)
     target_include_directories(vibeqc_initial_density_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -931,6 +938,10 @@ if(VIBEQC_BUILD_TESTS)
       PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME vibeqc_cuda_runtime_tests COMMAND vibeqc_cuda_runtime_tests)
 
+    add_executable(vibeqc_df_eigensystem_tests tests/native/test_df_eigensystem.cpp)
+    target_link_libraries(vibeqc_df_eigensystem_tests PRIVATE vibeqc CUDA::cudart CUDA::cublas CUDA::cusolver)
+    target_include_directories(vibeqc_df_eigensystem_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_df_eigensystem_tests COMMAND vibeqc_df_eigensystem_tests)
     add_executable(vibeqc_cuda_fock_provider_tests tests/native/test_cuda_fock_provider.cpp)
     target_link_libraries(vibeqc_cuda_fock_provider_tests PRIVATE vibeqc CUDA::cudart)
     target_include_directories(vibeqc_cuda_fock_provider_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
