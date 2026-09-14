@@ -299,6 +299,11 @@ def cuda_df_candidates(
                 raise ValueError(
                     "DF sub-budget cannot hold the generated response minimum"
                 )
+            # Strict selection serializes one item. Reserve detached candidates,
+            # accepted outputs and validation/correction products explicitly;
+            # its bounded scratch is separate from whole-bucket SCF state.
+            final_selection_host = 8 * (32 * n * n + 4 * n)
+            host_temporary += final_selection_host
             host_temporary += (
                 row["response_host_capacity"]
                 if source
@@ -328,6 +333,7 @@ def cuda_df_candidates(
                     "overlap_cache_host_bytes": overlap_cache_host,
                     "ordinary_eigen_device_bytes": ordinary_eigen_device,
                     "final_snapshot_device_bytes": final_snapshot_device,
+                    "final_selection_host_bytes": final_selection_host,
                     "ordinary_eigen_host_workspace_bytes": ordinary_eigen_workspace,
                     "resident_device_bytes": persistent_device,
                 }

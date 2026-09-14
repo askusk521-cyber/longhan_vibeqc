@@ -29,6 +29,8 @@ def test_setup_provider_matches_reference_across_replans(
     setup frame. A bad neighbor must not overwrite an earlier good item.
     """
     assert os.environ.get("SLURM_JOB_ID")
+    # Provider substitution must hold final work fixed after candidate reuse.
+    monkeypatch.setenv("VIBEQC_DF_FORCE_FINAL_REBUILD", "1")
     atoms = [("O", (0, 0, 0)), ("H", (0, 0, 1.8))]
     if method == "rhf":
         atoms.append(("H", (1.7, 0, -0.6)))
@@ -79,6 +81,7 @@ def test_setup_provider_matches_reference_across_replans(
                     batch_size=batch_size,
                     method=method,
                     reference=False,
+                    strict_energy=method == "rhf" and "forces" not in properties,
                 )
                 expected = {
                     "overlap": batch_size if step == 0 else int(step >= 2),
@@ -131,6 +134,8 @@ def test_setup_provider_matches_reference_across_replans(
 def test_setup_empty_beta_channel(monkeypatch, tmp_path):
     """The empty UHF spin stays empty while its shared cold frame is replaced."""
     assert os.environ.get("SLURM_JOB_ID")
+    # Provider substitution must hold final work fixed after candidate reuse.
+    monkeypatch.setenv("VIBEQC_DF_FORCE_FINAL_REBUILD", "1")
     atoms = [("H", (0, 0, 0))]
     calc = Calculator(
         method="uhf", basis="def2-svp", device="cuda", density_fitting="cuda"

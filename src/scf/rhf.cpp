@@ -24,6 +24,7 @@
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_density_fitting_eigen.hpp"
+#include "scf/cuda_density_fitting_final_state.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/cuda_df_gradient.hpp"
 #include "scf/cuda_fock_provider.hpp"
@@ -439,7 +440,8 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
                                                    std::size_t occupied, Matrix& density,
                                                    const ScfOptions& options, ScfResult& result,
                                                    CudaDensityFittingJkPlan* cuda_plan = nullptr,
-                                                   std::size_t cuda_system = 0) {
+                                                   std::size_t cuda_system = 0,
+                                                   bool device_candidate = false) {
   host_trace::Region final_trace("finalization");
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
@@ -463,6 +465,78 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
     return execute_cuda_density_fitting_rhf_jk_item(cuda_plan, cuda_system, item_density,
                                                     item_coulomb, item_exchange, item_detail);
   };
+  if (cuda_plan && !options.compute_forces && !options.export_physical_reference) {
+    // This first consumer is energy-only. The existing complete-force/export
+    // paths below remain separately qualified until they consume verified W/C.
+    // Do not publish compact-SCF convergence if strict final selection fails.
+    result.converged = false;
+    CudaDfFinalStateSnapshot snapshot;
+    solver::FinalStateIdentity identity;
+    if (device_candidate) {
+      CudaDfFinalStateToken token;
+      std::string detail;
+      auto status = cuda_density_fitting_final_state_token(cuda_plan, cuda_system, token, detail);
+      if (status == VIBEQC_STATUS_SUCCESS)
+        status = host_trace::call("final_state_read", [&] {
+          return read_cuda_density_fitting_final_state(cuda_plan, token, snapshot, detail);
+        });
+      if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+      if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
+      if (snapshot.density.size() != 1 || snapshot.density[0] != density)
+        throw std::runtime_error("CUDA DF final snapshot does not own the returned density");
+      identity = token.identity;
+    } else {
+      // Host DIIS recovery belongs to the same attempted solve but uses a
+      // disjoint generation range. No compact frame is eligible for this D,
+      // and finalizing one item must not invalidate a good neighbor's token.
+      const auto generation =
+          static_cast<std::uint64_t>(options.max_iterations) + result.iterations + 1;
+      identity.factor =
+          cuda_density_fitting_factor_identity(cuda_plan, cuda_system, generation, generation);
+      identity.solve_epoch = cuda_density_fitting_solve_epoch(cuda_plan);
+      identity.model = resolve_fock_build(
+          make_hf_fock_spec(FockSpin::Restricted, FockApproximation::DensityFitted),
+          FockBackend::Cuda, 1e-12, options.density_fitting_relative_threshold);
+      identity.occupied = {occupied};
+    }
+    const solver::PhysicalFockOperation physical = [&](const auto& current, const auto& densities) {
+      std::vector<double> coulomb, exchange;
+      std::string detail;
+      const auto status = execute_item_rhf_jk(densities[0], coulomb, exchange, detail);
+      if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+      if (status != VIBEQC_STATUS_SUCCESS || coulomb.size() != n * n || exchange.size() != n * n)
+        throw std::runtime_error(detail.empty() ? "strict CUDA DF physical J/K evaluation failed"
+                                                : detail);
+      auto fock = data.one_electron.hcore;
+      for (std::size_t k = 0; k < fock.size(); ++k) fock[k] += coulomb[k] - .5 * exchange[k];
+      return solver::PhysicalFockFrame{current, true, {std::move(fock)}};
+    };
+    const initial_guess::EigenOperation eigen = [&](const auto& f, const auto*, const auto*, auto) {
+      return final_df_eigen(f, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                            cuda_system);
+    };
+    const auto enabled = [](const char* name) {
+      const char* value = std::getenv(name);
+      return value && value[0] == '1' && value[1] == '\0';
+    };
+    // The independent reference-provider control must execute a real solve;
+    // otherwise a valid retained candidate would silently defeat its ablation.
+    const bool force =
+        enabled("VIBEQC_DF_FORCE_FINAL_REBUILD") || enabled("VIBEQC_DF_REFERENCE_FINAL_EIGEN");
+    auto selected = solver::select_final_state(
+        identity, data.one_electron.overlap, data.one_electron.hcore, orthogonalizer,
+        data.one_electron.nuclear_repulsion, {density},
+        device_candidate ? &snapshot.candidate : nullptr, physical, eigen,
+        {options.density_tolerance, options.energy_tolerance, 16}, false, force);
+    if (selected.status == solver::FinalStateStatus::OutOfMemory) throw std::bad_alloc();
+    if (!selected.state) throw std::runtime_error(selected.detail);
+    host_trace::Region accepted(selected.reused ? "final_state_reuse" : "final_state_corrected", n);
+    density = std::move(selected.state->density[0]);
+    result.energy = selected.state->diagnostic.energy;
+    result.density = density;
+    result.converged = true;
+    return;
+  }
   if (cuda_plan != nullptr) {
     std::vector<double> coulomb;
     std::vector<double> exchange;
@@ -1539,7 +1613,7 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
       result.density_rms = device_records.front().density_rms;
       result.converged = true;
       finalize_density_fitting_rhf(data, orthogonalizer, occupied, density, options, result,
-                                   plan.get());
+                                   plan.get(), 0, true);
       return result;
     }
   }
@@ -2056,7 +2130,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
         try {
           finalize_density_fitting_rhf(data[slot], orthogonalizers[slot],
                                        static_cast<std::size_t>(occupied[slot]), densities[slot],
-                                       options, result, plan, slot);
+                                       options, result, plan, slot, true);
           outputs[source].status = VIBEQC_STATUS_SUCCESS;
         } catch (const std::bad_alloc&) {
           outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;

@@ -27,6 +27,11 @@ struct CudaDfFinalStateSnapshot {
   std::vector<reference::Matrix> density;
 };
 
+/** Current attempted compact-solve epoch, including a nonconverged attempt
+ * followed by host DIIS recovery. Zero cannot authorize finalization. This
+ * read does not invalidate another item's candidate in the same bucket. */
+std::uint64_t cuda_density_fitting_solve_epoch(const CudaDensityFittingJkPlan* plan) noexcept;
+
 /** Read only host eligibility metadata. Failed/nonconverged items and every
  * new attempted solve invalidate previous tokens before any device submission. */
 vibeqc_status cuda_density_fitting_final_state_token(const CudaDensityFittingJkPlan* plan,
