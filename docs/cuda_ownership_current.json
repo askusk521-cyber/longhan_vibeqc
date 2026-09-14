@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10880,
+  "all_handwritten_scientific_lines": 10953,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -564,54 +564,54 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 5372,
+      "bytes": 6089,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 87,
+        "runtime": 97,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_derivatives.cu",
-      "physical_lines": 96,
-      "reason": "Full dense weight indexing and bounded launch adapter to the shared generated response policy and generic normalized-basis traversal.",
+      "physical_lines": 106,
+      "reason": "Full dense weight indexing and bounded launch adapter to the shared generated response policy and generic normalized-basis traversal. The explicit distributed-sink diagnostic changes only destination addressing; both specializations call the same generated derivative policy.",
       "regions": [],
       "role": "runtime",
-      "sha256": "779ee763dc6a5754ba0e3d032383e0efe3cccdcec0359cafc9101718e982f0f5",
+      "sha256": "64a67d213d9833b4a9b607c4a80ef629d8fe98380c9d5779ec0353a8c256a582",
       "subsystem": "df_derivatives"
     },
     {
-      "bytes": 1649,
+      "bytes": 2164,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 16,
+        "runtime": 18,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_derivatives.cuh",
-      "physical_lines": 32,
+      "physical_lines": 39,
       "reason": "Stable derivative view and launch ABI declarations.",
       "regions": [],
       "role": "runtime",
-      "sha256": "ef2ca5048c86a41c79c6f64a5b3925b3cc176a8f7d940a06bd52bdd6c789ddb7",
+      "sha256": "168664a696e2e0d310a57fa10e3d7cd73b56b6b73bfcc34a02cc1957536836bd",
       "subsystem": "runtime"
     },
     {
-      "bytes": 32222,
+      "bytes": 37189,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 564
+        "scientific": 635
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 584,
-      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned.",
+      "physical_lines": 666,
+      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in stream-drain, pinned-gather and bounded gradient-copy probes retain full weighted response; the latter uses the existing BLAS provider for final output reduction. Probe allocation/timing/layout glue remains in this conservative classification and is not a new derivative implementation.",
       "regions": [],
       "role": "scientific",
-      "sha256": "a82becf1b5043195f9a785dbe8121a003b174c0ca2f91bcbbefc8cc009411b60",
+      "sha256": "f9d5a9bac7c81b5a5a086b138fb59e56c27d98cc9602b8b964e2ed6e8b7c6903",
       "subsystem": "df_derivatives"
     },
     {
@@ -710,16 +710,16 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 13988,
+      "bytes": 14171,
       "code_lines": {
         "fallback": 0,
         "oracle": 10,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 220
+        "scientific": 222
       },
       "path": "src/scf/cuda/df_response_weights.cu",
-      "physical_lines": 266,
+      "physical_lines": 268,
       "reason": "Native HF density response and spectral Frechet method adapters. The default exchange metric AO-pair dot uses the existing plan-owned FP64 cuBLAS handle; provider/layout and accumulation glue remain conservatively scientific. Integral values and coordinate derivatives retain their generated owners.",
       "regions": [
         {
@@ -733,7 +733,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "81b69af34db32cc66c5e4e4f69fefa404d9270d122c35946e7f61cf041b418a4",
+      "sha256": "83cd9eda34200a9100f877fbb8d09fc5cc449befa35a604faa753b41fe683bed",
       "subsystem": "df_response_weights"
     },
     {
@@ -3312,8 +3312,8 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 156,
-    "runtime": 9169,
-    "scientific": 10714
+    "runtime": 9181,
+    "scientific": 10787
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3493,15 +3493,15 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 87,
-      "scientific": 564
+      "runtime": 97,
+      "scientific": 635
     },
     "df_response_weights": {
       "fallback": 0,
       "oracle": 10,
       "performance_exception": 0,
       "runtime": 0,
-      "scientific": 243
+      "scientific": 245
     },
     "df_values": {
       "fallback": 0,
@@ -3549,7 +3549,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4219,
+      "runtime": 4221,
       "scientific": 5
     },
     "scf_tensor": {
