@@ -1,0 +1,244 @@
+"""Host-eigensolve diagnostic workloads used by the existing #206 matrix CLI.
+
+The A/B configurations are identical protocol controls. Separate clean and
+profiled invocations retain setup, destruction and each changed-geometry call;
+no relative performance or external-engine parity is inferred from this probe.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import numpy as np
+
+from benchmarks._cases import benchmark_cases
+from benchmarks.compare_gpu4pyscf_batch import convergence_payload, scaled_geometries
+from benchmarks.df_component_ledger import (
+    aggregate_host,
+    read_host_trace,
+    trace_identity,
+)
+from benchmarks.issue206_df_force_probe import _source_metadata
+from benchmarks.validation_gate import _cuda
+from tools.vibeqc_validation.performance import measure_interleaved
+from tools.vibeqc_validation.schema import canonical_hash
+
+
+def host_workloads(
+    *,
+    case_name,
+    batch_size,
+    library,
+    repeats,
+    memory_budget_bytes,
+    energy_only,
+    trace_directory=None,
+):
+    """Measure one source-bound cold/replay/rebuild domain without hiding setup.
+
+    Warm updates are frozen after cold convergence. Every changed sample starts
+    from the original geometry, restored outside its measured region. A trace
+    is collected inside that region and includes all failed attempts; its wall
+    time is diagnostic and must never be compared to a clean sample as a gain.
+    """
+    from vibeqc import Calculator
+
+    if repeats < 5 or batch_size < 1:
+        raise ValueError(
+            "at least five paired samples and a positive batch are required"
+        )
+    if any(os.environ.get(k) for k in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")):
+        raise ValueError(
+            "provide trace_directory explicitly; ambient profiling is not clean timing"
+        )
+    library = Path(library).resolve(strict=True)
+    source = _source_metadata(library)
+    device, synchronize = _cuda()
+    case = benchmark_cases()[case_name]
+    systems = scaled_geometries(case.atoms, batch_size)
+    properties = ("energy",) if energy_only else ("energy", "forces")
+    inputs = {
+        "case": case_name,
+        "systems": systems,
+        "method": case.method,
+        "basis": case.vibeqc_basis,
+        "representation": case.basis_representation,
+        "charge": case.charge,
+        "multiplicity": case.multiplicity,
+        "auxiliary_basis": case.vibeqc_basis,
+        "properties": properties,
+        "energy_tolerance": 1e-12,
+        "density_tolerance": 1e-10,
+        "screening_tolerance": 1e-12,
+        "metric_relative_threshold": 1e-10,
+        "memory_budget_bytes": memory_budget_bytes,
+    }
+    input_hash = canonical_hash(inputs)
+    calculator = Calculator(
+        method=case.method,
+        basis=case.vibeqc_basis,
+        basis_representation=case.basis_representation,
+        device="cuda",
+        max_iterations=100,
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+        screening_tolerance=1e-12,
+        density_fitting="cuda",
+        auxiliary_basis=case.vibeqc_basis,
+        density_fitting_relative_threshold=1e-10,
+        density_fitting_memory_budget_bytes=memory_budget_bytes,
+    )
+    if Path(calculator._library._name).resolve() != library:
+        raise RuntimeError(
+            "loaded library differs from the recorded source-bound binary"
+        )
+    if trace_directory is not None:
+        trace_directory = Path(trace_directory)
+        trace_directory.mkdir(parents=True, exist_ok=False)
+    sequence = 0
+
+    def measured(workload, evaluate):
+        def sample(_selection):
+            nonlocal sequence
+            path = None
+            if trace_directory is not None:
+                path = trace_directory / f"{sequence:04d}-{workload}.jsonl"
+                with path.open("x"):
+                    pass
+                os.environ["VIBEQC_DF_HOST_TRACE"] = str(path.resolve())
+            sequence += 1
+            try:
+                result = evaluate()
+            finally:
+                if path is not None:
+                    os.environ.pop("VIBEQC_DF_HOST_TRACE")
+            if path is not None:
+                result["host_components"] = {
+                    **aggregate_host(read_host_trace(path)),
+                    "raw_trace": trace_identity(path),
+                }
+            return result
+
+        return sample
+
+    def prepare(geometries=None):
+        return calculator.prepare_batch(
+            systems if geometries is None else geometries,
+            charges=[case.charge] * batch_size,
+            multiplicities=[case.multiplicity] * batch_size,
+            warm_start=True,
+        )
+
+    def execute(batch, coordinates=None):
+        result = batch.execute(coordinates, strict=True, properties=properties)
+        if any(item.executed_backend != "cuda" for item in result.items):
+            raise RuntimeError("a CUDA workload cannot pass with a substituted backend")
+        return {
+            "energies": result.energies.tolist(),
+            "convergence": convergence_payload(result),
+            "fock_builds": [item.fock_builds for item in result.items],
+            "forces": None
+            if energy_only
+            else [item.forces.tolist() for item in result.items],
+            "metric": [
+                d.to_dict() for d in batch.last_density_fitting_metric_diagnostics()
+            ],
+        }
+
+    def cold():
+        # Both ownership creation and destruction are within the timed call.
+        with prepare() as batch:
+            return execute(batch)
+
+    rows = measure_interleaved(
+        measured("cold-start", cold),
+        synchronize,
+        workload="cold-start",
+        inputs_hash=input_hash,
+        repeats=repeats,
+    )
+    synchronize()
+    setup_start = time.perf_counter()
+    batch = prepare()
+    try:
+        seed = execute(batch)
+        batch.set_warm_start_updates(False)
+        synchronize()
+        setup_seconds = time.perf_counter() - setup_start
+        for workload in (
+            "unchanged-geometry",
+            "energy-only" if energy_only else "energy-plus-force",
+        ):
+            rows += measure_interleaved(
+                measured(workload, lambda: execute(batch)),
+                synchronize,
+                workload=workload,
+                inputs_hash=input_hash,
+                repeats=repeats,
+            )
+        coordinates = [np.array([atom[1] for atom in system]) for system in systems]
+        changed = [xyz.copy() for xyz in coordinates]
+        changed[-1][-1, 0] += 0.01
+        changed_systems = [
+            [(atom[0], tuple(xyz)) for atom, xyz in zip(system, positions, strict=True)]
+            for system, positions in zip(systems, changed, strict=True)
+        ]
+        # Rebuild from independent ownership, outside measured replay, to
+        # detect a stale geometry cache even when all repeated samples agree.
+        with prepare(changed_systems) as changed_batch:
+            changed_seed = execute(changed_batch)
+        changed_hash = canonical_hash(
+            {**inputs, "coordinates": [xyz.tolist() for xyz in changed]}
+        )
+        rows += measure_interleaved(
+            measured("changed-geometry", lambda: execute(batch, changed)),
+            synchronize,
+            workload="changed-geometry",
+            inputs_hash=changed_hash,
+            repeats=repeats,
+            prepare=lambda _: execute(batch, coordinates),
+        )
+    finally:
+        synchronize()
+        start = time.perf_counter()
+        batch.close()
+        synchronize()
+        destruction_seconds = time.perf_counter() - start
+    if _source_metadata(library) != source:
+        raise RuntimeError("source/library changed during workload measurement")
+    # Same-model cold endpoints check cache/replay integrity. They are not an
+    # independent scientific oracle or a substitute for the matched #206 gate.
+    for row in rows:
+        expected = changed_seed if row["workload"] == "changed-geometry" else seed
+        if not np.allclose(
+            row["diagnostics"]["energies"],
+            expected["energies"],
+            atol=1e-9,
+            rtol=0,
+        ):
+            raise RuntimeError("cold/replay energy endpoint changed")
+        if not energy_only and not np.allclose(
+            row["diagnostics"]["forces"], expected["forces"], atol=1e-8, rtol=0
+        ):
+            raise RuntimeError("cold/replay force endpoint changed")
+    return {
+        "schema": "vibeqc.issue206.df_host_workloads",
+        "version": 1,
+        "source": source,
+        "device": device,
+        "inputs": inputs,
+        "inputs_hash": input_hash,
+        "cold_endpoints": {"original": seed, "changed": changed_seed},
+        "profiled": trace_directory is not None,
+        "samples": rows,
+        "prepared_setup_seconds": setup_seconds,
+        "prepared_destruction_seconds": destruction_seconds,
+        "comparison": "identical native configurations as an ABBA protocol control; no speedup claim",
+        "limitations": [
+            "This probe records actual host solves; complete device work/traffic requires the separate CUDA/Nsight ledger.",
+            "Reported legacy Fock counts can omit finalizer work; actual reference-eigensolve leaves remain complete within traced scopes.",
+            "External DF numerical/performance parity remains the existing matched #206 matrix gate.",
+        ],
+    }

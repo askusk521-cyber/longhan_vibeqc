@@ -7,6 +7,8 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        # Unified-diff context markers are part of this hash-pinned evidence.
+        exclude: ^benchmarks/results/issue308-host-baseline/measured-source\.patch$
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json

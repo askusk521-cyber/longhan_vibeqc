@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 BENCHMARK = ROOT / "benchmarks" / "compare_gpu4pyscf_batch.py"
 
 
@@ -260,7 +261,24 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="execute cases in Slurm")
-    parser.add_argument("--case", choices=sorted({item.name for item in MATRIX}))
+    parser.add_argument(
+        "--case",
+        choices=sorted(
+            {item.name for item in MATRIX}
+            | {"water-hexadecamer-2s4-def2-svp-spherical"}
+        ),
+    )
+    parser.add_argument("--batch", type=int, choices=(1, 4))
+    parser.add_argument(
+        "--host-workloads",
+        action="store_true",
+        help="run the #308 native host-eigensolve protocol control within #206",
+    )
+    parser.add_argument(
+        "--host-trace-dir",
+        type=Path,
+        help="diagnostic host traces; requires --host-workloads and a fresh directory",
+    )
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--energy-only", action="store_true")
     parser.add_argument(
@@ -285,7 +303,19 @@ def main() -> None:
     if args.memory_budget_bytes < 0:
         parser.error("--memory-budget-bytes must be nonnegative")
 
+    if args.host_trace_dir and not args.host_workloads:
+        parser.error("--host-trace-dir requires --host-workloads")
+    if args.host_workloads and args.repeats < 5:
+        parser.error("host workload controls require at least five paired samples")
     cases = _matrix(args.case)
+    if args.case == "water-hexadecamer-2s4-def2-svp-spherical":
+        if not args.host_workloads:
+            parser.error(
+                "384-AO host probe does not replace the mandatory matched matrix"
+            )
+        cases = tuple(MatrixCase(args.case, 384, b) for b in (1, 4))
+    if args.batch:
+        cases = tuple(case for case in cases if case.batch_size == args.batch)
     # Children run from ROOT; resolve caller-relative paths before changing cwd.
     output_dir = args.output_dir.resolve()
     library = args.library.resolve()
@@ -301,8 +331,42 @@ def main() -> None:
         memory_budget_bytes=args.memory_budget_bytes,
         energy_only=args.energy_only,
     )
+    if args.host_workloads:
+        payload["execution"]["benchmark"] = "issue206_df_matrix.py --host-workloads"
+        payload["execution"]["profiled"] = args.host_trace_dir is not None
+        payload["matched_contract"]["comparison"] = (
+            "identical native ABBA protocol control; no external parity or speedup claim"
+        )
     _write(manifest_path, payload)
-    if args.run:
+    if args.run and args.host_workloads:
+        from benchmarks.df_host_workloads import host_workloads
+
+        os.environ["VIBEQC_LIBRARY"] = str(library)
+        for entry in payload["matrix"]:
+            stem = f"host-{entry['ao_count']}ao-b{entry['batch_size']}"
+            result_path = output_dir / f"{stem}.json"
+            entry.update(status="running", result=None)
+            _write(manifest_path, payload)
+            try:
+                result = host_workloads(
+                    case_name=entry["name"],
+                    batch_size=entry["batch_size"],
+                    library=library,
+                    repeats=args.repeats,
+                    memory_budget_bytes=args.memory_budget_bytes,
+                    energy_only=args.energy_only,
+                    trace_directory=None
+                    if args.host_trace_dir is None
+                    else args.host_trace_dir.resolve() / stem,
+                )
+                _write(result_path, result)
+                entry.update(status="passed", result=str(result_path))
+            except Exception as error:
+                entry.update(status="failed", detail=str(error))
+                _write(manifest_path, payload)
+                raise
+            _write(manifest_path, payload)
+    elif args.run:
         run_matrix(
             payload,
             manifest_path=manifest_path,

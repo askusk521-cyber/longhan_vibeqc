@@ -17,6 +17,7 @@
 #include "molecule/basis.hpp"
 #include "posthf/capacity.hpp"
 #include "posthf/raw_source.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "runtime/resource_ledger.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/rhf_policy.hpp"
@@ -36,6 +37,7 @@
 #include "scf/solver/proposal_control.hpp"
 
 namespace vibeqc::scf {
+namespace host_trace = runtime::host_trace;
 namespace {
 
 using initial_guess::prepare_initial_density;
@@ -383,6 +385,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
                                                    const ScfOptions& options, ScfResult& result,
                                                    CudaDensityFittingJkPlan* cuda_plan = nullptr,
                                                    std::size_t cuda_system = 0) {
+  host_trace::Region final_trace("finalization");
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
 #endif
@@ -426,7 +429,9 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     final_fock =
         build_density_fitting_rhf_fock(data.one_electron.hcore, data.three_center, density);
   }
-  EigenResult orbitals = generalized_eigen(final_fock, orthogonalizer, n);
+  EigenResult orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
+    return generalized_eigen(final_fock, orthogonalizer, n);
+  });
   density = density_from_orbitals(orbitals.vectors, n, occupied);
   if (cuda_plan != nullptr) {
     std::vector<double> coulomb;
@@ -454,6 +459,8 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
   result.energy = electronic_energy(density, data.one_electron.hcore, final_fock) +
                   data.one_electron.nuclear_repulsion;
   if (options.export_physical_reference) {
+    host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
+    host_trace::Region export_trace("reference_export", n);
     auto canonical = generalized_eigen(final_fock, orthogonalizer, n);
     auto reference = std::make_shared<PhysicalReference>();
     reference->nbf = n;
@@ -475,6 +482,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     return;
   }
 
+  host_trace::Region force_trace("force_response", n);
   const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
   // The CUDA response is the sole device path; failures propagate before force
   // assembly. The independent CPU calculation below serves CPU callers only.
@@ -524,6 +532,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
     const ScfOptions& options, ScfResult& result, CudaDensityFittingJkPlan* cuda_plan = nullptr,
     std::size_t cuda_system = 0) {
+  host_trace::Region final_trace("finalization");
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
 #endif
@@ -575,8 +584,12 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     std::tie(alpha_fock, beta_fock) = build_density_fitting_uhf_focks(
         data.one_electron.hcore, data.three_center, alpha_density, beta_density);
   }
-  EigenResult alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-  EigenResult beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
+  EigenResult alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
+    return generalized_eigen(alpha_fock, orthogonalizer, n);
+  });
+  EigenResult beta_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
+    return generalized_eigen(beta_fock, orthogonalizer, n);
+  });
   alpha_density = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
   beta_density = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
   if (cuda_plan != nullptr) {
@@ -614,6 +627,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     return;
   }
 
+  host_trace::Region force_trace("force_response", n);
   const Matrix alpha_weighted = energy_weighted_density(
       alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
   const Matrix beta_weighted =
@@ -778,6 +792,8 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
     ref->hcore = plan.one_electron().hcore;
     ref->fock = matrices.alpha;
     ref->density = result.density;
+    host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
+    host_trace::Region export_trace("reference_export", n);
     const auto orthogonalizer = symmetric_orthogonalizer(ref->overlap, n);
     auto canonical = generalized_eigen(ref->fock, orthogonalizer, n);
     ref->coefficients = std::move(canonical.vectors);
@@ -1386,6 +1402,7 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
                                             const core::System& auxiliary_system,
                                             const ScfOptions& options, int device_id,
                                             const std::vector<double>* initial_density) {
+  host_trace::Region endpoint_trace("run_rhf_density_fitting_cuda_impl");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -1417,11 +1434,13 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
     std::vector<double> device_final_density;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_rhf_device_scf(
-        plan.get(), data.one_electron.hcore, orthogonalizer, density,
-        {static_cast<std::int32_t>(occupied)}, {data.one_electron.nuclear_repulsion},
-        options.max_iterations, options.energy_tolerance, options.density_tolerance,
-        device_final_density, device_records, detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_rhf_device_scf(
+          plan.get(), data.one_electron.hcore, orthogonalizer, density,
+          {static_cast<std::int32_t>(occupied)}, {data.one_electron.nuclear_repulsion},
+          options.max_iterations, options.energy_tolerance, options.density_tolerance,
+          device_final_density, device_records, detail);
+    });
     // A resource rejection must not trigger an undisclosed host SCF retry.
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1457,7 +1476,9 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
                           data.one_electron.nuclear_repulsion;
     const Matrix residual = commutator_residual(fock, density, data.one_electron.overlap, n);
     const Matrix effective_fock = diis.update(fock, residual);
-    orbitals = generalized_eigen(effective_fock, orthogonalizer, n);
+    orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+      return generalized_eigen(effective_fock, orthogonalizer, n);
+    });
     Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
     result.iterations = iteration;
     result.energy = energy;
@@ -1487,6 +1508,7 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
                                             const core::System& auxiliary_system,
                                             const ScfOptions& options, int device_id,
                                             const std::vector<double>* initial_density) {
+  host_trace::Region endpoint_trace("run_uhf_density_fitting_cuda_impl");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -1517,11 +1539,13 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
     std::vector<double> device_final_beta;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_uhf_device_scf(
-        plan.get(), data.one_electron.hcore, orthogonalizer, alpha_density, beta_density,
-        {static_cast<std::int32_t>(alpha_occupied)}, {static_cast<std::int32_t>(beta_occupied)},
-        {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
-        options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_uhf_device_scf(
+          plan.get(), data.one_electron.hcore, orthogonalizer, alpha_density, beta_density,
+          {static_cast<std::int32_t>(alpha_occupied)}, {static_cast<std::int32_t>(beta_occupied)},
+          {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
+          options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
+    });
     // A resource rejection must not trigger an undisclosed host SCF retry.
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1567,8 +1591,12 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
     const Matrix effective_joined =
         diis.update(concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
     std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, n * n);
-    alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-    beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
+    alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+      return generalized_eigen(alpha_fock, orthogonalizer, n);
+    });
+    beta_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+      return generalized_eigen(beta_fock, orthogonalizer, n);
+    });
     Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
     Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
     result.iterations = iteration;
@@ -1600,6 +1628,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* output_diagnostics,
     CudaDensityFittingJkPlan** cached_plan,
     std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
+  host_trace::Region endpoint_trace("run_rhf_density_fitting_cuda_bucket_impl");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -1681,6 +1710,8 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
   std::size_t nbf = 0;
   std::size_t naux = 0;
   for (std::size_t source = 0; source < systems.size(); ++source) {
+    host_trace::Item traced_item(source);
+    host_trace::Region preparation_trace("prepare_item");
     const std::size_t slot_before = data.size();
     try {
       DensityFittingScfData prepared;
@@ -1839,10 +1870,12 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     std::vector<double> device_final_density;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string device_detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_rhf_device_scf(
-        plan, hcore, orthogonalizer, initial_density, occupied, nuclear, options.max_iterations,
-        options.energy_tolerance, options.density_tolerance, device_final_density, device_records,
-        device_detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_rhf_device_scf(
+          plan, hcore, orthogonalizer, initial_density, occupied, nuclear, options.max_iterations,
+          options.energy_tolerance, options.density_tolerance, device_final_density, device_records,
+          device_detail);
+    });
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger) {
       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       return outputs;
@@ -1854,6 +1887,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     if (device_converged) {
       for (std::size_t slot = 0; slot < data.size(); ++slot) {
         const std::size_t source = source_indices[slot];
+        host_trace::Item traced_item(source);
         densities[slot].assign(device_final_density.begin() + slot * matrix_size,
                                device_final_density.begin() + (slot + 1) * matrix_size);
         ScfResult& result = outputs[source].scf;
@@ -1905,6 +1939,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     for (std::size_t slot = 0; slot < data.size(); ++slot) {
       if (!active[slot]) continue;
       const std::size_t source = source_indices[slot];
+      host_trace::Item traced_item(source);
       try {
         Matrix fock = data[slot].one_electron.hcore;
         const double* j = coulomb.data() + slot * matrix_size;
@@ -1918,7 +1953,9 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
         const Matrix residual =
             commutator_residual(fock, densities[slot], data[slot].one_electron.overlap, nbf);
         const Matrix effective_fock = diis[slot].update(fock, residual);
-        orbitals[slot] = generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
+        orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+          return generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
+        });
         Matrix next_density =
             density_from_orbitals(orbitals[slot].vectors, nbf,
                                   static_cast<std::size_t>(systems[source].electron_count / 2));
@@ -1953,6 +1990,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
 
   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
     const std::size_t source = source_indices[slot];
+    host_trace::Item traced_item(source);
     ScfResult& result = outputs[source].scf;
     if (outputs[source].status != VIBEQC_STATUS_INTERNAL_ERROR) {
       continue;
@@ -1983,6 +2021,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* output_diagnostics,
     CudaDensityFittingJkPlan** cached_plan,
     std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
+  host_trace::Region endpoint_trace("run_uhf_density_fitting_cuda_bucket_impl");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -2053,6 +2092,8 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
   std::size_t nbf = 0;
   std::size_t naux = 0;
   for (std::size_t source = 0; source < systems.size(); ++source) {
+    host_trace::Item traced_item(source);
+    host_trace::Region preparation_trace("prepare_item");
     const std::size_t slot_before = data.size();
     try {
       DensityFittingScfData prepared;
@@ -2224,10 +2265,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     std::vector<double> device_final_beta;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string device_detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_uhf_device_scf(
-        plan, hcore, orthogonalizer, initial_alpha, initial_beta, alpha_occupied, beta_occupied,
-        nuclear, options.max_iterations, options.energy_tolerance, options.density_tolerance,
-        device_final_alpha, device_final_beta, device_records, device_detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_uhf_device_scf(
+          plan, hcore, orthogonalizer, initial_alpha, initial_beta, alpha_occupied, beta_occupied,
+          nuclear, options.max_iterations, options.energy_tolerance, options.density_tolerance,
+          device_final_alpha, device_final_beta, device_records, device_detail);
+    });
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger) {
       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       return outputs;
@@ -2239,6 +2282,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     if (device_converged) {
       for (std::size_t slot = 0; slot < data.size(); ++slot) {
         const std::size_t source = source_indices[slot];
+        host_trace::Item traced_item(source);
         alpha_densities[slot].assign(device_final_alpha.begin() + slot * matrix_size,
                                      device_final_alpha.begin() + (slot + 1) * matrix_size);
         beta_densities[slot].assign(device_final_beta.begin() + slot * matrix_size,
@@ -2296,6 +2340,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     for (std::size_t slot = 0; slot < data.size(); ++slot) {
       if (!active[slot]) continue;
       const std::size_t source = source_indices[slot];
+      host_trace::Item traced_item(source);
       try {
         const auto [alpha_occupied, beta_occupied] = spin_occupations(systems[source]);
         Matrix alpha_fock = data[slot].one_electron.hcore;
@@ -2318,8 +2363,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
         const Matrix effective_joined = diis[slot].update(
             concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
         std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, matrix_size);
-        alpha_orbitals[slot] = generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
-        beta_orbitals[slot] = generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
+        alpha_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+          return generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
+        });
+        beta_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+          return generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
+        });
         Matrix next_alpha =
             density_from_orbitals(alpha_orbitals[slot].vectors, nbf, alpha_occupied, 1.0);
         Matrix next_beta =
@@ -2358,6 +2407,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
 
   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
     const std::size_t source = source_indices[slot];
+    host_trace::Item traced_item(source);
     ScfResult& result = outputs[source].scf;
     if (outputs[source].status != VIBEQC_STATUS_INTERNAL_ERROR) {
       continue;

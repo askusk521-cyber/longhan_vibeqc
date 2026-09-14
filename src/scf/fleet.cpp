@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "molecule/basis.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
@@ -215,6 +216,10 @@ std::vector<FleetItemResult> FleetPlan::execute(
   last_inactive_eigensolver_profile_.clear();
   std::vector<FleetItemResult> results(systems_.size());
   const auto execute_one = [&](std::size_t system_index) {
+    // CPU workers do not inherit the caller's thread-local observer. Open a
+    // worker root so actual solves remain visible, indexed in source order.
+    runtime::host_trace::Item traced_item(system_index);
+    runtime::host_trace::Region item_trace("fleet_item");
     FleetItemResult& item = results[system_index];
     item.bucket_id = bucket_ids_[system_index];
     item.executed_backend = execution_options.resolved_fock_build->backend == FockBackend::Cuda
