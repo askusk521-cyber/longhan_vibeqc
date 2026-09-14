@@ -52,10 +52,14 @@ struct FinalStateLimits {
   // Zero permits validation only; requests above 64 are invalid. This is a
   // bounded final correction, not another unbounded SCF driver.
   unsigned maximum_corrections{4};
+  // Physical-reference export also requires absolute C^T F C canonicality
+  // and maximum (rather than RMS-only) density reconstruction gates.
+  bool require_canonicality{};
 };
 
 struct FinalStateDiagnostic {
   double maximum_commutator{}, density_rms{}, maximum_trace_error{}, maximum_idempotency_error{};
+  double maximum_density_error{}, maximum_canonical_error{};
   double energy{}, energy_change{};
   std::vector<EigenFrameDiagnostic> eigenframes;
 };

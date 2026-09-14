@@ -114,25 +114,25 @@ def validate_preparation_counts(components, *, batch_size, workload, eager, rebu
 
 
 def validate_final_eigen_counts(
-    components, *, batch_size, method, reference, strict_energy=False
+    components, *, batch_size, method, reference, strict_final_state=False
 ):
     """Require actual finalizer leaves; a flag or omitted observer is insufficient.
 
     Provider ablations force rebuilding after retained-state integration. Cold
     strict correction may need more than one solve; all physical evaluations
-    and corrections must agree with the actual provider leaves. UHF currently
-    retains two serial final spin frames, including an empty occupation channel.
+    and corrections must agree with the actual provider leaves. UHF corrects
+    both spin frames jointly, including an empty occupation channel.
     """
-    expected = batch_size * (2 if method == "uhf" else 1)
+    spins = 2 if method == "uhf" else 1
+    expected = batch_size * spins
     solves = components["eigensolves_by_reason"]
     device = components["device_eigensolves_by_reason"]
     phases = components.get("exclusive_phases", {})
     physical = phases.get("final_state_fock_build", {}).get("calls", 0)
-    if strict_energy or physical:
+    if strict_final_state or physical:
         corrections = phases.get("strict_final_correction", {}).get("calls", 0)
         if (
-            method != "rhf"
-            or physical != batch_size + corrections
+            physical != batch_size + corrections
             or not batch_size <= corrections <= 16 * batch_size
             or phases.get("final_state_reuse", {}).get("calls", 0)
             or phases.get("final_state_corrected", {}).get("calls", 0) != batch_size
@@ -141,7 +141,7 @@ def validate_final_eigen_counts(
             raise RuntimeError(
                 "provider ablation did not perform bounded strict rebuilding"
             )
-        expected = corrections
+        expected = spins * corrections
     if (
         solves.get("final_fock", {}).get("calls", 0) != (expected if reference else 0)
         or device.get("final_fock", {}).get("calls", 0)
@@ -397,7 +397,7 @@ def host_workloads(
                         batch_size=batch_size,
                         method=case.method,
                         reference=False,
-                        strict_energy=case.method == "rhf" and energy_only,
+                        strict_final_state=True,
                     )
                 if final_eigen_ablation:
                     validate_preparation_counts(
@@ -412,7 +412,7 @@ def host_workloads(
                         batch_size=batch_size,
                         method=case.method,
                         reference=_selection == "baseline",
-                        strict_energy=case.method == "rhf" and energy_only,
+                        strict_final_state=True,
                     )
                 result["host_components"] = {
                     **components,

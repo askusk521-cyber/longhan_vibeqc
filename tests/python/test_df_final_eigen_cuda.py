@@ -112,7 +112,7 @@ def test_final_provider_matches_reference_across_replans(
                     batch_size=batch_size,
                     method=method,
                     reference=reference,
-                    strict_energy=method == "rhf" and "forces" not in properties,
+                    strict_final_state=True,
                 )
                 assert all(item.executed_backend == "cuda" for item in result.items)
                 outputs.append(result)
