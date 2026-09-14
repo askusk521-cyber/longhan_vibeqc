@@ -1,5 +1,9 @@
 # #309 prepared overlap cache and separate preparation ablations
 
+The [larger-domain follow-up](../issue309-overlap-cache-larger/README.md) adds
+five-pair 96-AO/batch-4 and 192-AO/batch-1 comparisons using the same validated
+native scientific source and library. This record preserves the first domain.
+
 One prepared owner retains the original FP64 symmetric X with exact S and
 coordinates. Ordered basis/representation/device belong to that immutable
 owner. Per-source caches survive output/provider replans, with separate
