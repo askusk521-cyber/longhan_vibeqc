@@ -45,25 +45,32 @@ def test_independent_fitted_scf_providers_and_complete_forces(
 
     assert os.environ.get("SLURM_JOB_ID")
     separate = spin == "unrestricted"
-    atoms = [("O", (0, 0, 0)), ("H", (0, 0, 1.8))]
-    if not separate:
-        atoms.append(("H", (1.7, 0, -0.6)))
+    # Bent H2O+ avoids OH's degenerate Pi occupation: equally valid density
+    # orientations must not be mistaken for a device-provider discrepancy.
+    atoms = [("O", (0, 0, 0)), ("H", (0, 0, 1.8)), ("H", (1.7, 0, -0.6))]
     spec = FockBuildSpec.hf(spin, coulomb=j, exchange=k)
     mol = gto.M(
         atom=atoms,
         basis="def2-svp",
         unit="Bohr",
         spin=int(separate),
+        charge=int(separate),
         cart=representation == "cartesian",
         verbose=0,
     )
     overlap = mol.intor("int1e_ovlp")
+    # Native Cartesian AOs are individually normalized; PySCF's Cartesian
+    # d components retain angular normalization factors. Transform S into the
+    # native convention before electron, idempotency and commutator checks.
+    norms = np.sqrt(np.diag(overlap))
+    overlap = overlap / np.outer(norms, norms)
     with (
         NativeAO(
             atoms,
             basis="def2-svp",
             representation=representation,
             multiplicity=2 if separate else 1,
+            charge=int(separate),
         ) as basis,
         FockPlan(basis, spec, device="cpu") as oracle,
         FockPlan(basis, spec, device="cuda", device_budget_bytes=16 << 20) as device,
@@ -104,6 +111,7 @@ def test_independent_fitted_scf_providers_and_complete_forces(
                     "overlap": int(step == 0 or name == "cpu"),
                     "core_guess": int(step == 0),
                     "iteration": spins * result.iterations,
+                    "seed_validation": (1 + spins) * int(step != 0),
                     "final_fock": spins,
                 }
                 for reason, count in expected.items():

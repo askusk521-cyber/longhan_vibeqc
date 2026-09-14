@@ -21,7 +21,8 @@ enum class EigenReason {
   final_fock,
   reference_export,
   fallback,
-  iteration
+  iteration,
+  seed_validation
 };
 inline thread_local EigenReason active_reason = EigenReason::unspecified;
 

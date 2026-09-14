@@ -3,6 +3,8 @@
 #include <atomic>
 #include <stdexcept>
 
+#include "scf/reference/observation.hpp"
+
 namespace vibeqc::scf::solver {
 using reference::index;
 using reference::multiply;
@@ -21,7 +23,8 @@ std::uint64_t new_scf_generation(const ScfOptions& options) {
  * rescaling would conceal a wrong charge/spin proposal, so validation never
  * repairs an input. Determinant proposals also require integer occupations.
  */
-std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& proposal) {
+std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& proposal,
+                             const initial_guess::EigenOperation& eigen) {
   if (proposal.generation != state.generation || proposal.iteration != state.iteration)
     return "stale_state";
   if (proposal.representation != ProposalRepresentation::ensemble_density &&
@@ -32,7 +35,23 @@ std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& propos
   if (!std::all_of(candidate.begin(), candidate.end(), [](double x) { return std::isfinite(x); }))
     return "nonfinite";
   const auto n = state.nbf;
-  const auto se = symmetric_eigen(state.overlap, n);
+  const auto diagonalize = [&](const Matrix& matrix) {
+    // The legacy seed contract permits 1e-7 asymmetry; the ordinary device
+    // frame requires 1e-12 relative symmetry. Keep that acceptance boundary
+    // by choosing the old validator for such inputs, never by symmetrizing D.
+    bool device_symmetric = true;
+    for (std::size_t i = 0; i < n; ++i)
+      for (std::size_t j = i + 1; j < n; ++j)
+        if (std::abs(matrix[index(i, j, n)] - matrix[index(j, i, n)]) >
+            1e-12 *
+                std::max({1.0, std::abs(matrix[index(i, j, n)]), std::abs(matrix[index(j, i, n)])}))
+          device_symmetric = false;
+    if (eigen && device_symmetric) return eigen(matrix, nullptr, nullptr, n);
+    reference::observation::Reason reason(eigen ? reference::observation::EigenReason::fallback
+                                                : reference::observation::active_reason);
+    return symmetric_eigen(matrix, n);
+  };
+  const auto se = diagonalize(state.overlap);
   Matrix scaled = se.vectors;
   for (std::size_t j = 0; j < n; ++j) {
     if (se.values[j] < 1e-10) return "singular_metric";
@@ -51,7 +70,7 @@ std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& propos
     }
     if (!std::isfinite(trace) || std::abs(trace - state.electrons[spin]) > tolerance)
       return "electron_count";
-    const auto occupations = symmetric_eigen(multiply(root, multiply(p, root, n), n), n).values;
+    const auto occupations = diagonalize(multiply(root, multiply(p, root, n), n)).values;
     for (double value : occupations) {
       if (!std::isfinite(value) || value < -tolerance ||
           value > state.occupation_weight + tolerance)
@@ -65,7 +84,9 @@ std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& propos
 }
 
 void validate_seed(const Matrix& overlap, const Matrix& seed, std::size_t n,
-                   const std::vector<unsigned>& electrons, double weight) {
+                   const std::vector<unsigned>& electrons, double weight,
+                   const initial_guess::EigenOperation& eigen) {
+  reference::observation::Reason scope(reference::observation::EigenReason::seed_validation);
   ScfSnapshot state;
   state.nbf = n;
   state.overlap = overlap;
@@ -73,7 +94,7 @@ void validate_seed(const Matrix& overlap, const Matrix& seed, std::size_t n,
   state.occupation_weight = weight;
   state.density.resize(electrons.size() * n * n);
   const auto reason =
-      invalid_proposal(state, {ProposalRepresentation::ensemble_density, 0, 0, seed});
+      invalid_proposal(state, {ProposalRepresentation::ensemble_density, 0, 0, seed}, eigen);
   if (!reason.empty()) throw std::invalid_argument("invalid initial proposal: " + reason);
 }
 

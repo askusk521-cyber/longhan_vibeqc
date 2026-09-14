@@ -59,7 +59,9 @@ def test_host_ledger_counts_actual_leaves_and_keeps_clocks_separate(tmp_path):
         read_host_trace(path)
 
 
-@pytest.mark.parametrize("reason", ("overlap", "iteration", "final_fock"))
+@pytest.mark.parametrize(
+    "reason", ("overlap", "iteration", "final_fock", "seed_validation")
+)
 def test_device_solver_reasons_separate_setup_and_finalization(tmp_path, reason):
     """Adding cold setup calls must not inflate the final-provider ablation."""
     record = host_record()

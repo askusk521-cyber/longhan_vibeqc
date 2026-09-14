@@ -136,7 +136,7 @@ ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& option
   EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n, {static_cast<unsigned>(system.electron_count)},
-                  2.0);
+                  2.0, plan.eigen_operation(PreparedFockPlan::EigenUse::Setup));
     density = *initial_density;
   }
   Diis diis(options.diis_history);
@@ -221,7 +221,7 @@ ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& option
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n,
                   {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)},
-                  1.0);
+                  1.0, plan.eigen_operation(PreparedFockPlan::EigenUse::Setup));
     std::tie(alpha_density, beta_density) = split_spin_matrices(*initial_density, n * n);
   }
   Diis diis(options.diis_history);

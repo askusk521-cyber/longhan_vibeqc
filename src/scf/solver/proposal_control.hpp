@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "scf/initial_guess/eigen_operation.hpp"
 #include "scf/proposals.hpp"
 #include "scf/reference/mean_field.hpp"
 #include "scf/solver/diis.hpp"
@@ -19,10 +20,15 @@ double seconds_since(ScfClock::time_point started);
 /** Assign one generation per hooked solve; ordinary solves do not consume IDs. */
 std::uint64_t new_scf_generation(const ScfOptions& options);
 /** Validate generation, spin trace, symmetry and AO-metric occupations without repair. */
-std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& proposal);
-/** Apply the same ensemble-domain checks to an explicit strict warm seed. */
+std::string invalid_proposal(const ScfSnapshot& state, const ScfProposal& proposal,
+                             const initial_guess::EigenOperation& eigen = {});
+/** Apply the same ensemble-domain checks to an explicit strict warm seed.
+ * Symmetric inputs may borrow a qualified device provider. Legacy tolerated
+ * asymmetry selects the reference check before submission, without repairing
+ * the seed or retrying a failed device solve. */
 void validate_seed(const Matrix& overlap, const Matrix& seed, std::size_t n,
-                   const std::vector<unsigned>& electrons, double weight);
+                   const std::vector<unsigned>& electrons, double weight,
+                   const initial_guess::EigenOperation& eigen = {});
 /** Evaluate every trial with the same unscreened or fitted target operator as
  * the main loop. Rejected trials count as work. Convex damping preserves the
  * validated ensemble domain but is explicitly no longer a determinant. The

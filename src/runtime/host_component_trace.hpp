@@ -68,6 +68,8 @@ inline const char* reason_name(EigenReason reason) noexcept {
       return "fallback";
     case EigenReason::iteration:
       return "iteration";
+    case EigenReason::seed_validation:
+      return "seed_validation";
     default:
       return "unspecified";
   }
