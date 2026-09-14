@@ -297,7 +297,8 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
   bool graph_replay = state->graph_replay;
   // Host-backed streamed tiles require pageable copies and fences, while a
   // source-backed plan generates every tile on-device and remains capture-safe.
-  if (!graph_replay && (!plan->streamed || plan->integral_source != nullptr)) {
+  if (!graph_replay && !state->graph_capture_rejected &&
+      (!plan->streamed || plan->integral_source != nullptr)) {
     // A previous capture may have produced a graph but failed during
     // instantiation/upload. Reset both handles before replacing them.
     iteration_graph.reset();
@@ -337,6 +338,9 @@ vibeqc_status run_cuda_density_fitting_rhf_device_scf(
     // Graph capture is an optimization.  A provider/capture limitation falls
     // through to the same direct launch sequence without changing semantics.
     if (!graph_replay) {
+      status = recover_scf_capture(plan->stream, cuda_error, status, state->graph_capture_rejected,
+                                   detail);
+      if (status != VIBEQC_STATUS_SUCCESS) return status;
       cuda_error = cudaSuccess;
     }
   }

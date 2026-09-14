@@ -63,6 +63,9 @@ struct PersistentScfState {
   DeviceSolver solver;
   DeviceIterationGraph graph;
   bool graph_replay{};
+  // Cache a rejected capture on this exact prepared solver/source signature.
+  // Ordinary execution remains available; a new owner rechecks eligibility.
+  bool graph_capture_rejected{};
   unsigned max_iterations{};
   double energy_tolerance{};
   double density_tolerance{};

@@ -179,3 +179,15 @@ Manual validation tools must run through a finite Slurm allocation:
   endpoints at batch one/multiple and two positive budgets plus the bulk route.
   Cold setup/SCF, changed-geometry rebuilding, and warm reuse are reported
   separately with metric ranks and allocation diagnostics.
+
+### Rejected SCF graph capture
+
+A prepared CUDA DF SCF owner may use the same device eigensolver through
+ordinary stream execution when graph capture is unsupported for its actual
+signature. After ending a failed capture, the runtime clears the expected
+capture error before submitting ordinary work; assigning a local success
+status alone does not clear CUDA's error slot. The prepared owner remembers
+that rejected capture, including on warm replay. A new owner checks again.
+This policy applies to both RHF and UHF and adds no fixed AO dimension limit.
+Unrelated runtime errors and allocation failures remain failures. SCF
+convergence and strict final-state checks are unchanged.
