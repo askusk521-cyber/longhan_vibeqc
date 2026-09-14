@@ -20,22 +20,22 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 35757,
+      "bytes": 36296,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 505,
+        "runtime": 521,
         "scientific": 167
       },
       "path": "src/dft/cuda_grid.cu",
-      "physical_lines": 725,
+      "physical_lines": 741,
       "reason": "Native plan/arena ownership around the bounded AO/feature kernels.",
       "regions": [
         {
           "code_lines": 89,
-          "first_line": 55,
-          "last_line": 149,
+          "first_line": 62,
+          "last_line": 156,
           "reason": "Normalized primitive traversal and D/C feature layout/reduction adapters remain counted conservatively as scientific glue. Axis derivative polynomials and the bilinear ingredient/sigma arithmetic shared by both routes are compiler-owned.",
           "role": "scientific",
           "start": "__global__ void ao_kernel",
@@ -43,8 +43,8 @@
         },
         {
           "code_lines": 78,
-          "first_line": 186,
-          "last_line": 270,
+          "first_line": 193,
+          "last_line": 277,
           "reason": "Native CUDA LDA/PBE point dispatch, deterministic energy/electron integration and spin-potential matrix contraction. Scalar XC algebra is shared with the CPU implementation, but this endpoint-specific device contraction remains maintained scientific glue.",
           "role": "scientific",
           "start": "__device__ vibeqc::dft::point::Value evaluate_xc_point",
@@ -52,7 +52,7 @@
         }
       ],
       "role": "runtime",
-      "sha256": "911dbf9cd08b9757bb9387ddc60b28d7aa84089963d2ecdcec6bac4ee001cdcf",
+      "sha256": "070ee53c4ee45a2a1a271d2c6cd9304d377f9643cc0801f433bc7fe48067ea2f",
       "subsystem": "ao_grid"
     },
     {
@@ -3197,7 +3197,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8932,
+    "runtime": 8948,
     "scientific": 10556
   },
   "migration_ledger": {
@@ -3353,7 +3353,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 520,
+      "runtime": 536,
       "scientific": 167
     },
     "df_derivatives": {

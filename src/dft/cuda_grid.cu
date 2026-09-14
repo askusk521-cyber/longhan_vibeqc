@@ -8,9 +8,13 @@
 #include "../tensor/cuda_runtime.cuh"
 #include "grid_task_view.cuh"
 #include "xc_point.hpp"
+#include "vibeqc/vibeqc.h"
 
 namespace {
 using namespace vibeqc_tensor;
+#if VIBEQC_TEST_HOOKS
+thread_local bool fail_next_grid_allocation = false;
+#endif
 struct GridPlan {
   Context context;
   bool density_ready = false;
@@ -39,6 +43,9 @@ int guarded(char* error, size_t size, F operation) noexcept {
   try {
     operation();
     return 0;
+  } catch (const DeviceAllocationError& e) {
+    error_text(error, size, e.what());
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
   } catch (const std::exception& e) {
     error_text(error, size, e.what());
     return 1;
@@ -274,6 +281,12 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
                         size_t active_capacity, const size_t* orbital_capacity, size_t orbital_tile,
                         unsigned feature_mask, void** output, char* error, size_t size) {
   return guarded(error, size, [&] {
+#if VIBEQC_TEST_HOOKS
+    if (fail_next_grid_allocation) {
+      fail_next_grid_allocation = false;
+      throw DeviceAllocationError("injected CUDA grid allocation failure");
+    }
+#endif
     if (!output) throw std::invalid_argument("null CUDA grid output");
     *output = nullptr;
     if (!dimensions || !basis || !capacity || capacity > INT_MAX || order > 3)
@@ -370,6 +383,9 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
     *output = p.release();
   });
 }
+#if VIBEQC_TEST_HOOKS
+void grid_cuda_fail_next_allocation_for_test_v1() { fail_next_grid_allocation = true; }
+#endif
 int grid_cuda_create_v2(int device, int major, int minor, const size_t* dimensions,
                         const double* basis, size_t capacity, unsigned order, size_t expected_bytes,
                         size_t active_capacity, void** output, char* error, size_t size) {

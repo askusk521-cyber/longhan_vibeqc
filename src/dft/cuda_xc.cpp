@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "vibeqc/vibeqc.h"
+
 #if VIBEQC_HAS_CUDA
 #include "dft/grid_task_view.cuh"
 
@@ -44,6 +46,7 @@ constexpr std::size_t kErrorSize = 512;
 void checked(int status, const std::array<char, kErrorSize>& error, const char* operation) {
   if (status == 0) return;
   const std::string detail(error.data());
+  if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
   throw std::runtime_error(std::string(operation) + " failed" +
                            (detail.empty() ? std::string{} : ": " + detail));
 }

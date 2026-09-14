@@ -746,6 +746,7 @@ set_target_properties(vibeqc PROPERTIES
 )
 
 if(VIBEQC_BUILD_TESTS)
+  target_compile_definitions(vibeqc PRIVATE VIBEQC_TEST_HOOKS=1)
   enable_testing()
   if(VIBEQC_ENABLE_CUDA)
     # Manual numerical/performance tier: invoked through the Slurm validator,

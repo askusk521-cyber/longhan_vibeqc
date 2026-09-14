@@ -13,6 +13,10 @@
 
 #include "vibeqc/vibeqc.h"
 
+#if VIBEQC_HAS_CUDA
+extern "C" void grid_cuda_fail_next_allocation_for_test_v1();
+#endif
+
 namespace {
 // Fail exactly one grid-coordinate allocation after warm-state import. This
 // executable-only interposition exercises real constructor unwinding without
@@ -364,6 +368,13 @@ int main() {
     if (vibeqc_context_create(&cuda_descriptor, &cuda_context) == VIBEQC_STATUS_SUCCESS) {
       vibeqc_system* cuda_system = Fixture::create_system(cuda_context);
       vibeqc_calculation* cuda_calculation = nullptr;
+#if VIBEQC_HAS_CUDA
+      grid_cuda_fail_next_allocation_for_test_v1();
+      require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
+                      VIBEQC_STATUS_OUT_OF_MEMORY &&
+                  cuda_calculation == nullptr,
+              "CUDA grid allocation failure lost its out-of-memory status");
+#endif
       require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
                       VIBEQC_STATUS_SUCCESS &&
                   cuda_calculation != nullptr,
