@@ -70,7 +70,22 @@ def changed_coordinates(systems):
     return changed
 
 
-def result_record(result, milliseconds: float):
+def transport_payload(value):
+    if value is None:
+        return None
+    return value.to_payload()
+
+
+def transport_delta(previous, current):
+    if previous is None or current is None:
+        return None
+    return {
+        field: getattr(current, field) - getattr(previous, field)
+        for field in current.__dataclass_fields__
+    }
+
+
+def result_record(result, milliseconds: float, transport_before, transport_after):
     """Keep physical convergence and actual prepared grids with every phase."""
     return {
         "milliseconds": milliseconds,
@@ -83,6 +98,11 @@ def result_record(result, milliseconds: float):
         "converged": [item.converged for item in result.items],
         "physical_residuals": [item.physical_residual_rms for item in result.items],
         "grid_points": [item.ks_diagnostic.grid_points for item in result.items],
+        "transport": [transport_payload(item) for item in transport_after],
+        "transport_delta": [
+            transport_delta(before, after)
+            for before, after in zip(transport_before, transport_after, strict=True)
+        ],
     }
 
 
@@ -154,6 +174,7 @@ def run_case(method: str, batch: int):
     )
     try:
         phases = {}
+        previous_transport = tuple(prepared.ks_transport_diagnostics)
         for name, coordinates in (
             ("cold", None),
             ("fixed_geometry", None),
@@ -165,7 +186,11 @@ def run_case(method: str, batch: int):
                     coordinates=coordinates, properties=("energy",), strict=True
                 )
             )
-            phases[name] = result_record(result, elapsed)
+            current_transport = tuple(prepared.ks_transport_diagnostics)
+            phases[name] = result_record(
+                result, elapsed, previous_transport, current_transport
+            )
+            previous_transport = current_transport
         validate_phase(phases["cold"], expected_initial)
         validate_phase(phases["fixed_geometry"], expected_initial)
         validate_phase(phases["changed_geometry"], expected_changed)
@@ -194,7 +219,14 @@ def run_case(method: str, batch: int):
         "component_costs": {
             "endpoint_phase_totals_recorded": True,
             "internal_j_xc_breakdown": None,
-            "reason": "the public DFT result does not expose separate J/XC timers",
+            "transport_fields": [
+                "setup_h2d_bytes",
+                "density_h2d_bytes",
+                "scalar_d2h_bytes",
+                "matrix_d2h_bytes",
+                "synchronizations",
+            ],
+            "reason": "native CUDA KS exposes measured transport counters; separate J/XC event timing remains unavailable",
         },
     }
 
