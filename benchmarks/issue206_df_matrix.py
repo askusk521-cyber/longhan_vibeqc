@@ -295,6 +295,16 @@ def main() -> None:
         help="compare CPU-reference and ordinary device final eigen providers with identical preparation",
     )
     parser.add_argument(
+        "--final-state-ablation",
+        action="store_true",
+        help="compare forced device final rebuilding with verified retention and necessary correction",
+    )
+    parser.add_argument(
+        "--combined-host-ablation",
+        action="store_true",
+        help="compare eager/rebuilt reference setup and forced reference finalization with the combined verified device path",
+    )
+    parser.add_argument(
         "--host-trace-dir",
         type=Path,
         help="diagnostic host traces; requires --host-workloads and a fresh directory",
@@ -325,26 +335,19 @@ def main() -> None:
 
     if args.host_trace_dir and not args.host_workloads:
         parser.error("--host-trace-dir requires --host-workloads")
-    if args.eager_core_ablation and not args.host_workloads:
-        parser.error("--eager-core-ablation requires --host-workloads")
-    if args.preparation_ablation and not args.host_workloads:
-        parser.error("--preparation-ablation requires --host-workloads")
-    if args.preparation_ablation and args.eager_core_ablation:
-        parser.error("select one preparation ablation")
-    if args.setup_eigen_ablation and not args.host_workloads:
-        parser.error("--setup-eigen-ablation requires --host-workloads")
-    if args.setup_eigen_ablation and (
-        args.preparation_ablation
-        or args.eager_core_ablation
-        or args.final_eigen_ablation
-    ):
-        parser.error("select one preparation, final eigen or setup eigen ablation")
-    if args.final_eigen_ablation and not args.host_workloads:
-        parser.error("--final-eigen-ablation requires --host-workloads")
-    if args.final_eigen_ablation and (
-        args.preparation_ablation or args.eager_core_ablation
-    ):
-        parser.error("select one preparation or final eigen ablation")
+    ablations = {
+        "eager-core-ablation": args.eager_core_ablation,
+        "preparation-ablation": args.preparation_ablation,
+        "setup-eigen-ablation": args.setup_eigen_ablation,
+        "final-eigen-ablation": args.final_eigen_ablation,
+        "final-state-ablation": args.final_state_ablation,
+        "combined-host-ablation": args.combined_host_ablation,
+    }
+    for name, enabled in ablations.items():
+        if enabled and not args.host_workloads:
+            parser.error(f"--{name} requires --host-workloads")
+    if sum(bool(value) for value in ablations.values()) > 1:
+        parser.error("select one host ablation")
     if args.host_workloads and args.repeats < 5:
         parser.error("host workload controls require at least five paired samples")
     cases = _matrix(args.case)
@@ -374,8 +377,15 @@ def main() -> None:
     if args.host_workloads:
         payload["execution"]["benchmark"] = "issue206_df_matrix.py --host-workloads"
         payload["execution"]["profiled"] = args.host_trace_dir is not None
+        payload["execution"]["host_ablation"] = next(
+            (name for name, enabled in ablations.items() if enabled), "protocol-control"
+        )
         payload["matched_contract"]["comparison"] = (
-            "reference/device setup provider ablation; no external parity claim"
+            "combined preparation/provider/final-state work ablation with strict physical-state gates; no external parity claim"
+            if args.combined_host_ablation
+            else "forced device final rebuilding versus verified retention/correction; no external parity claim"
+            if args.final_state_ablation
+            else "reference/device setup provider ablation; no external parity claim"
             if args.setup_eigen_ablation
             else "reference versus ordinary device final eigen provider; no external parity claim"
             if args.final_eigen_ablation
@@ -407,6 +417,8 @@ def main() -> None:
                     preparation_ablation=args.preparation_ablation,
                     final_eigen_ablation=args.final_eigen_ablation,
                     setup_eigen_ablation=args.setup_eigen_ablation,
+                    final_state_ablation=args.final_state_ablation,
+                    combined_host_ablation=args.combined_host_ablation,
                     trace_directory=None
                     if args.host_trace_dir is None
                     else args.host_trace_dir.resolve() / stem,

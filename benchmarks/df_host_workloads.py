@@ -151,13 +151,61 @@ def validate_final_eigen_counts(
         raise RuntimeError("final eigen ablation did not execute its declared provider")
 
 
-def validate_setup_eigen_counts(components, *, batch_size, workload, reference):
+def validate_final_state_counts(
+    components, *, batch_size, method, force, reference, compute_forces
+):
+    """Distinguish retained work from real correction, even at zero solves.
+
+    Every item must still read and validate its candidate against current F.
+    Count joint UHF corrections separately from their two provider leaves;
+    rejected candidates may legitimately correct on either ablation side.
+    """
+    phases = components.get("exclusive_phases", {})
+
+    def calls(name):
+        return phases.get(name, {}).get("calls", 0)
+
+    corrections = calls("strict_final_correction")
+    corrected = calls("final_state_corrected")
+    reused = calls("final_state_reuse")
+    physical = calls("final_state_fock_build")
+    if (
+        calls("final_state_read") != batch_size
+        or physical != batch_size + corrections
+        or calls("final_state_validation") != physical
+        or reused + corrected != batch_size
+        or not corrected <= corrections <= 16 * corrected
+        or (force and (reused or corrected != batch_size))
+        or calls("final_state_weighted_density")
+        != (batch_size if compute_forces else 0)
+        or calls("force_response") != (batch_size if compute_forces else 0)
+    ):
+        raise RuntimeError(
+            "final state ablation omitted current-F work or misreported correction/output selection"
+        )
+    expected = corrections * (2 if method == "uhf" else 1)
+    host = components["eigensolves_by_reason"]
+    device = components["device_eigensolves_by_reason"]
+    if (
+        host.get("final_fock", {}).get("calls", 0) != (expected if reference else 0)
+        or device.get("final_fock", {}).get("calls", 0)
+        != (0 if reference else expected)
+        or host.get("fallback", {}).get("calls", 0)
+    ):
+        raise RuntimeError(
+            "final state ablation did not execute the declared spin providers"
+        )
+
+
+def validate_setup_eigen_counts(
+    components, *, batch_size, workload, reference, eager=False, rebuild=False
+):
     """Gate setup substitution separately from work elimination and final solves."""
     expected = {
         "overlap": batch_size
-        if workload == "cold-start"
+        if workload == "cold-start" or rebuild
         else int(workload == "changed-geometry"),
-        "core_guess": batch_size if workload == "cold-start" else 0,
+        "core_guess": batch_size if workload == "cold-start" or eager else 0,
     }
     for name, count in expected.items():
         for key, selected in (
@@ -189,6 +237,8 @@ def host_workloads(
     preparation_ablation=None,
     final_eigen_ablation=False,
     setup_eigen_ablation=False,
+    final_state_ablation=False,
+    combined_host_ablation=False,
 ):
     """Measure one source-bound cold/replay/rebuild domain without hiding setup.
 
@@ -229,17 +279,21 @@ def host_workloads(
                     eager_core_ablation,
                     final_eigen_ablation,
                     setup_eigen_ablation,
+                    final_state_ablation,
+                    combined_host_ablation,
                 ),
             )
         )
         > 1
     ):
-        raise ValueError("select one preparation, final eigen or setup eigen ablation")
+        raise ValueError("select one host ablation")
     policies = (
         preparation_policies(preparation_ablation) if preparation_ablation else None
     )
     if eager_core_ablation:
         policies = {"baseline": (True, False), "candidate": (False, False)}
+    if combined_host_ablation:
+        policies = preparation_policies("combined")
     library = Path(library).resolve(strict=True)
     source = _source_metadata(library)
     device, synchronize = _cuda()
@@ -269,15 +323,25 @@ def host_workloads(
             "baseline": "cpu_reference",
             "candidate": "ordinary_xsyevd",
         }
-        if setup_eigen_ablation
+        if setup_eigen_ablation or combined_host_ablation
         else None,
         "final_eigen_ablation": final_eigen_ablation,
+        "final_state_ablation": final_state_ablation,
+        "combined_host_ablation": combined_host_ablation,
+        "final_state_policies": {
+            "baseline": "forced_reference_rebuild"
+            if combined_host_ablation
+            else "forced_device_rebuild",
+            "candidate": "verified_retention_or_device_correction",
+        }
+        if final_state_ablation or combined_host_ablation
+        else None,
         "forced_final_rebuild": final_eigen_ablation or setup_eigen_ablation,
         "final_eigen_policies": {
             "baseline": "cpu_reference",
             "candidate": "ordinary_xsyevd",
         }
-        if final_eigen_ablation
+        if final_eigen_ablation or combined_host_ablation
         else None,
     }
     input_hash = canonical_hash(inputs)
@@ -322,23 +386,39 @@ def host_workloads(
                     eager, rebuild = policies[_selection]
                     os.environ["VIBEQC_DF_EAGER_CORE_GUESS"] = "1" if eager else "0"
                     os.environ["VIBEQC_DF_REBUILD_OVERLAP"] = "1" if rebuild else "0"
-                if final_eigen_ablation or setup_eigen_ablation:
-                    os.environ["VIBEQC_DF_FORCE_FINAL_REBUILD"] = "1"
-                if final_eigen_ablation:
+                if (
+                    final_eigen_ablation
+                    or setup_eigen_ablation
+                    or final_state_ablation
+                    or combined_host_ablation
+                ):
+                    os.environ["VIBEQC_DF_FORCE_FINAL_REBUILD"] = (
+                        "1"
+                        if final_eigen_ablation
+                        or setup_eigen_ablation
+                        or _selection == "baseline"
+                        else "0"
+                    )
+                if final_eigen_ablation or combined_host_ablation:
                     os.environ["VIBEQC_DF_REFERENCE_FINAL_EIGEN"] = (
                         "1" if _selection == "baseline" else "0"
                     )
-                if setup_eigen_ablation:
+                if setup_eigen_ablation or combined_host_ablation:
                     os.environ["VIBEQC_DF_REFERENCE_SETUP_EIGEN"] = (
                         "1" if _selection == "baseline" else "0"
                     )
                 result = evaluate()
             finally:
-                if final_eigen_ablation or setup_eigen_ablation:
+                if (
+                    final_eigen_ablation
+                    or setup_eigen_ablation
+                    or final_state_ablation
+                    or combined_host_ablation
+                ):
                     os.environ.pop("VIBEQC_DF_FORCE_FINAL_REBUILD", None)
-                if setup_eigen_ablation:
+                if setup_eigen_ablation or combined_host_ablation:
                     os.environ.pop("VIBEQC_DF_REFERENCE_SETUP_EIGEN", None)
-                if final_eigen_ablation:
+                if final_eigen_ablation or combined_host_ablation:
                     os.environ.pop("VIBEQC_DF_REFERENCE_FINAL_EIGEN", None)
                 if policies:
                     os.environ.pop("VIBEQC_DF_EAGER_CORE_GUESS", None)
@@ -413,6 +493,31 @@ def host_workloads(
                         method=case.method,
                         reference=_selection == "baseline",
                         strict_final_state=True,
+                    )
+                if final_state_ablation or combined_host_ablation:
+                    baseline = combined_host_ablation and _selection == "baseline"
+                    validate_preparation_counts(
+                        components,
+                        batch_size=batch_size,
+                        workload=workload,
+                        eager=baseline,
+                        rebuild=baseline,
+                    )
+                    validate_setup_eigen_counts(
+                        components,
+                        batch_size=batch_size,
+                        workload=workload,
+                        reference=baseline,
+                        eager=baseline,
+                        rebuild=baseline,
+                    )
+                    validate_final_state_counts(
+                        components,
+                        batch_size=batch_size,
+                        method=case.method,
+                        force=_selection == "baseline",
+                        reference=baseline,
+                        compute_forces=not energy_only,
                     )
                 result["host_components"] = {
                     **components,
@@ -507,7 +612,7 @@ def host_workloads(
         destruction_seconds = time.perf_counter() - start
     if _source_metadata(library) != source:
         raise RuntimeError("source/library changed during workload measurement")
-    if policies or final_eigen_ablation or setup_eigen_ablation:
+    if policies or final_eigen_ablation or setup_eigen_ablation or final_state_ablation:
         validate_ablation_branches(rows)
     # Same-model cold endpoints check cache/replay integrity. They are not an
     # independent scientific oracle or a substitute for the matched #206 gate.
@@ -536,7 +641,11 @@ def host_workloads(
         "samples": rows,
         "prepared_setup_seconds": setup_seconds,
         "prepared_destruction_seconds": destruction_seconds,
-        "comparison": "reference versus ordinary device setup eigensolves with identical lazy cached preparation and device finalization"
+        "comparison": "eager/rebuilt reference setup and forced reference finalization versus lazy cached device setup and verified final-state selection; both sides retain strict physical-state gates"
+        if combined_host_ablation
+        else "forced ordinary device final rebuilding versus verified retention with necessary device correction; identical preparation"
+        if final_state_ablation
+        else "reference versus ordinary device setup eigensolves with identical lazy cached preparation and device finalization"
         if setup_eigen_ablation
         else "reference versus ordinary device final eigensolve with identical lazy cached preparation"
         if final_eigen_ablation
@@ -546,7 +655,12 @@ def host_workloads(
         if eager_core_ablation
         else "identical native configurations as an ABBA protocol control; no speedup claim",
         "timing_assessment": assess_comparison(rows)
-        if (policies or final_eigen_ablation or setup_eigen_ablation)
+        if (
+            policies
+            or final_eigen_ablation
+            or setup_eigen_ablation
+            or final_state_ablation
+        )
         and trace_directory is None
         else None,
         "limitations": [
