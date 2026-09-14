@@ -28,7 +28,9 @@ try:
         FORCE_OPERATIONS,
         ONE_ELECTRON_OPERATIONS,
         aggregate,
+        aggregate_host,
         force_attribution,
+        read_host_trace,
         read_trace,
         trace_identity,
     )
@@ -38,7 +40,9 @@ except ModuleNotFoundError:  # imported as ``benchmarks.issue206_df_force_probe`
         FORCE_OPERATIONS,
         ONE_ELECTRON_OPERATIONS,
         aggregate,
+        aggregate_host,
         force_attribution,
+        read_host_trace,
         read_trace,
         trace_identity,
     )
@@ -186,18 +190,24 @@ def _traced_sample(
     # Never append to evidence from an earlier calculation or process.
     with path.open("x"):
         pass
-    previous = os.environ.get("VIBEQC_DF_TRACE")
-    os.environ["VIBEQC_DF_TRACE"] = str(path.resolve())
+    host_path = path.with_suffix(".host.jsonl")
+    with host_path.open("x"):
+        pass
+    variables = {"VIBEQC_DF_TRACE": path, "VIBEQC_DF_HOST_TRACE": host_path}
+    previous = {name: os.environ.get(name) for name in variables}
+    for name, target in variables.items():
+        os.environ[name] = str(target.resolve())
     try:
         options = (
             {"memory_budget_bytes": memory_budget_bytes} if memory_budget_bytes else {}
         )
         sample = _sample(case_name, properties, library, **options)
     finally:
-        if previous is None:
-            os.environ.pop("VIBEQC_DF_TRACE", None)
-        else:
-            os.environ["VIBEQC_DF_TRACE"] = previous
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     records = read_trace(path)
     operations = {r["operation"] for r in records}
     if not {"ri_j", "ri_k"} <= operations:
@@ -213,6 +223,10 @@ def _traced_sample(
     elif force_roots:
         raise ValueError("unexpected force trace in energy-only sample")
     sample["components"] = {**aggregate(records), "raw_trace": trace_identity(path)}
+    sample["host_components"] = {
+        **aggregate_host(read_host_trace(host_path)),
+        "raw_trace": trace_identity(host_path),
+    }
     return sample
 
 
@@ -244,7 +258,9 @@ def main() -> None:
         parser.error("run requires a finite Slurm allocation (SLURM_JOB_ID)")
     if not os.environ.get("CUDA_VISIBLE_DEVICES"):
         parser.error("run requires Slurm-provided CUDA_VISIBLE_DEVICES")
-    if os.environ.get("VIBEQC_DF_TRACE"):
+    if any(
+        os.environ.get(name) for name in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")
+    ):
         parser.error(
             "use --component-trace-dir so traces cannot silently contaminate timing runs"
         )

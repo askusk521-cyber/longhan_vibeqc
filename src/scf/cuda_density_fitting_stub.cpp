@@ -1,6 +1,39 @@
 #include "scf/cuda_density_fitting.hpp"
+#include "scf/cuda_density_fitting_eigen.hpp"
+#include "scf/cuda_density_fitting_final_state.hpp"
 
 namespace vibeqc::scf {
+vibeqc_status cuda_density_fitting_final_state_token(const CudaDensityFittingJkPlan*, std::size_t,
+                                                     CudaDfFinalStateToken& token,
+                                                     std::string& detail) {
+  token = {};
+  detail = "CUDA DF final-state snapshots are unavailable in this build";
+  return VIBEQC_STATUS_NOT_IMPLEMENTED;
+}
+vibeqc_status read_cuda_density_fitting_final_state(CudaDensityFittingJkPlan*,
+                                                    const CudaDfFinalStateToken&,
+                                                    CudaDfFinalStateSnapshot& snapshot,
+                                                    std::string& detail) {
+  snapshot = {};
+  detail = "CUDA DF final-state snapshots are unavailable in this build";
+  return VIBEQC_STATUS_NOT_IMPLEMENTED;
+}
+vibeqc_status solve_cuda_density_fitting_eigen(
+    CudaDensityFittingJkPlan*, const std::vector<double>& matrix,
+    const std::vector<double>* overlap, const std::vector<double>* orthogonalizer,
+    std::vector<double>& values, std::vector<double>& coefficients,
+    CudaDfEigenDiagnostic& diagnostic, std::string& detail, std::size_t) {
+  diagnostic = {};
+  if (df_eigen_outputs_alias(matrix, overlap, orthogonalizer, values, coefficients)) {
+    detail = "ordinary CUDA DF eigen inputs and outputs must not alias";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+  values.clear();
+  coefficients.clear();
+  detail = "ordinary CUDA DF eigen operations are unavailable in this build";
+  return VIBEQC_STATUS_NOT_IMPLEMENTED;
+}
+
 vibeqc_status execute_cuda_density_fitting_generated_force_response(
     CudaDensityFittingJkPlan*, std::size_t, const core::System&, const core::System&,
     std::span<const double>, const std::vector<double>&,

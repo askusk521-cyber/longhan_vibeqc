@@ -70,10 +70,16 @@ def emit_grid_policy():
     return "\n".join(lines)
 
 
-def emit_grid_source():
-    """Compose the generated policy with the existing native grid runtime."""
+def emit_grid_source(*, native_ks=False):
+    """Compose one AO policy with the grid runtime and optional resident KS glue.
+
+    The native library additionally instantiates its borrowed-buffer XC kernels.
+    JIT grid owners retain their own ABI and arena without that native extension.
+    """
     policy = emit_grid_policy()
     source = policy + '#include "cuda_grid.cu"\n'
+    if native_ks:
+        source += '#include "cuda_xc_kernels.cuh"\n'
     return (
         source,
         canonical_hash({"schema": "vibeqc.grid-policy.v1", "source": source}),

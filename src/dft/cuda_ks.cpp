@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
@@ -132,7 +133,7 @@ struct CudaKsPlan::Impl : KsStateStorage {
       scf::solver::validate_seed(ints.overlap, *input, n, counts, spins == 2 ? 1.0 : 2.0);
       return *input;
     }
-    EigenResult a, b;
+    std::optional<EigenResult> a, b;
     if (spins == 2) {
       const auto pair = scf::initial_guess::prepare_initial_uhf_density(
           ints, orthogonalizer, occupations[0], occupations[1], input, a, b);

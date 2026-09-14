@@ -6,6 +6,7 @@
 #include "api/ks_diagnostic.hpp"
 #include "api/precision.hpp"
 #include "methods/method.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "vibeqc/vibeqc.h"
 
 extern "C" {
@@ -13,6 +14,7 @@ extern "C" {
 vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context, const vibeqc_system* system,
                                          const vibeqc_method_descriptor* descriptor,
                                          vibeqc_calculation** calculation) {
+  vibeqc::runtime::host_trace::Region trace("calculation_prepare");
   if (context == nullptr || system == nullptr || descriptor == nullptr || calculation == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
@@ -33,10 +35,14 @@ vibeqc_status vibeqc_calculation_prepare(vibeqc_context* context, const vibeqc_s
   }
 }
 
-void vibeqc_calculation_destroy(vibeqc_calculation* calculation) { delete calculation; }
+void vibeqc_calculation_destroy(vibeqc_calculation* calculation) {
+  vibeqc::runtime::host_trace::Region trace("calculation_destroy");
+  delete calculation;
+}
 
 vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculation,
                                          vibeqc_result_descriptor* output) {
+  vibeqc::runtime::host_trace::Region trace("calculation_execute");
   if (calculation == nullptr || output == nullptr) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }

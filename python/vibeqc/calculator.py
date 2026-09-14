@@ -300,7 +300,7 @@ class Calculator:
     """Prepare and execute a native single-system electronic-structure calculation.
 
     Coordinates are in Bohr. The current implementation accepts RHF, UHF, or
-    CPU energy-only LDA RKS and
+    energy-only LDA/PBE RKS/UKS on CPU/CUDA and
     a bundled STO-3G/def2-SVP/def2-TZVP basis for H-Ar, local canonical JSON,
     immutable `BasisSet` records, or explicit `Shell` objects. Element symbols
     cover H-Og; execution depends on every actual shell and Hamiltonian. Both the CPU reference and CUDA backend support Cartesian

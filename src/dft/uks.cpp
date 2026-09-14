@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 
@@ -83,9 +84,13 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   if (na > n || nb > n || system.electron_count <= 0)
     throw std::invalid_argument("UKS occupations exceed the orbital space");
   const Matrix x = symmetric_orthogonalizer(ints.overlap, n);
-  EigenResult ca, cb;
-  auto [alpha, beta] =
-      initial_guess::prepare_initial_uhf_density(ints, x, na, nb, initial_density, ca, cb);
+  std::optional<EigenResult> initial_alpha, initial_beta;
+  auto [alpha, beta] = initial_guess::prepare_initial_uhf_density(ints, x, na, nb, initial_density,
+                                                                  initial_alpha, initial_beta);
+  // Warm seeds omit the unused core solve; each spin obtains its first frame
+  // from the physical target Fock before the proposal consumes its orbitals.
+  EigenResult ca = std::move(initial_alpha).value_or(EigenResult{});
+  EigenResult cb = std::move(initial_beta).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     solver::validate_seed(ints.overlap, *initial_density, n,
                           {static_cast<unsigned>(na), static_cast<unsigned>(nb)}, 1.0);

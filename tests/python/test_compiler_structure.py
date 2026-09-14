@@ -27,7 +27,11 @@ def test_grid_native_generator_matches_jit_policy(tmp_path):
         check=True,
         cwd=tmp_path,
     )
-    assert output.read_text() == emit_grid_source()[0]
+    native = emit_grid_source(native_ks=True)[0]
+    assert output.read_text() == native
+    # Resident KS adds only a consumer of the shared AO/ingredient policy.
+    # Keep the independently compiled JIT owner's ABI free of that extension.
+    assert native == emit_grid_source()[0] + '#include "cuda_xc_kernels.cuh"\n'
 
 
 def test_dependency_directions():

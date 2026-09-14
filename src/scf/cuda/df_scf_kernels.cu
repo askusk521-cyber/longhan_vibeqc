@@ -14,6 +14,36 @@
 
 namespace vibeqc::scf::cuda_df {
 
+__global__ void store_device_final_frame_kernel(
+    std::size_t nbf, const double* coefficients, const double* eigenvalues, const int* info,
+    const std::uint8_t* active, const std::uint32_t* iterations, double* retained_coefficients,
+    double* retained_values, std::uint64_t* generations, int* retained_info) {
+  const auto item = static_cast<std::size_t>(blockIdx.x);
+  if (!active[item]) return;
+  for (std::size_t k = threadIdx.x; k < nbf * nbf; k += blockDim.x)
+    retained_coefficients[item * nbf * nbf + k] = coefficients[item * nbf * nbf + k];
+  for (std::size_t k = threadIdx.x; k < nbf; k += blockDim.x)
+    retained_values[item * nbf + k] = eigenvalues[item * nbf + k];
+  if (threadIdx.x == 0) {
+    // Imported D is generation one. The pending projection will commit the
+    // next generation, including an item that converges in this iteration.
+    generations[item] = static_cast<std::uint64_t>(iterations[item]) + 2;
+    retained_info[item] = info[item];
+  }
+}
+
+void launch_store_device_final_frame_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
+                                            cudaStream_t stream, std::size_t nbf,
+                                            const double* coefficients, const double* eigenvalues,
+                                            const int* info, const std::uint8_t* active,
+                                            const std::uint32_t* iterations,
+                                            double* retained_coefficients, double* retained_values,
+                                            std::uint64_t* generations, int* retained_info) {
+  store_device_final_frame_kernel<<<grid, block, shared_bytes, stream>>>(
+      nbf, coefficients, eigenvalues, info, active, iterations, retained_coefficients,
+      retained_values, generations, retained_info);
+}
+
 __global__ void store_device_occupied_kernel(std::size_t nbf, std::size_t maximum_rank,
                                              const std::int32_t* occupied,
                                              const double* coefficients, const std::uint8_t* active,

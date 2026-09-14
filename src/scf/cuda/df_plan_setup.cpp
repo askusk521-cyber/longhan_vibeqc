@@ -15,6 +15,8 @@
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
 #include "scf/cuda/df_setup_internal.hpp"
+#include "scf/cuda_density_fitting_eigen.hpp"
+#include "scf/cuda_density_fitting_final_state.hpp"
 #include "scf/df_exchange_policy.hpp"
 
 namespace vibeqc::scf::cuda_df {
@@ -512,7 +514,8 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
           (16.0L * sizeof(double) + 2.0L * sizeof(std::int32_t) + 2.0L * sizeof(std::uint8_t) +
            sizeof(std::uint32_t) +
            (candidate->occupied_scf_reserved ? 2 * sizeof(std::uint32_t) + sizeof(int) : 0)) +
-      solver_device_workspace_bytes + matrix_bytes;  // graph bookkeeping
+      solver_device_workspace_bytes + matrix_bytes +  // graph bookkeeping
+      df_eigen_device_reservation(nbf) + df_final_snapshot_device_reservation(nbf, batch_size);
   const std::size_t persistent_scf_bytes =
       persistent_scf_estimate >= static_cast<long double>(std::numeric_limits<std::size_t>::max())
           ? std::numeric_limits<std::size_t>::max()
@@ -540,7 +543,9 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
           ? std::numeric_limits<std::size_t>::max()
           : static_cast<std::size_t>(peak_estimate);
   const long double host_resident_estimate =
-      static_cast<long double>(sizeof(*candidate)) +
+      static_cast<long double>(sizeof(*candidate)) + df_eigen_workspace_allowance(nbf) +
+      64.0L * batch_size +  // lazy final-frame occupation/eligibility metadata
+
       (candidate->integral_source
            ? static_cast<long double>(
                  cuda_density_fitting_integral_source_host_bytes(candidate->integral_source)) +
@@ -580,10 +585,9 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
                      cuda_failure(cuda_error, "finish CUDA DF plan preparation", detail));
   }
 
-  (void)cusolverDnDestroyParams(candidate->solver_parameters);
-  candidate->solver_parameters = nullptr;
-  (void)cusolverDnDestroy(candidate->solver);
-  candidate->solver = nullptr;
+  // Keep the metric provider's handles for ordinary AO setup/final solves.
+  // SetupBuffers still drops the numeric metric scratch; release() owns the
+  // handle/parameter teardown after the retained ordinary workspace is freed.
   if (candidate->integral_source) {
     candidate->metric_eigenvectors = std::exchange(setup.metrics, nullptr);
     candidate->metric_eigenvalues = std::exchange(setup.eigenvalues, nullptr);

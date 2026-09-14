@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -17,10 +18,12 @@
 #include "molecule/basis.hpp"
 #include "posthf/capacity.hpp"
 #include "posthf/raw_source.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "runtime/resource_ledger.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting.hpp"
+#include "scf/cuda_density_fitting_eigen.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/cuda_df_gradient.hpp"
 #include "scf/cuda_fock_provider.hpp"
@@ -30,12 +33,14 @@
 #include "scf/fock_prepared.hpp"
 #include "scf/fock_provider.hpp"
 #include "scf/initial_guess/density.hpp"
+#include "scf/initial_guess/overlap.hpp"
 #include "scf/reference/mean_field.hpp"
 #include "scf/solver/diis.hpp"
 #include "scf/solver/mean_field_driver.hpp"
 #include "scf/solver/proposal_control.hpp"
 
 namespace vibeqc::scf {
+namespace host_trace = runtime::host_trace;
 namespace {
 
 using initial_guess::prepare_initial_density;
@@ -61,6 +66,16 @@ using solver::Diis;
 using solver::run_rhf_host_plan;
 using solver::run_uhf_host_plan;
 using solver::validate_seed;
+
+/** Restore discarded warm core frames only for #206's causal ablation.
+ * Supplied D and all SCF controls stay identical. Normal execution leaves
+ * this unset and never requests an orbital frame it will not consume. */
+initial_guess::InitialOrbitalRequest df_initial_orbital_request() {
+  const char* eager = std::getenv("VIBEQC_DF_EAGER_CORE_GUESS");
+  return eager && eager[0] == '1' && eager[1] == '\0'
+             ? initial_guess::InitialOrbitalRequest::RequireCoreFrame
+             : initial_guess::InitialOrbitalRequest::ColdDensityOnly;
+}
 
 /** Assemble immutable DF state from already-evaluated one- and three-center data. */
 DensityFittingScfData assemble_density_fitting_data(integrals::IntegralData one_electron,
@@ -377,12 +392,55 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
   return gradient;
 }
 
+/** Translate the checked ordinary adapter into the synchronous setup/final
+ * operation. Provider errors propagate; none requests a reference retry. */
+EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
+                            const Matrix* orthogonalizer, CudaDensityFittingJkPlan* plan,
+                            std::size_t system_index) {
+  EigenResult result;
+  CudaDfEigenDiagnostic diagnostic;
+  std::string detail;
+  const auto status =
+      solve_cuda_density_fitting_eigen(plan, matrix, overlap, orthogonalizer, result.values,
+                                       result.vectors, diagnostic, detail, system_index);
+  if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+  if (status != VIBEQC_STATUS_SUCCESS)
+    throw std::runtime_error(detail.empty() ? "CUDA DF eigensolve failed" : detail);
+  return result;
+}
+
+/** Select setup substitution independently of final-provider/work-elimination
+ * ablations. This borrowed callback is used only for an unavoidable solve. */
+[[maybe_unused]] initial_guess::EigenOperation df_setup_eigen(CudaDensityFittingJkPlan* plan,
+                                                              std::size_t system_index = 0) {
+  const char* reference = std::getenv("VIBEQC_DF_REFERENCE_SETUP_EIGEN");
+  if (!plan || (reference && reference[0] == '1' && reference[1] == '\0')) return {};
+  return [plan, system_index](const Matrix& matrix, const Matrix* overlap, const Matrix* x,
+                              std::size_t) {
+    return device_df_eigen(matrix, overlap, x, plan, system_index);
+  };
+}
+
+/** Keep CPU/reference execution explicit. CUDA finalization uses the plan's
+ * ordinary device provider; a rejection never silently re-enters Jacobi. The
+ * diagnostic control restores the independent oracle for causal comparison. */
+[[maybe_unused]] EigenResult final_df_eigen(const Matrix& fock, const Matrix& overlap,
+                                            const Matrix& orthogonalizer, std::size_t n,
+                                            CudaDensityFittingJkPlan* plan,
+                                            std::size_t system_index) {
+  const char* reference = std::getenv("VIBEQC_DF_REFERENCE_FINAL_EIGEN");
+  if (!plan || (reference && reference[0] == '1' && reference[1] == '\0'))
+    return generalized_eigen(fock, orthogonalizer, n);
+  return device_df_eigen(fock, &overlap, &orthogonalizer, plan, system_index);
+}
+
 [[maybe_unused]] void finalize_density_fitting_rhf(const DensityFittingScfData& data,
                                                    const Matrix& orthogonalizer,
                                                    std::size_t occupied, Matrix& density,
                                                    const ScfOptions& options, ScfResult& result,
                                                    CudaDensityFittingJkPlan* cuda_plan = nullptr,
                                                    std::size_t cuda_system = 0) {
+  host_trace::Region final_trace("finalization");
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
 #endif
@@ -426,7 +484,10 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     final_fock =
         build_density_fitting_rhf_fock(data.one_electron.hcore, data.three_center, density);
   }
-  EigenResult orbitals = generalized_eigen(final_fock, orthogonalizer, n);
+  EigenResult orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
+    return final_df_eigen(final_fock, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                          cuda_system);
+  });
   density = density_from_orbitals(orbitals.vectors, n, occupied);
   if (cuda_plan != nullptr) {
     std::vector<double> coulomb;
@@ -454,7 +515,10 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
   result.energy = electronic_energy(density, data.one_electron.hcore, final_fock) +
                   data.one_electron.nuclear_repulsion;
   if (options.export_physical_reference) {
-    auto canonical = generalized_eigen(final_fock, orthogonalizer, n);
+    host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
+    host_trace::Region export_trace("reference_export", n);
+    auto canonical = final_df_eigen(final_fock, data.one_electron.overlap, orthogonalizer, n,
+                                    cuda_plan, cuda_system);
     auto reference = std::make_shared<PhysicalReference>();
     reference->nbf = n;
     reference->nocc = occupied;
@@ -475,6 +539,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     return;
   }
 
+  host_trace::Region force_trace("force_response", n);
   const Matrix weighted = energy_weighted_density(orbitals.vectors, orbitals.values, n, occupied);
   // The CUDA response is the sole device path; failures propagate before force
   // assembly. The independent CPU calculation below serves CPU callers only.
@@ -524,6 +589,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     std::size_t beta_occupied, Matrix& alpha_density, Matrix& beta_density,
     const ScfOptions& options, ScfResult& result, CudaDensityFittingJkPlan* cuda_plan = nullptr,
     std::size_t cuda_system = 0) {
+  host_trace::Region final_trace("finalization");
 #if !VIBEQC_HAS_CUDA
   (void)cuda_plan;
 #endif
@@ -575,8 +641,14 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     std::tie(alpha_fock, beta_fock) = build_density_fitting_uhf_focks(
         data.one_electron.hcore, data.three_center, alpha_density, beta_density);
   }
-  EigenResult alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-  EigenResult beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
+  EigenResult alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
+    return final_df_eigen(alpha_fock, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                          cuda_system);
+  });
+  EigenResult beta_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
+    return final_df_eigen(beta_fock, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                          cuda_system);
+  });
   alpha_density = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
   beta_density = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
   if (cuda_plan != nullptr) {
@@ -614,6 +686,7 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
     return;
   }
 
+  host_trace::Region force_trace("force_response", n);
   const Matrix alpha_weighted = energy_weighted_density(
       alpha_orbitals.vectors, alpha_orbitals.values, n, alpha_occupied, 1.0);
   const Matrix beta_weighted =
@@ -728,7 +801,9 @@ void validate_hf_warm_density(const core::System& source, vibeqc_method method,
 }
 
 ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOptions& options,
-                                     const std::vector<double>* initial_density) {
+                                     const std::vector<double>* initial_density,
+                                     initial_guess::OverlapOrthogonalizer* overlap_cache) {
+  host_trace::Region endpoint_trace("run_prepared_fock_strategy");
   const auto strategy = fock_strategy_for_execution(options);
   // A source prepared with first derivatives also owns all value data. An
   // energy-only replay may reuse it without evaluating a response, but no
@@ -744,10 +819,11 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
   if (strategy.spec.spin == FockSpin::Restricted &&
       (system.electron_count <= 0 || system.electron_count % 2 || system.multiplicity != 1))
     throw std::invalid_argument("restricted Fock SCF requires a closed-shell electron count");
-  ScfResult result =
-      strategy.spec.spin == FockSpin::Unrestricted
-          ? run_uhf_host_plan(system, options, plan.one_electron(), plan, initial_density)
-          : run_rhf_host_plan(system, options, plan.one_electron(), plan, initial_density);
+  ScfResult result = strategy.spec.spin == FockSpin::Unrestricted
+                         ? run_uhf_host_plan(system, options, plan.one_electron(), plan,
+                                             initial_density, overlap_cache)
+                         : run_rhf_host_plan(system, options, plan.one_electron(), plan,
+                                             initial_density, overlap_cache);
   // The host (value) Fock build is always FP64; report the requested policy so
   // provenance distinguishes "asked fp64" from "asked auto, collapsed to FP64".
   result.precision.requested_mode = options.precision_mode.value_or(VIBEQC_PRECISION_FP64);
@@ -778,6 +854,8 @@ ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOpti
     ref->hcore = plan.one_electron().hcore;
     ref->fock = matrices.alpha;
     ref->density = result.density;
+    host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
+    host_trace::Region export_trace("reference_export", n);
     const auto orthogonalizer = symmetric_orthogonalizer(ref->overlap, n);
     auto canonical = generalized_eigen(ref->fock, orthogonalizer, n);
     ref->coefficients = std::move(canonical.vectors);
@@ -866,6 +944,22 @@ ScfResult run_uhf_density_fitting(const core::System& system, const core::System
 using CudaDensityFittingPlanPtr =
     std::unique_ptr<CudaDensityFittingJkPlan, decltype(&destroy_cuda_density_fitting_jk_plan)>;
 
+/** Shape queries reject infeasible allowances as invalid arguments; an actual
+ * SCF execution must report out-of-memory so a failed budget replan cannot
+ * enter the ordinary numerical retry. Malformed shapes retain their status. */
+DensityFittingTilePlan plan_cuda_density_fitting_tiles(std::size_t batch, std::size_t nbf,
+                                                       std::size_t naux, std::size_t occupied,
+                                                       std::size_t budget,
+                                                       std::size_t fixed_device_bytes = 0,
+                                                       bool generated_source = false) {
+  try {
+    return plan_density_fitting_tiles(batch, nbf, naux, occupied, budget, fixed_device_bytes,
+                                      generated_source);
+  } catch (const DensityFittingBudgetError&) {
+    throw std::bad_alloc();
+  }
+}
+
 CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
     const DensityFittingScfData& data, const ScfOptions& options, int device_id,
     std::size_t occupied,
@@ -881,7 +975,7 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
   std::size_t auxiliary_tile = 0;
   std::size_t ao_pair_tile = 0;
   if (planning_budget != 0) {
-    const DensityFittingTilePlan tile_plan = plan_density_fitting_tiles(
+    const DensityFittingTilePlan tile_plan = plan_cuda_density_fitting_tiles(
         1, data.raw.nbf, data.raw.naux, std::max<std::size_t>(occupied, 1), planning_budget);
     auxiliary_tile = tile_plan.auxiliary_tile;
     ao_pair_tile = tile_plan.ao_pair_tile;
@@ -901,7 +995,7 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
     }
     DensityFittingTilePlan source_tile_plan;
     try {
-      source_tile_plan = plan_density_fitting_tiles(
+      source_tile_plan = plan_cuda_density_fitting_tiles(
           1, source_nbf, source_naux, std::max<std::size_t>(occupied, 1), planning_budget,
           cuda_density_fitting_integral_source_device_bytes(source), true);
     } catch (...) {
@@ -994,7 +1088,7 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
     }
     DensityFittingTilePlan tile_plan;
     try {
-      tile_plan = plan_density_fitting_tiles(
+      tile_plan = plan_cuda_density_fitting_tiles(
           data.size(), nbf, naux, std::max<std::size_t>(occupied, 1), planning_budget,
           cuda_density_fitting_integral_source_device_bytes(source), true);
     } catch (...) {
@@ -1035,7 +1129,7 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
   std::size_t auxiliary_tile = 0;
   std::size_t ao_pair_tile = 0;
   if (planning_budget != 0) {
-    const DensityFittingTilePlan tile_plan = plan_density_fitting_tiles(
+    const DensityFittingTilePlan tile_plan = plan_cuda_density_fitting_tiles(
         data.size(), nbf, naux, std::max<std::size_t>(occupied, 1), planning_budget);
     auxiliary_tile = tile_plan.auxiliary_tile;
     ao_pair_tile = tile_plan.ao_pair_tile;
@@ -1385,7 +1479,9 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
 ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
                                             const core::System& auxiliary_system,
                                             const ScfOptions& options, int device_id,
-                                            const std::vector<double>* initial_density) {
+                                            const std::vector<double>* initial_density,
+                                            initial_guess::OverlapOrthogonalizer* overlap_cache) {
+  host_trace::Region endpoint_trace("run_rhf_density_fitting_cuda_impl");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -1397,14 +1493,20 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
   if (occupied > n) {
     throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
   }
-  const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
-  EigenResult orbitals;
-  Matrix density = prepare_initial_density(system, data.one_electron, orthogonalizer, occupied,
-                                           initial_density, orbitals);
-  ScfResult result;
-  result.initial_density_used = initial_density != nullptr;
   const CudaDensityFittingPlanPtr plan = make_cuda_density_fitting_plan(
       data, options, device_id, occupied, nullptr, &system, &auxiliary_system);
+  const auto eigen = df_setup_eigen(plan.get());
+  const Matrix orthogonalizer = initial_guess::prepare_overlap_orthogonalizer(
+      system, data.one_electron.overlap, n, overlap_cache, eigen);
+  std::optional<EigenResult> initial_orbitals;
+  Matrix density =
+      prepare_initial_density(system, data.one_electron, orthogonalizer, occupied, initial_density,
+                              initial_orbitals, df_initial_orbital_request(), eigen);
+  // Device SCF consumes D/X only; fallback computes its own first Fock frame.
+  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
+  ScfResult result;
+  result.initial_density_used = initial_density != nullptr;
+
   if (options.density_fitting_memory_budget_bytes != 0) {
     discard_density_fitting_tensor_storage(data);
   }
@@ -1417,11 +1519,13 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
     std::vector<double> device_final_density;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_rhf_device_scf(
-        plan.get(), data.one_electron.hcore, orthogonalizer, density,
-        {static_cast<std::int32_t>(occupied)}, {data.one_electron.nuclear_repulsion},
-        options.max_iterations, options.energy_tolerance, options.density_tolerance,
-        device_final_density, device_records, detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_rhf_device_scf(
+          plan.get(), data.one_electron.hcore, orthogonalizer, density,
+          {static_cast<std::int32_t>(occupied)}, {data.one_electron.nuclear_repulsion},
+          options.max_iterations, options.energy_tolerance, options.density_tolerance,
+          device_final_density, device_records, detail);
+    });
     // A resource rejection must not trigger an undisclosed host SCF retry.
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1457,7 +1561,9 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
                           data.one_electron.nuclear_repulsion;
     const Matrix residual = commutator_residual(fock, density, data.one_electron.overlap, n);
     const Matrix effective_fock = diis.update(fock, residual);
-    orbitals = generalized_eigen(effective_fock, orthogonalizer, n);
+    orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+      return generalized_eigen(effective_fock, orthogonalizer, n);
+    });
     Matrix next_density = density_from_orbitals(orbitals.vectors, n, occupied);
     result.iterations = iteration;
     result.energy = energy;
@@ -1486,7 +1592,9 @@ ScfResult run_rhf_density_fitting_cuda_impl(const core::System& system,
 ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
                                             const core::System& auxiliary_system,
                                             const ScfOptions& options, int device_id,
-                                            const std::vector<double>* initial_density) {
+                                            const std::vector<double>* initial_density,
+                                            initial_guess::OverlapOrthogonalizer* overlap_cache) {
+  host_trace::Region endpoint_trace("run_uhf_density_fitting_cuda_impl");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -1498,17 +1606,21 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
   if (alpha_occupied > n || beta_occupied > n) {
     throw std::runtime_error("basis has fewer orbitals than required UHF spin occupations");
   }
-  const Matrix orthogonalizer = symmetric_orthogonalizer(data.one_electron.overlap, n);
-  EigenResult alpha_orbitals;
-  EigenResult beta_orbitals;
-  auto [alpha_density, beta_density] =
-      prepare_initial_uhf_density(data.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
-                                  initial_density, alpha_orbitals, beta_orbitals);
-  ScfResult result;
-  result.initial_density_used = initial_density != nullptr;
   const CudaDensityFittingPlanPtr plan = make_cuda_density_fitting_plan(
       data, options, device_id, std::max(alpha_occupied, beta_occupied), nullptr, &system,
       &auxiliary_system);
+  const auto eigen = df_setup_eigen(plan.get());
+  const Matrix orthogonalizer = initial_guess::prepare_overlap_orthogonalizer(
+      system, data.one_electron.overlap, n, overlap_cache, eigen);
+  std::optional<EigenResult> initial_alpha, initial_beta;
+  auto [alpha_density, beta_density] = prepare_initial_uhf_density(
+      data.one_electron, orthogonalizer, alpha_occupied, beta_occupied, initial_density,
+      initial_alpha, initial_beta, df_initial_orbital_request(), eigen);
+  EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
+  EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
+  ScfResult result;
+  result.initial_density_used = initial_density != nullptr;
+
   if (options.density_fitting_memory_budget_bytes != 0) {
     discard_density_fitting_tensor_storage(data);
   }
@@ -1517,11 +1629,13 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
     std::vector<double> device_final_beta;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_uhf_device_scf(
-        plan.get(), data.one_electron.hcore, orthogonalizer, alpha_density, beta_density,
-        {static_cast<std::int32_t>(alpha_occupied)}, {static_cast<std::int32_t>(beta_occupied)},
-        {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
-        options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_uhf_device_scf(
+          plan.get(), data.one_electron.hcore, orthogonalizer, alpha_density, beta_density,
+          {static_cast<std::int32_t>(alpha_occupied)}, {static_cast<std::int32_t>(beta_occupied)},
+          {data.one_electron.nuclear_repulsion}, options.max_iterations, options.energy_tolerance,
+          options.density_tolerance, device_final_alpha, device_final_beta, device_records, detail);
+    });
     // A resource rejection must not trigger an undisclosed host SCF retry.
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1567,8 +1681,12 @@ ScfResult run_uhf_density_fitting_cuda_impl(const core::System& system,
     const Matrix effective_joined =
         diis.update(concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
     std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, n * n);
-    alpha_orbitals = generalized_eigen(alpha_fock, orthogonalizer, n);
-    beta_orbitals = generalized_eigen(beta_fock, orthogonalizer, n);
+    alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+      return generalized_eigen(alpha_fock, orthogonalizer, n);
+    });
+    beta_orbitals = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+      return generalized_eigen(beta_fock, orthogonalizer, n);
+    });
     Matrix next_alpha = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
     Matrix next_beta = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);
     result.iterations = iteration;
@@ -1599,7 +1717,13 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     const ScfOptions& options, const std::vector<const std::vector<double>*>& initial_densities,
     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* output_diagnostics,
     CudaDensityFittingJkPlan** cached_plan,
-    std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
+    std::vector<std::optional<DensityFittingScfData>>* prepared_cache,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>* overlap_caches) {
+  host_trace::Region endpoint_trace("run_rhf_density_fitting_cuda_bucket_impl");
+  if (overlap_caches && (overlap_caches->size() != systems.size() ||
+                         std::any_of(overlap_caches->begin(), overlap_caches->end(),
+                                     [](auto* cache) { return !cache; })))
+    throw std::invalid_argument("DF overlap cache views do not match the source systems");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -1681,6 +1805,8 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
   std::size_t nbf = 0;
   std::size_t naux = 0;
   for (std::size_t source = 0; source < systems.size(); ++source) {
+    host_trace::Item traced_item(source);
+    host_trace::Region preparation_trace("prepare_item");
     const std::size_t slot_before = data.size();
     try {
       DensityFittingScfData prepared;
@@ -1707,17 +1833,23 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
         continue;
       }
       const std::size_t occupied = static_cast<std::size_t>(systems[source].electron_count / 2);
-      const Matrix orthogonalizer =
-          symmetric_orthogonalizer(prepared.one_electron.overlap, prepared.one_electron.nbf);
-      EigenResult initial_orbitals;
-      Matrix density =
-          prepare_initial_density(systems[source], prepared.one_electron, orthogonalizer, occupied,
-                                  initial_densities[source], initial_orbitals);
+      if (occupied > nbf) {
+        outputs[source].status = VIBEQC_STATUS_INVALID_ARGUMENT;
+        continue;
+      }
+      // Validate warm D before allocating a shared plan. Cold frames wait for
+      // its qualified provider; no placeholder is submitted to device SCF.
+      const Matrix orthogonalizer;
+      std::optional<EigenResult> initial_orbitals;
+      Matrix density;
+      if (initial_densities[source])
+        density = initial_guess::normalized_warm_density(systems[source], prepared.one_electron,
+                                                         *initial_densities[source]);
       source_indices.push_back(source);
       data.push_back(std::move(prepared));
       orthogonalizers.push_back(orthogonalizer);
       densities.push_back(std::move(density));
-      orbitals.push_back(std::move(initial_orbitals));
+      orbitals.push_back(std::move(initial_orbitals).value_or(EigenResult{}));
       diis.emplace_back(options.diis_history);
       previous_energies.push_back(std::numeric_limits<double>::infinity());
       outputs[source].scf.initial_density_used = initial_densities[source] != nullptr;
@@ -1765,42 +1897,97 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     if (cached_plan != nullptr) *cached_plan = nullptr;
   }
   std::vector<CudaDensityFittingMetricDiagnostic> metric_diagnostics;
-  try {
-    if (plan == nullptr) {
-      const std::size_t occupied =
-          static_cast<std::size_t>(systems[source_indices.front()].electron_count / 2);
-      std::vector<core::System> orbital_systems;
-      std::vector<core::System> auxiliary_systems;
-      orbital_systems.reserve(source_indices.size());
-      auxiliary_systems.reserve(source_indices.size());
+  const auto ensure_plan = [&]() {
+    try {
+      if (plan == nullptr) {
+        const std::size_t occupied =
+            static_cast<std::size_t>(systems[source_indices.front()].electron_count / 2);
+        std::vector<core::System> orbital_systems;
+        std::vector<core::System> auxiliary_systems;
+        orbital_systems.reserve(source_indices.size());
+        auxiliary_systems.reserve(source_indices.size());
+        for (const std::size_t source : source_indices) {
+          orbital_systems.push_back(systems[source]);
+          auxiliary_systems.push_back(
+              density_fitting_auxiliary_for_geometry(auxiliary_template, systems[source]));
+        }
+        owned_plan = make_cuda_density_fitting_batch_plan(data, options, device_id, occupied,
+                                                          &metric_diagnostics, &orbital_systems,
+                                                          &auxiliary_systems);
+        plan = owned_plan.get();
+        if (cached_plan != nullptr) {
+          *cached_plan = owned_plan.release();
+        }
+      }
+    } catch (const std::bad_alloc&) {
       for (const std::size_t source : source_indices) {
-        orbital_systems.push_back(systems[source]);
-        auxiliary_systems.push_back(
-            density_fitting_auxiliary_for_geometry(auxiliary_template, systems[source]));
+        outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       }
-      owned_plan = make_cuda_density_fitting_batch_plan(data, options, device_id, occupied,
-                                                        &metric_diagnostics, &orbital_systems,
-                                                        &auxiliary_systems);
-      plan = owned_plan.get();
-      if (cached_plan != nullptr) {
-        *cached_plan = owned_plan.release();
+      return false;
+    } catch (const std::invalid_argument&) {
+      for (const std::size_t source : source_indices) {
+        outputs[source].status = VIBEQC_STATUS_INVALID_ARGUMENT;
       }
+      return false;
+    } catch (...) {
+      for (const std::size_t source : source_indices) {
+        outputs[source].status = VIBEQC_STATUS_CUDA_ERROR;
+      }
+      return false;
     }
-  } catch (const std::bad_alloc&) {
-    for (const std::size_t source : source_indices) {
+    return true;
+  };
+  if (!ensure_plan()) return outputs;
+  std::vector<std::size_t> survivors;
+  survivors.reserve(data.size());
+  for (std::size_t slot = 0; slot < data.size(); ++slot) {
+    const auto source = source_indices[slot];
+    host_trace::Item traced_item(source);
+    host_trace::Region preparation_trace("prepare_initial_frame");
+    try {
+      const auto eigen = df_setup_eigen(plan, slot);
+      orthogonalizers[slot] = initial_guess::prepare_overlap_orthogonalizer(
+          systems[source], data[slot].one_electron.overlap, nbf,
+          overlap_caches ? (*overlap_caches)[source] : nullptr, eigen);
+      const auto occupied = static_cast<std::size_t>(systems[source].electron_count / 2);
+      std::optional<EigenResult> initial;
+      densities[slot] = prepare_initial_density(
+          systems[source], data[slot].one_electron, orthogonalizers[slot], occupied,
+          initial_densities[source], initial, df_initial_orbital_request(), eigen);
+      orbitals[slot] = std::move(initial).value_or(EigenResult{});
+      survivors.push_back(slot);
+    } catch (const std::bad_alloc&) {
       outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
-    }
-    return outputs;
-  } catch (const std::invalid_argument&) {
-    for (const std::size_t source : source_indices) {
+    } catch (const std::invalid_argument&) {
       outputs[source].status = VIBEQC_STATUS_INVALID_ARGUMENT;
+    } catch (...) {
+      outputs[source].status = VIBEQC_STATUS_NUMERICAL_FAILURE;
     }
-    return outputs;
-  } catch (...) {
-    for (const std::size_t source : source_indices) {
-      outputs[source].status = VIBEQC_STATUS_CUDA_ERROR;
-    }
-    return outputs;
+  }
+  if (survivors.size() != data.size()) {
+    // The old plan's fixed batch stride includes failed sources. Free it
+    // before rebuilding once, retain good detached X/D, and never execute an
+    // invalid initial frame. The per-source cache remains owned by its source.
+    if (owned_plan.get() == plan)
+      owned_plan.reset();
+    else
+      destroy_cuda_density_fitting_jk_plan(plan);
+    plan = nullptr;
+    if (cached_plan) *cached_plan = nullptr;
+    const auto compact = [&](auto& values) {
+      for (std::size_t target = 0; target < survivors.size(); ++target)
+        if (target != survivors[target]) values[target] = std::move(values[survivors[target]]);
+      while (values.size() > survivors.size()) values.pop_back();
+    };
+    compact(source_indices);
+    compact(data);
+    compact(orthogonalizers);
+    compact(densities);
+    compact(orbitals);
+    compact(diis);
+    compact(previous_energies);
+    metric_diagnostics.clear();
+    if (data.empty() || !ensure_plan()) return outputs;
   }
   if (output_diagnostics != nullptr) {
     for (std::size_t slot = 0; slot < metric_diagnostics.size(); ++slot) {
@@ -1839,10 +2026,12 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     std::vector<double> device_final_density;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string device_detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_rhf_device_scf(
-        plan, hcore, orthogonalizer, initial_density, occupied, nuclear, options.max_iterations,
-        options.energy_tolerance, options.density_tolerance, device_final_density, device_records,
-        device_detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_rhf_device_scf(
+          plan, hcore, orthogonalizer, initial_density, occupied, nuclear, options.max_iterations,
+          options.energy_tolerance, options.density_tolerance, device_final_density, device_records,
+          device_detail);
+    });
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger) {
       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       return outputs;
@@ -1854,6 +2043,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     if (device_converged) {
       for (std::size_t slot = 0; slot < data.size(); ++slot) {
         const std::size_t source = source_indices[slot];
+        host_trace::Item traced_item(source);
         densities[slot].assign(device_final_density.begin() + slot * matrix_size,
                                device_final_density.begin() + (slot + 1) * matrix_size);
         ScfResult& result = outputs[source].scf;
@@ -1905,6 +2095,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
     for (std::size_t slot = 0; slot < data.size(); ++slot) {
       if (!active[slot]) continue;
       const std::size_t source = source_indices[slot];
+      host_trace::Item traced_item(source);
       try {
         Matrix fock = data[slot].one_electron.hcore;
         const double* j = coulomb.data() + slot * matrix_size;
@@ -1918,7 +2109,9 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
         const Matrix residual =
             commutator_residual(fock, densities[slot], data[slot].one_electron.overlap, nbf);
         const Matrix effective_fock = diis[slot].update(fock, residual);
-        orbitals[slot] = generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
+        orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+          return generalized_eigen(effective_fock, orthogonalizers[slot], nbf);
+        });
         Matrix next_density =
             density_from_orbitals(orbitals[slot].vectors, nbf,
                                   static_cast<std::size_t>(systems[source].electron_count / 2));
@@ -1953,6 +2146,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
 
   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
     const std::size_t source = source_indices[slot];
+    host_trace::Item traced_item(source);
     ScfResult& result = outputs[source].scf;
     if (outputs[source].status != VIBEQC_STATUS_INTERNAL_ERROR) {
       continue;
@@ -1982,7 +2176,13 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     const ScfOptions& options, const std::vector<const std::vector<double>*>& initial_densities,
     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* output_diagnostics,
     CudaDensityFittingJkPlan** cached_plan,
-    std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
+    std::vector<std::optional<DensityFittingScfData>>* prepared_cache,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>* overlap_caches) {
+  host_trace::Region endpoint_trace("run_uhf_density_fitting_cuda_bucket_impl");
+  if (overlap_caches && (overlap_caches->size() != systems.size() ||
+                         std::any_of(overlap_caches->begin(), overlap_caches->end(),
+                                     [](auto* cache) { return !cache; })))
+    throw std::invalid_argument("DF overlap cache views do not match the source systems");
   if (options.hooks || options.strict_initial_density)
     throw std::invalid_argument("SCF proposal callbacks require the CPU reference backend");
 
@@ -2053,6 +2253,8 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
   std::size_t nbf = 0;
   std::size_t naux = 0;
   for (std::size_t source = 0; source < systems.size(); ++source) {
+    host_trace::Item traced_item(source);
+    host_trace::Region preparation_trace("prepare_item");
     const std::size_t slot_before = data.size();
     try {
       DensityFittingScfData prepared;
@@ -2083,20 +2285,19 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
         outputs[source].status = VIBEQC_STATUS_INVALID_ARGUMENT;
         continue;
       }
-      const Matrix orthogonalizer =
-          symmetric_orthogonalizer(prepared.one_electron.overlap, prepared.one_electron.nbf);
-      EigenResult initial_alpha_orbitals;
-      EigenResult initial_beta_orbitals;
-      auto [alpha_density, beta_density] = prepare_initial_uhf_density(
-          prepared.one_electron, orthogonalizer, alpha_occupied, beta_occupied,
-          initial_densities[source], initial_alpha_orbitals, initial_beta_orbitals);
+      const Matrix orthogonalizer;
+      std::optional<EigenResult> initial_alpha_orbitals, initial_beta_orbitals;
+      Matrix alpha_density, beta_density;
+      if (initial_densities[source])
+        std::tie(alpha_density, beta_density) = initial_guess::normalized_warm_uhf_density(
+            prepared.one_electron, alpha_occupied, beta_occupied, *initial_densities[source]);
       source_indices.push_back(source);
       data.push_back(std::move(prepared));
       orthogonalizers.push_back(orthogonalizer);
       alpha_densities.push_back(std::move(alpha_density));
       beta_densities.push_back(std::move(beta_density));
-      alpha_orbitals.push_back(std::move(initial_alpha_orbitals));
-      beta_orbitals.push_back(std::move(initial_beta_orbitals));
+      alpha_orbitals.push_back(std::move(initial_alpha_orbitals).value_or(EigenResult{}));
+      beta_orbitals.push_back(std::move(initial_beta_orbitals).value_or(EigenResult{}));
       diis.emplace_back(options.diis_history);
       previous_energies.push_back(std::numeric_limits<double>::infinity());
       outputs[source].scf.initial_density_used = initial_densities[source] != nullptr;
@@ -2147,42 +2348,101 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     if (cached_plan != nullptr) *cached_plan = nullptr;
   }
   std::vector<CudaDensityFittingMetricDiagnostic> metric_diagnostics;
-  try {
-    if (plan == nullptr) {
-      const auto [alpha_occupied, beta_occupied] =
-          spin_occupations(systems[source_indices.front()]);
-      std::vector<core::System> orbital_systems;
-      std::vector<core::System> auxiliary_systems;
-      orbital_systems.reserve(source_indices.size());
-      auxiliary_systems.reserve(source_indices.size());
+  const auto ensure_plan = [&]() {
+    try {
+      if (plan == nullptr) {
+        const auto [alpha_occupied, beta_occupied] =
+            spin_occupations(systems[source_indices.front()]);
+        std::vector<core::System> orbital_systems;
+        std::vector<core::System> auxiliary_systems;
+        orbital_systems.reserve(source_indices.size());
+        auxiliary_systems.reserve(source_indices.size());
+        for (const std::size_t source : source_indices) {
+          orbital_systems.push_back(systems[source]);
+          auxiliary_systems.push_back(
+              density_fitting_auxiliary_for_geometry(auxiliary_template, systems[source]));
+        }
+        owned_plan = make_cuda_density_fitting_batch_plan(
+            data, options, device_id, std::max(alpha_occupied, beta_occupied), &metric_diagnostics,
+            &orbital_systems, &auxiliary_systems);
+        plan = owned_plan.get();
+        if (cached_plan != nullptr) {
+          *cached_plan = owned_plan.release();
+        }
+      }
+    } catch (const std::bad_alloc&) {
       for (const std::size_t source : source_indices) {
-        orbital_systems.push_back(systems[source]);
-        auxiliary_systems.push_back(
-            density_fitting_auxiliary_for_geometry(auxiliary_template, systems[source]));
+        outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       }
-      owned_plan = make_cuda_density_fitting_batch_plan(
-          data, options, device_id, std::max(alpha_occupied, beta_occupied), &metric_diagnostics,
-          &orbital_systems, &auxiliary_systems);
-      plan = owned_plan.get();
-      if (cached_plan != nullptr) {
-        *cached_plan = owned_plan.release();
+      return false;
+    } catch (const std::invalid_argument&) {
+      for (const std::size_t source : source_indices) {
+        outputs[source].status = VIBEQC_STATUS_INVALID_ARGUMENT;
       }
+      return false;
+    } catch (...) {
+      for (const std::size_t source : source_indices) {
+        outputs[source].status = VIBEQC_STATUS_CUDA_ERROR;
+      }
+      return false;
     }
-  } catch (const std::bad_alloc&) {
-    for (const std::size_t source : source_indices) {
+    return true;
+  };
+  if (!ensure_plan()) return outputs;
+  std::vector<std::size_t> survivors;
+  survivors.reserve(data.size());
+  for (std::size_t slot = 0; slot < data.size(); ++slot) {
+    const auto source = source_indices[slot];
+    host_trace::Item traced_item(source);
+    host_trace::Region preparation_trace("prepare_initial_frame");
+    try {
+      const auto eigen = df_setup_eigen(plan, slot);
+      orthogonalizers[slot] = initial_guess::prepare_overlap_orthogonalizer(
+          systems[source], data[slot].one_electron.overlap, nbf,
+          overlap_caches ? (*overlap_caches)[source] : nullptr, eigen);
+      const auto [alpha_occupied, beta_occupied] = spin_occupations(systems[source]);
+      std::optional<EigenResult> initial_alpha, initial_beta;
+      std::tie(alpha_densities[slot], beta_densities[slot]) = prepare_initial_uhf_density(
+          data[slot].one_electron, orthogonalizers[slot], alpha_occupied, beta_occupied,
+          initial_densities[source], initial_alpha, initial_beta, df_initial_orbital_request(),
+          eigen);
+      alpha_orbitals[slot] = std::move(initial_alpha).value_or(EigenResult{});
+      beta_orbitals[slot] = std::move(initial_beta).value_or(EigenResult{});
+      survivors.push_back(slot);
+    } catch (const std::bad_alloc&) {
       outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
-    }
-    return outputs;
-  } catch (const std::invalid_argument&) {
-    for (const std::size_t source : source_indices) {
+    } catch (const std::invalid_argument&) {
       outputs[source].status = VIBEQC_STATUS_INVALID_ARGUMENT;
+    } catch (...) {
+      outputs[source].status = VIBEQC_STATUS_NUMERICAL_FAILURE;
     }
-    return outputs;
-  } catch (...) {
-    for (const std::size_t source : source_indices) {
-      outputs[source].status = VIBEQC_STATUS_CUDA_ERROR;
-    }
-    return outputs;
+  }
+  if (survivors.size() != data.size()) {
+    // The old plan's fixed batch stride includes failed sources. Free it
+    // before rebuilding once, retain good detached X/D, and never execute an
+    // invalid initial frame. The per-source cache remains owned by its source.
+    if (owned_plan.get() == plan)
+      owned_plan.reset();
+    else
+      destroy_cuda_density_fitting_jk_plan(plan);
+    plan = nullptr;
+    if (cached_plan) *cached_plan = nullptr;
+    const auto compact = [&](auto& values) {
+      for (std::size_t target = 0; target < survivors.size(); ++target)
+        if (target != survivors[target]) values[target] = std::move(values[survivors[target]]);
+      while (values.size() > survivors.size()) values.pop_back();
+    };
+    compact(source_indices);
+    compact(data);
+    compact(orthogonalizers);
+    compact(alpha_densities);
+    compact(beta_densities);
+    compact(alpha_orbitals);
+    compact(beta_orbitals);
+    compact(diis);
+    compact(previous_energies);
+    metric_diagnostics.clear();
+    if (data.empty() || !ensure_plan()) return outputs;
   }
   if (output_diagnostics != nullptr) {
     for (std::size_t slot = 0; slot < metric_diagnostics.size(); ++slot) {
@@ -2224,10 +2484,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     std::vector<double> device_final_beta;
     std::vector<CudaDensityFittingDeviceScfItem> device_records;
     std::string device_detail;
-    const vibeqc_status device_status = run_cuda_density_fitting_uhf_device_scf(
-        plan, hcore, orthogonalizer, initial_alpha, initial_beta, alpha_occupied, beta_occupied,
-        nuclear, options.max_iterations, options.energy_tolerance, options.density_tolerance,
-        device_final_alpha, device_final_beta, device_records, device_detail);
+    const vibeqc_status device_status = host_trace::call("device_scf_submission_wait", [&] {
+      return run_cuda_density_fitting_uhf_device_scf(
+          plan, hcore, orthogonalizer, initial_alpha, initial_beta, alpha_occupied, beta_occupied,
+          nuclear, options.max_iterations, options.energy_tolerance, options.density_tolerance,
+          device_final_alpha, device_final_beta, device_records, device_detail);
+    });
     if (device_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger) {
       for (const auto source : source_indices) outputs[source].status = VIBEQC_STATUS_OUT_OF_MEMORY;
       return outputs;
@@ -2239,6 +2501,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     if (device_converged) {
       for (std::size_t slot = 0; slot < data.size(); ++slot) {
         const std::size_t source = source_indices[slot];
+        host_trace::Item traced_item(source);
         alpha_densities[slot].assign(device_final_alpha.begin() + slot * matrix_size,
                                      device_final_alpha.begin() + (slot + 1) * matrix_size);
         beta_densities[slot].assign(device_final_beta.begin() + slot * matrix_size,
@@ -2296,6 +2559,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
     for (std::size_t slot = 0; slot < data.size(); ++slot) {
       if (!active[slot]) continue;
       const std::size_t source = source_indices[slot];
+      host_trace::Item traced_item(source);
       try {
         const auto [alpha_occupied, beta_occupied] = spin_occupations(systems[source]);
         Matrix alpha_fock = data[slot].one_electron.hcore;
@@ -2318,8 +2582,12 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
         const Matrix effective_joined = diis[slot].update(
             concatenate(alpha_fock, beta_fock), concatenate(alpha_residual, beta_residual));
         std::tie(alpha_fock, beta_fock) = split_spin_matrices(effective_joined, matrix_size);
-        alpha_orbitals[slot] = generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
-        beta_orbitals[slot] = generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
+        alpha_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+          return generalized_eigen(alpha_fock, orthogonalizers[slot], nbf);
+        });
+        beta_orbitals[slot] = host_trace::with_reason(host_trace::EigenReason::fallback, [&] {
+          return generalized_eigen(beta_fock, orthogonalizers[slot], nbf);
+        });
         Matrix next_alpha =
             density_from_orbitals(alpha_orbitals[slot].vectors, nbf, alpha_occupied, 1.0);
         Matrix next_beta =
@@ -2358,6 +2626,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
 
   for (std::size_t slot = 0; slot < source_indices.size(); ++slot) {
     const std::size_t source = source_indices[slot];
+    host_trace::Item traced_item(source);
     ScfResult& result = outputs[source].scf;
     if (outputs[source].status != VIBEQC_STATUS_INTERNAL_ERROR) {
       continue;
@@ -2388,17 +2657,19 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
 ScfResult run_rhf_density_fitting_cuda(const core::System& system,
                                        const core::System& auxiliary_system,
                                        const ScfOptions& options, int device_id,
-                                       const std::vector<double>* initial_density) {
+                                       const std::vector<double>* initial_density,
+                                       initial_guess::OverlapOrthogonalizer* overlap_cache) {
   return run_rhf_density_fitting_cuda_impl(system, auxiliary_system, options, device_id,
-                                           initial_density);
+                                           initial_density, overlap_cache);
 }
 
 ScfResult run_uhf_density_fitting_cuda(const core::System& system,
                                        const core::System& auxiliary_system,
                                        const ScfOptions& options, int device_id,
-                                       const std::vector<double>* initial_density) {
+                                       const std::vector<double>* initial_density,
+                                       initial_guess::OverlapOrthogonalizer* overlap_cache) {
   return run_uhf_density_fitting_cuda_impl(system, auxiliary_system, options, device_id,
-                                           initial_density);
+                                           initial_density, overlap_cache);
 }
 
 std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket(
@@ -2407,7 +2678,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket(
     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics) {
   return run_rhf_density_fitting_cuda_bucket_impl(systems, auxiliary_template, options,
                                                   initial_densities, device_id, diagnostics,
-                                                  nullptr, nullptr);
+                                                  nullptr, nullptr, nullptr);
 }
 
 std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_cached(
@@ -2415,10 +2686,11 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_cached(
     const std::optional<core::System>& auxiliary_template, const ScfOptions& options,
     const std::vector<const std::vector<double>*>& initial_densities, int device_id,
     std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics,
-    std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
+    std::vector<std::optional<DensityFittingScfData>>* prepared_cache,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>* overlap_caches) {
   return run_rhf_density_fitting_cuda_bucket_impl(systems, auxiliary_template, options,
                                                   initial_densities, device_id, diagnostics, plan,
-                                                  prepared_cache);
+                                                  prepared_cache, overlap_caches);
 }
 
 std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket(
@@ -2427,7 +2699,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket(
     int device_id, std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics) {
   return run_uhf_density_fitting_cuda_bucket_impl(systems, auxiliary_template, options,
                                                   initial_densities, device_id, diagnostics,
-                                                  nullptr, nullptr);
+                                                  nullptr, nullptr, nullptr);
 }
 
 std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_cached(
@@ -2435,10 +2707,11 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_cached(
     const std::optional<core::System>& auxiliary_template, const ScfOptions& options,
     const std::vector<const std::vector<double>*>& initial_densities, int device_id,
     std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics,
-    std::vector<std::optional<DensityFittingScfData>>* prepared_cache) {
+    std::vector<std::optional<DensityFittingScfData>>* prepared_cache,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>* overlap_caches) {
   return run_uhf_density_fitting_cuda_bucket_impl(systems, auxiliary_template, options,
                                                   initial_densities, device_id, diagnostics, plan,
-                                                  prepared_cache);
+                                                  prepared_cache, overlap_caches);
 }
 
 #endif  // VIBEQC_HAS_CUDA
@@ -2519,12 +2792,14 @@ ScfResult run_uhf_cuda(const core::System&, const ScfOptions&, int, const std::v
 }
 
 ScfResult run_rhf_density_fitting_cuda(const core::System&, const core::System&, const ScfOptions&,
-                                       int, const std::vector<double>*) {
+                                       int, const std::vector<double>*,
+                                       initial_guess::OverlapOrthogonalizer*) {
   throw std::runtime_error("the library was built without CUDA support");
 }
 
 ScfResult run_uhf_density_fitting_cuda(const core::System&, const core::System&, const ScfOptions&,
-                                       int, const std::vector<double>*) {
+                                       int, const std::vector<double>*,
+                                       initial_guess::OverlapOrthogonalizer*) {
   throw std::runtime_error("the library was built without CUDA support");
 }
 
@@ -2545,7 +2820,8 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_cached(
     const std::optional<core::System>&, const ScfOptions&,
     const std::vector<const std::vector<double>*>&, int,
     std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics,
-    std::vector<std::optional<DensityFittingScfData>>*) {
+    std::vector<std::optional<DensityFittingScfData>>*,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>*) {
   if (diagnostics != nullptr) diagnostics->clear();
   std::vector<RhfBucketItem> outputs(systems.size());
   for (RhfBucketItem& output : outputs) {
@@ -2571,7 +2847,8 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_cached(
     const std::optional<core::System>&, const ScfOptions&,
     const std::vector<const std::vector<double>*>&, int,
     std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics,
-    std::vector<std::optional<DensityFittingScfData>>*) {
+    std::vector<std::optional<DensityFittingScfData>>*,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>*) {
   if (diagnostics != nullptr) diagnostics->clear();
   std::vector<RhfBucketItem> outputs(systems.size());
   for (RhfBucketItem& output : outputs) {

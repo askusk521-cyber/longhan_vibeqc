@@ -72,9 +72,9 @@ def _item_host_inventory(item, *, diis_history, max_iterations, pbe, backend, mo
     if backend == "cpu":
         # Value-only Jet objects retain no derivative arrays. Raw Cartesian
         # Jet integrals coexist with unpacked and spherical transform buffers.
-        l = orbital["maximum_angular"]
-        hermite = 6 * (l + 3) ** 2 * (2 * l + 4)
-        recurrence = 64 * ((4 * l + 1) ** 4 + hermite + 256 + a)
+        angular = orbital["maximum_angular"]
+        hermite = 6 * (angular + 3) ** 2 * (2 * angular + 4)
+        recurrence = 64 * ((4 * angular + 1) ** 4 + hermite + 256 + a)
         integrals = byte_product(64, 2 * c2 + byte_product(c2, c2))
         integrals += max(recurrence, 32 * (c2 * c2 + n2 * n2 + c * n + n2))
         setup = integrals + quadrature + basis

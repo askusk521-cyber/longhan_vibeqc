@@ -13,6 +13,7 @@
 #include "api/handles.hpp"
 #include "scf/fleet.hpp"
 #include "scf/fock_prepared.hpp"
+#include "scf/initial_guess/overlap.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
 
@@ -300,7 +301,7 @@ class HfPreparedCalculation final : public PreparedCalculation {
     // cache replacement and the entire solve on its non-reentrant workspace.
     auto native = scf::run_fock_strategy_cached(
         fock_cache_, system_, auxiliary_template_ ? &*auxiliary_template_ : nullptr,
-        execution_options, context_->device_id);
+        execution_options, context_->device_id, nullptr, &overlap_cache_);
     return adapt_result(std::move(native),
                         use_cuda ? VIBEQC_BACKEND_CUDA : VIBEQC_BACKEND_CPU_REFERENCE);
   }
@@ -312,6 +313,9 @@ class HfPreparedCalculation final : public PreparedCalculation {
   scf::ScfOptions options_;
   std::optional<core::System> auxiliary_template_;
   std::unique_ptr<scf::PreparedFockPlan> fock_cache_;
+  // The calculation fixes basis/device. Keep X through output-driven source
+  // replacements and fused/independent dispatch transitions.
+  scf::initial_guess::OverlapOrthogonalizer overlap_cache_;
 };
 
 class HfPreparedBatch final : public PreparedBatch {

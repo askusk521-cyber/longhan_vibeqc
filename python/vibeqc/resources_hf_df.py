@@ -229,6 +229,16 @@ def cuda_df_candidates(
                 + solver
                 + 1024 * b
             )
+            # One ordinary AO eigensystem serves the bucket serially. The
+            # native adapter checks queried device/host workspace against this
+            # allowance before allocation; neither uses the opaque allowance.
+            ordinary_eigen_workspace = (1 << 20) + 128 * n * n
+            ordinary_eigen_device = ordinary_eigen_workspace + 8 * (3 * n * n + n) + 5
+            persistent_device += ordinary_eigen_device
+            # Both full spin frames survive inactive launches; the independent
+            # single-item retry below receives its own complete snapshot share.
+            final_snapshot_device = b * (16 * (n * n + n) + 24)
+            persistent_device += final_snapshot_device
             persistent_device += (
                 (
                     tensor + 3 * tile_bytes
@@ -257,6 +267,11 @@ def cuda_df_candidates(
                 (d + 1) * 2 * c * c + (0 if source else ac * ac + c * c * ac)
             )
             persistent_host = row["host_metadata"] + 8 * b * (32 * n * n + 16 * d)
+            # One verified X and its exact S/geometry key per source survive
+            # value-plan rebuilds. Device SCF already reserves d_orthogonalizer;
+            # these are additional host copies only, retained through teardown.
+            overlap_cache_host = 2 * matrix + 8 * b * d
+            persistent_host += overlap_cache_host + ordinary_eigen_workspace + 64 * b
             one_electron = 8 * b * ((d + 1) * 2 * n * n + d)
             raw = 8 * b * (aux * aux + n * n * aux)
             if not source:
@@ -296,7 +311,13 @@ def cuda_df_candidates(
             # recovery. This is independent of allocation-failure retries.
             device_work.append(
                 checked_bytes(
-                    max(setup, force, generation) + persistent_device // b + solver
+                    max(setup, force, generation)
+                    + (persistent_device - ordinary_eigen_device) // b
+                    # A separate single-item retry needs its own whole ordinary
+                    # workspace; this bucket-serialized capacity does not scale
+                    # down with the original batch's item count.
+                    + ordinary_eigen_device
+                    + solver
                 )
             )
             inventories.append(
@@ -304,6 +325,10 @@ def cuda_df_candidates(
                     **{k: v for k, v in row.items() if k != "default_tile"},
                     "tiles": asdict(tile),
                     "resident_host_bytes": persistent_host,
+                    "overlap_cache_host_bytes": overlap_cache_host,
+                    "ordinary_eigen_device_bytes": ordinary_eigen_device,
+                    "final_snapshot_device_bytes": final_snapshot_device,
+                    "ordinary_eigen_host_workspace_bytes": ordinary_eigen_workspace,
                     "resident_device_bytes": persistent_device,
                 }
             )

@@ -181,8 +181,9 @@ The registry exposes CPU/CUDA energy-only LDA/PBE RKS and UKS with conventional 
 Matched-grid tests cover H2, He and water (RKS), and H, Li and H2+ (UKS), each
 with two independent PySCF guesses. Native final physical residuals must pass
 `min(density_tolerance, 1e-9)`; energy stability alone is insufficient.
-Prepared batches and complete public resource planning remain #162;
-forces remain #163 and density fitting is not advertised.
+Prepared ragged batches, public model options and composed resource planning
+are available. Complete workload evidence and component timing/transport
+diagnostics remain #162; forces remain #163 and density fitting is not advertised.
 
 ## Fixed-density domain and remaining dependencies
 
@@ -194,8 +195,8 @@ clips density or skips zero-weight points. An empty explicit grid returns the
 zero integral, not a converged quadrature. The small reference grids are fixed
 controlled inputs, so agreement does not establish quadrature convergence.
 
-Remaining #162 work includes prepared ragged batches, public model options and
-complete invalidation/resource/evidence integration.
+Remaining #162 work includes complete component timing/transport diagnostics and
+permanent source-bound workload evidence under the shared #138 protocol.
 The independent closed-shell PBE H2 endpoint is recorded in
 `experiments/vibeqc/issue-162-a/pbe-rks-endpoint-20260912.md`; this does not
 establish broader PBE coverage. #203 owns composed resource planning, and #163

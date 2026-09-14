@@ -11,6 +11,9 @@
 #include "scf/types.hpp"
 
 namespace vibeqc::scf {
+namespace initial_guess {
+class OverlapOrthogonalizer;
+}
 /** Shared physical reference validation, including canonical and SCF residuals.
  * Arrays use
  * detached row-major spatial AO/MO conventions on every backend. */
@@ -33,7 +36,8 @@ namespace vibeqc::scf {
  * execution without changing the immutable prepared method request. */
 ResolvedFockBuild fock_strategy_for_execution(const ScfOptions& options);
 ScfResult run_prepared_fock_strategy(const PreparedFockPlan& plan, const ScfOptions& options,
-                                     const std::vector<double>* initial_density = nullptr);
+                                     const std::vector<double>* initial_density = nullptr,
+                                     initial_guess::OverlapOrthogonalizer* overlap_cache = nullptr);
 
 /** CPU energy-only LDA RKS using a Coulomb-only prepared Fock source and the
  * matching prepared AO/grid/XC state. */
@@ -71,7 +75,8 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
 ScfResult run_fock_strategy_cached(std::unique_ptr<PreparedFockPlan>& cache,
                                    const core::System& system, const core::System* auxiliary,
                                    const ScfOptions& options, int device_id,
-                                   const std::vector<double>* initial_density = nullptr);
+                                   const std::vector<double>* initial_density = nullptr,
+                                   initial_guess::OverlapOrthogonalizer* overlap_cache = nullptr);
 
 /** Rebuild only the source overlap on the CPU and apply the shared SCF
  * ensemble-density guard (Hermiticity, metric occupations, electron/spin trace).
@@ -102,7 +107,8 @@ ScfResult run_cuda_independent_fock_strategy(const core::System& system,
  */
 ScfResult run_fock_strategy(const core::System& system, const core::System* auxiliary,
                             const ScfOptions& options, int device_id,
-                            const std::vector<double>* initial_density = nullptr);
+                            const std::vector<double>* initial_density = nullptr,
+                            initial_guess::OverlapOrthogonalizer* overlap_cache = nullptr);
 
 /** Run closed-shell RHF and assemble its variational analytic gradient. */
 ScfResult run_rhf(const core::System& system, const ScfOptions& options,
@@ -135,16 +141,16 @@ ScfResult run_uhf_density_fitting(const core::System& system, const core::System
  * contractions, and the raw two-electron force response stay on the selected
  * CUDA device when the provider is available.
  */
-ScfResult run_rhf_density_fitting_cuda(const core::System& system,
-                                       const core::System& auxiliary_system,
-                                       const ScfOptions& options, int device_id,
-                                       const std::vector<double>* initial_density = nullptr);
+ScfResult run_rhf_density_fitting_cuda(
+    const core::System& system, const core::System& auxiliary_system, const ScfOptions& options,
+    int device_id, const std::vector<double>* initial_density = nullptr,
+    initial_guess::OverlapOrthogonalizer* overlap_cache = nullptr);
 
 /** CUDA DF counterpart for UHF. */
-ScfResult run_uhf_density_fitting_cuda(const core::System& system,
-                                       const core::System& auxiliary_system,
-                                       const ScfOptions& options, int device_id,
-                                       const std::vector<double>* initial_density = nullptr);
+ScfResult run_uhf_density_fitting_cuda(
+    const core::System& system, const core::System& auxiliary_system, const ScfOptions& options,
+    int device_id, const std::vector<double>* initial_density = nullptr,
+    initial_guess::OverlapOrthogonalizer* overlap_cache = nullptr);
 
 /**
  * Execute a homogeneous fleet bucket through one batched CUDA DF J/K plan.
@@ -170,7 +176,8 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_cached(
     const std::optional<core::System>& auxiliary_template, const ScfOptions& options,
     const std::vector<const std::vector<double>*>& initial_densities, int device_id,
     std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics = nullptr,
-    std::vector<std::optional<DensityFittingScfData>>* prepared_cache = nullptr);
+    std::vector<std::optional<DensityFittingScfData>>* prepared_cache = nullptr,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>* overlap_caches = nullptr);
 
 /** UHF counterpart of the batched CUDA DF bucket executor. */
 std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket(
@@ -184,7 +191,8 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_cached(
     const std::optional<core::System>& auxiliary_template, const ScfOptions& options,
     const std::vector<const std::vector<double>*>& initial_densities, int device_id,
     std::vector<CudaDensityFittingMetricDiagnostic>* diagnostics = nullptr,
-    std::vector<std::optional<DensityFittingScfData>>* prepared_cache = nullptr);
+    std::vector<std::optional<DensityFittingScfData>>* prepared_cache = nullptr,
+    const std::vector<initial_guess::OverlapOrthogonalizer*>* overlap_caches = nullptr);
 
 /** Execute RHF through the native CUDA scientific path. */
 ScfResult run_rhf_cuda(const core::System& system, const ScfOptions& options, int device_id,

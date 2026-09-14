@@ -56,4 +56,12 @@ vibeqc::dft::point::Value evaluate_device(bool pbe, const double rho[2],
 }  // namespace
 
 #define VIBEQC_TEST_POINT_EVALUATE evaluate_device
+#define main point_test_main
 #include "test_xc_point.cpp"
+#undef main
+
+int main() {
+  int count = 0;
+  if (cudaGetDeviceCount(&count) != cudaSuccess || count == 0) return 77;
+  return point_test_main();
+}

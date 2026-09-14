@@ -136,9 +136,12 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) throw std::runtime_error("basis has fewer orbitals than occupied pairs");
   const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
-  EigenResult orbitals;
-  Matrix density =
-      prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density, orbitals);
+  std::optional<EigenResult> initial_orbitals;
+  Matrix density = prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density,
+                                           initial_orbitals);
+  // Only a cold seed carries a core frame. Warm consumers solve their first
+  // target Fock before reading orbitals; RKS packs its initial factor cold-only.
+  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n, {static_cast<unsigned>(system.electron_count)},
                   2.0);

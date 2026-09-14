@@ -7,6 +7,7 @@
 #include "core/types.hpp"
 #include "integrals/s_integrals.hpp"
 #include "scf/reference/mean_field.hpp"
+#include "scf/reference/observation.hpp"
 
 namespace vibeqc::scf::initial_guess {
 
@@ -75,42 +76,10 @@ void normalize_spin_density(Matrix& density, const Matrix& overlap, std::size_t 
   for (double& value : density) value *= scale;
 }
 
-std::pair<Matrix, Matrix> prepare_initial_uhf_density(
-    const integrals::IntegralData& ints, const Matrix& orthogonalizer, std::size_t alpha_occupied,
-    std::size_t beta_occupied, const std::vector<double>* initial_density,
-    EigenResult& alpha_orbitals, EigenResult& beta_orbitals) {
-  const std::size_t n = ints.nbf;
-  const std::size_t matrix_size = n * n;
-  alpha_orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
-  beta_orbitals = alpha_orbitals;
-  if (initial_density == nullptr) {
-    mix_open_shell_frontier_orbitals(beta_orbitals.vectors, n, alpha_occupied, beta_occupied);
-    return {
-        density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0),
-        density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0),
-    };
-  }
-  if (initial_density->size() != 2 * matrix_size ||
-      !std::all_of(initial_density->begin(), initial_density->end(),
-                   [](double value) { return std::isfinite(value); })) {
-    throw std::invalid_argument(
-        "initial UHF density must contain finite alpha and beta AO matrices");
-  }
-  Matrix alpha(initial_density->begin(), initial_density->begin() + matrix_size);
-  Matrix beta(initial_density->begin() + matrix_size, initial_density->end());
-  normalize_spin_density(alpha, ints.overlap, n, alpha_occupied);
-  normalize_spin_density(beta, ints.overlap, n, beta_occupied);
-  return {std::move(alpha), std::move(beta)};
-}
-
-Matrix prepare_initial_density(const core::System& system, const integrals::IntegralData& ints,
-                               const Matrix& orthogonalizer, std::size_t occupied,
-                               const std::vector<double>* initial_density, EigenResult& orbitals) {
-  const std::size_t n = ints.nbf;
-  orbitals = generalized_eigen(ints.hcore, orthogonalizer, n);
-  if (initial_density == nullptr) {
-    return density_from_orbitals(orbitals.vectors, n, occupied);
-  }
+Matrix normalized_warm_density(const core::System& system, const integrals::IntegralData& ints,
+                               const Matrix& input) {
+  const auto n = ints.nbf;
+  const auto* initial_density = &input;
   if (initial_density->size() != n * n ||
       !std::all_of(initial_density->begin(), initial_density->end(),
                    [](double value) { return std::isfinite(value); })) {
@@ -139,6 +108,81 @@ Matrix prepare_initial_density(const core::System& system, const integrals::Inte
   }
   const double trace_scale = static_cast<double>(system.electron_count) / electron_trace;
   for (double& value : density) value *= trace_scale;
+  return density;
+}
+
+std::pair<Matrix, Matrix> normalized_warm_uhf_density(const integrals::IntegralData& ints,
+                                                      std::size_t alpha_occupied,
+                                                      std::size_t beta_occupied,
+                                                      const Matrix& input) {
+  const auto n = ints.nbf;
+  const auto matrix_size = n * n;
+  const auto* initial_density = &input;
+  if (initial_density->size() != 2 * matrix_size ||
+      !std::all_of(initial_density->begin(), initial_density->end(),
+                   [](double value) { return std::isfinite(value); })) {
+    throw std::invalid_argument(
+        "initial UHF density must contain finite alpha and beta AO matrices");
+  }
+  Matrix alpha(initial_density->begin(), initial_density->begin() + matrix_size);
+  Matrix beta(initial_density->begin() + matrix_size, initial_density->end());
+  normalize_spin_density(alpha, ints.overlap, n, alpha_occupied);
+  normalize_spin_density(beta, ints.overlap, n, beta_occupied);
+  return {std::move(alpha), std::move(beta)};
+}
+
+std::pair<Matrix, Matrix> prepare_initial_uhf_density(
+    const integrals::IntegralData& ints, const Matrix& orthogonalizer, std::size_t alpha_occupied,
+    std::size_t beta_occupied, const std::vector<double>* initial_density,
+    std::optional<EigenResult>& alpha_orbitals, std::optional<EigenResult>& beta_orbitals,
+    InitialOrbitalRequest request, const EigenOperation& eigen) {
+  const std::size_t n = ints.nbf;
+  scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
+  scf::reference::observation::Scope trace("initial_density", n);
+  alpha_orbitals.reset();
+  beta_orbitals.reset();
+  const auto core_frame = [&] {
+    return eigen ? eigen(ints.hcore, &ints.overlap, &orthogonalizer, n)
+                 : generalized_eigen(ints.hcore, orthogonalizer, n);
+  };
+  if (initial_density == nullptr) {
+    alpha_orbitals = core_frame();
+    beta_orbitals = alpha_orbitals;
+    mix_open_shell_frontier_orbitals(beta_orbitals->vectors, n, alpha_occupied, beta_occupied);
+    return {
+        density_from_orbitals(alpha_orbitals->vectors, n, alpha_occupied, 1.0),
+        density_from_orbitals(beta_orbitals->vectors, n, beta_occupied, 1.0),
+    };
+  }
+  auto [alpha, beta] =
+      normalized_warm_uhf_density(ints, alpha_occupied, beta_occupied, *initial_density);
+  if (request == InitialOrbitalRequest::RequireCoreFrame) {
+    // A requested warm frame follows the historical unperturbed convention.
+    alpha_orbitals = core_frame();
+    beta_orbitals = alpha_orbitals;
+  }
+  return {std::move(alpha), std::move(beta)};
+}
+
+Matrix prepare_initial_density(const core::System& system, const integrals::IntegralData& ints,
+                               const Matrix& orthogonalizer, std::size_t occupied,
+                               const std::vector<double>* initial_density,
+                               std::optional<EigenResult>& orbitals, InitialOrbitalRequest request,
+                               const EigenOperation& eigen) {
+  const std::size_t n = ints.nbf;
+  scf::reference::observation::Reason reason(scf::reference::observation::EigenReason::core_guess);
+  scf::reference::observation::Scope trace("initial_density", n);
+  orbitals.reset();
+  const auto core_frame = [&] {
+    return eigen ? eigen(ints.hcore, &ints.overlap, &orthogonalizer, n)
+                 : generalized_eigen(ints.hcore, orthogonalizer, n);
+  };
+  if (initial_density == nullptr) {
+    orbitals = core_frame();
+    return density_from_orbitals(orbitals->vectors, n, occupied);
+  }
+  Matrix density = normalized_warm_density(system, ints, *initial_density);
+  if (request == InitialOrbitalRequest::RequireCoreFrame) orbitals = core_frame();
   return density;
 }
 

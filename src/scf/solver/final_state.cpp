@@ -1,0 +1,250 @@
+#include "scf/solver/final_state.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
+#include "runtime/host_component_trace.hpp"
+#include "scf/reference/mean_field.hpp"
+
+namespace vibeqc::scf::solver {
+namespace {
+using reference::Matrix;
+bool finite(const Matrix& values) {
+  return std::all_of(values.begin(), values.end(), [](double x) { return std::isfinite(x); });
+}
+bool symmetric(const Matrix& values, std::size_t n) {
+  if (values.size() != n * n || !finite(values)) return false;
+  for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t j = i + 1; j < n; ++j)
+      if (std::abs(values[i * n + j] - values[j * n + i]) >
+          1e-12 * std::max({1.0, std::abs(values[i * n + j]), std::abs(values[j * n + i])}))
+        return false;
+  return true;
+}
+std::size_t dimension(const Matrix& overlap) {
+  const auto n = static_cast<std::size_t>(std::sqrt(overlap.size()));
+  return n && n <= std::numeric_limits<std::size_t>::max() / n && n * n == overlap.size() ? n : 0;
+}
+bool valid_input(const FinalStateIdentity& current, const Matrix& overlap, const Matrix& hcore,
+                 double nuclear, const std::vector<Matrix>& density,
+                 const FinalStateLimits& limits) {
+  const auto n = dimension(overlap);
+  const auto& id = current.factor;
+  const auto spins = current.model.spec.spin == FockSpin::Restricted ? 1U : 2U;
+  if (!n || !id.basis || !id.reference || !id.orbital_generation || !id.density_generation ||
+      !current.solve_epoch || current.occupied.size() != spins || density.size() != spins ||
+      !std::isfinite(nuclear) || !std::isfinite(limits.density_tolerance) ||
+      limits.density_tolerance <= 0 || !std::isfinite(limits.energy_tolerance) ||
+      limits.energy_tolerance <= 0 || limits.maximum_corrections > 64 || !symmetric(overlap, n) ||
+      !symmetric(hcore, n))
+    return false;
+  try {
+    validate_resolved_fock_build(current.model);
+  } catch (const std::invalid_argument&) {
+    return false;
+  }
+  for (std::size_t spin = 0; spin < spins; ++spin)
+    if (current.occupied[spin] > n || !symmetric(density[spin], n)) return false;
+  return true;
+}
+bool valid_fock(const FinalStateIdentity& current, const PhysicalFockFrame& fock, std::size_t n) {
+  return fock.physical && fock.identity == current &&
+         fock.spins.size() == current.occupied.size() &&
+         std::all_of(fock.spins.begin(), fock.spins.end(),
+                     [n](const auto& f) { return symmetric(f, n); });
+}
+double physical_energy(const Matrix& hcore, double nuclear, const std::vector<Matrix>& density,
+                       const PhysicalFockFrame& fock) {
+  long double energy = nuclear;
+  for (std::size_t spin = 0; spin < density.size(); ++spin)
+    for (std::size_t k = 0; k < hcore.size(); ++k)
+      energy += .5L * density[spin][k] * (static_cast<long double>(hcore[k]) + fock.spins[spin][k]);
+  return static_cast<double>(energy);
+}
+}  // namespace
+
+bool validate_final_state(const FinalStateIdentity& current, const Matrix& overlap,
+                          const Matrix& hcore, double nuclear_energy,
+                          const std::vector<Matrix>& density, const PhysicalFockFrame& fock,
+                          const FinalFrameCandidate& orbitals, const FinalStateLimits& limits,
+                          FinalStateDiagnostic& diagnostic, std::string& detail) {
+  diagnostic = {};
+  detail.clear();
+  runtime::host_trace::Region trace("final_state_validation", dimension(overlap));
+  if (!valid_input(current, overlap, hcore, nuclear_energy, density, limits)) {
+    detail = "invalid final-state identity, model, occupations, matrices or tolerances";
+    return false;
+  }
+  const auto n = dimension(overlap);
+  if (!valid_fock(current, fock, n) || orbitals.identity != current || !orbitals.physical_origin ||
+      !orbitals.fock_density_generation ||
+      orbitals.fock_density_generation > current.factor.density_generation ||
+      orbitals.spins.size() != density.size()) {
+    detail =
+        "final-state frame has a stale generation, source/model, occupation or nonphysical Fock";
+    return false;
+  }
+  const double weight = current.model.spec.spin == FockSpin::Restricted ? 2.0 : 1.0;
+  const double tolerance = std::min(1e-8, limits.density_tolerance);
+  diagnostic.eigenframes.resize(density.size());
+  for (std::size_t spin = 0; spin < density.size(); ++spin) {
+    const auto& frame = orbitals.spins[spin];
+    if (!validate_eigen_frame(fock.spins[spin], &overlap, frame.values, frame.vectors, n,
+                              diagnostic.eigenframes[spin], detail))
+      return false;
+    const auto reconstructed =
+        reference::density_from_orbitals(frame.vectors, n, current.occupied[spin], weight);
+    const auto ds = reference::multiply(density[spin], overlap, n);
+    const auto dsd = reference::multiply(ds, density[spin], n);
+    const auto residual =
+        reference::commutator_residual(fock.spins[spin], density[spin], overlap, n);
+    if (!finite(reconstructed) || !finite(ds) || !finite(dsd) || !finite(residual)) {
+      detail = "nonfinite final-state validation products";
+      return false;
+    }
+    long double electrons = 0;
+    double drift = 0;
+    for (std::size_t row = 0; row < n; ++row) electrons += ds[row * n + row];
+    for (std::size_t k = 0; k < n * n; ++k) {
+      drift = std::hypot(drift, reconstructed[k] - density[spin][k]);
+      diagnostic.maximum_commutator =
+          std::max(diagnostic.maximum_commutator, std::abs(residual[k]));
+      diagnostic.maximum_idempotency_error = std::max(diagnostic.maximum_idempotency_error,
+                                                      std::abs(dsd[k] - weight * density[spin][k]));
+    }
+    diagnostic.density_rms = std::max(diagnostic.density_rms, drift / n);
+    diagnostic.maximum_trace_error =
+        std::max(diagnostic.maximum_trace_error,
+                 std::abs(static_cast<double>(electrons - weight * current.occupied[spin])));
+  }
+  diagnostic.energy = physical_energy(hcore, nuclear_energy, density, fock);
+  if (!std::isfinite(diagnostic.energy) || !std::isfinite(diagnostic.density_rms) ||
+      !std::isfinite(diagnostic.maximum_trace_error) || diagnostic.maximum_commutator > tolerance ||
+      diagnostic.density_rms > tolerance || diagnostic.maximum_trace_error > 1e-8 ||
+      diagnostic.maximum_idempotency_error > 1e-8) {
+    detail =
+        "final state failed physical commutator, density, electron trace, idempotency or energy "
+        "checks";
+    return false;
+  }
+  return true;
+}
+
+FinalStateSelection select_final_state(FinalStateIdentity current, const Matrix& overlap,
+                                       const Matrix& hcore, const Matrix& orthogonalizer,
+                                       double nuclear_energy, std::vector<Matrix> density,
+                                       const FinalFrameCandidate* candidate,
+                                       const PhysicalFockOperation& evaluate,
+                                       const initial_guess::EigenOperation& eigen,
+                                       const FinalStateLimits& limits,
+                                       bool compute_weighted_density, bool force_rebuild) {
+  FinalStateSelection result;
+  try {
+    const auto n = dimension(overlap);
+    if (!evaluate || !eigen ||
+        !valid_input(current, overlap, hcore, nuclear_energy, density, limits) ||
+        !symmetric(orthogonalizer, n)) {
+      result.status = FinalStateStatus::InvalidInput;
+      result.detail = "invalid strict final-state request";
+      return result;
+    }
+    std::optional<FinalFrameCandidate> corrected;
+    const FinalFrameCandidate* frame = candidate;
+    double previous_energy = std::numeric_limits<double>::quiet_NaN();
+    for (unsigned step = 0;; ++step) {
+      ++result.fock_evaluations;
+      const auto physical = runtime::host_trace::call("final_state_fock_build",
+                                                      [&] { return evaluate(current, density); });
+      if (!valid_fock(current, physical, n)) {
+        result.status = FinalStateStatus::ProviderFailure;
+        result.detail = "physical provider did not evaluate the current tagged density";
+        return result;
+      }
+      const double energy = physical_energy(hcore, nuclear_energy, density, physical);
+      if (!std::isfinite(energy)) {
+        result.detail = "nonfinite strict final-state energy";
+        return result;
+      }
+      FinalStateDiagnostic diagnostic;
+      const bool valid =
+          frame && validate_final_state(current, overlap, hcore, nuclear_energy, density, physical,
+                                        *frame, limits, diagnostic, result.detail);
+      diagnostic.energy_change = step ? std::abs(energy - previous_energy) : 0;
+      if (valid && !(force_rebuild && step == 0) &&
+          diagnostic.energy_change <= limits.energy_tolerance) {
+        VerifiedFinalState state{current, std::move(density), physical.spins,
+                                 {},      frame->spins,       std::move(diagnostic)};
+        if (compute_weighted_density) {
+          runtime::host_trace::Region weighted("final_state_weighted_density", n);
+          const double weight = current.model.spec.spin == FockSpin::Restricted ? 2.0 : 1.0;
+          for (std::size_t spin = 0; spin < state.orbitals.size(); ++spin) {
+            auto w = reference::energy_weighted_density(state.orbitals[spin].vectors,
+                                                        state.orbitals[spin].values, n,
+                                                        current.occupied[spin], weight);
+            if (!finite(w)) {
+              result.detail = "nonfinite validated energy-weighted density";
+              return result;
+            }
+            state.weighted_density.push_back(std::move(w));
+          }
+        }
+        result.state = std::move(state);
+        result.status = FinalStateStatus::Success;
+        result.reused = step == 0;
+        result.detail.clear();
+        return result;
+      }
+      if (frame && !valid) ++result.candidate_rejections;
+      if (step == limits.maximum_corrections ||
+          current.factor.density_generation == std::numeric_limits<std::uint64_t>::max() ||
+          current.factor.orbital_generation == std::numeric_limits<std::uint64_t>::max()) {
+        result.detail = "strict final-state correction exhausted without a consistent state";
+        return result;
+      }
+      runtime::host_trace::Region correction("strict_final_correction", n);
+      const auto origin = current.factor.density_generation;
+      corrected.emplace();
+      for (const auto& f : physical.spins) {
+        ++result.eigen_solves;
+        corrected->spins.push_back(runtime::host_trace::with_reason(
+            runtime::host_trace::EigenReason::final_fock,
+            [&] { return eigen(f, &overlap, &orthogonalizer, n); }));
+      }
+      // Validate each provider frame before using its coefficients to project D.
+      for (std::size_t spin = 0; spin < density.size(); ++spin) {
+        EigenFrameDiagnostic checked;
+        const auto& c = corrected->spins[spin];
+        if (!validate_eigen_frame(physical.spins[spin], &overlap, c.values, c.vectors, n, checked,
+                                  result.detail)) {
+          result.status = FinalStateStatus::ProviderFailure;
+          return result;
+        }
+        density[spin] = reference::density_from_orbitals(
+            c.vectors, n, current.occupied[spin],
+            current.model.spec.spin == FockSpin::Restricted ? 2.0 : 1.0);
+      }
+      ++current.factor.orbital_generation;
+      ++current.factor.density_generation;
+      ++result.density_updates;
+      corrected->identity = current;
+      corrected->fock_density_generation = origin;
+      corrected->physical_origin = true;
+      frame = &*corrected;
+      previous_energy = energy;
+    }
+  } catch (const std::bad_alloc&) {
+    result.status = FinalStateStatus::OutOfMemory;
+    result.detail = "strict final-state allocation failed";
+  } catch (const std::exception& error) {
+    result.status = FinalStateStatus::ProviderFailure;
+    result.detail = error.what();
+  } catch (...) {
+    result.status = FinalStateStatus::ProviderFailure;
+    result.detail = "strict final-state provider raised an unknown exception";
+  }
+  return result;
+}
+}  // namespace vibeqc::scf::solver

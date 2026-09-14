@@ -13,14 +13,11 @@ from tools.generate_df_kernels import write_if_changed
 
 
 def main():
-    """Use exactly the JIT generator and preserve unchanged generated mtimes."""
+    """Use the shared emitter's native composition and preserve unchanged mtimes."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    source, _, _ = emit_grid_source()
-    # Native semilocal XC borrows the same AO traversal/policy. Keep this
-    # extension out of the independent Python JIT grid owner's ABI and arena.
-    source += '#include "cuda_xc_kernels.cuh"\n'
+    source, _, _ = emit_grid_source(native_ks=True)
     write_if_changed(args.output, source)
 
 

@@ -20,6 +20,9 @@ struct CudaDensityFittingJkPlan {
   // Process-unique lifetime token binds orbital factors to this immutable
   // geometry/basis/metric source; dimensions and recycled addresses cannot.
   std::uint64_t factor_basis_identity{cuda_df::next_factor_basis_identity()};
+  // Survives persistent-state rebuilds, so topology/occupation changes cannot
+  // restart the epoch and authorize a previous device solve's final frame.
+  std::uint64_t final_state_solve_epoch{};
   // Frozen at creation: lazy SCF factors may only use a plan that reserved
   // their capacity. High-level caches rebuild when the policy changes.
   bool occupied_scf_reserved{};
@@ -68,6 +71,9 @@ struct CudaDensityFittingJkPlan {
   // solver state owner so this private plan layout never exposes CUDA graph
   // or cuSOLVER implementation types to callers.
   void* persistent_scf_state{};
+  // Ordinary AO setup/final eigen operations share the existing handles while
+  // retaining one bounded scratch frame, separate from captured SCF state.
+  void* ordinary_eigensystem{};
 };
 
 }  // namespace vibeqc::scf
