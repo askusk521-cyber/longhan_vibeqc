@@ -64,6 +64,14 @@ wall minus CPU time is not automatically all GPU waiting. Concurrent CPU
 worker roots overlap: their wall times must not be summed into endpoint time.
 Host and CUDA-event times must not be added together either.
 
+If host ablations take different SCF iteration/retry branches, the matrix CLI
+still fails. It writes completed samples and the differing branches to a
+separate `host-<ao>ao-b<batch>.rejected.json`, with source/library identity and
+input controls. The failed manifest links this diagnostic artifact; it has no
+timing assessment and is never a passing endpoint. Raw host traces remain
+available. Scientific endpoint comparisons that follow the branch gate are
+explicitly marked unchecked in the rejected record.
+
 The existing #206 matrix entry point also supports native protocol controls:
 
 ```bash
