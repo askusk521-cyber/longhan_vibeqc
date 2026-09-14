@@ -30,4 +30,18 @@ new = (
 )
 if text.count(old) != 1:
     raise SystemExit("CuMetal graph compatibility patch anchor not found exactly once")
-header.write_text(text.replace(old, new, 1), encoding="utf-8")
+text = text.replace(old, new, 1)
+# These CUDA ABI error values distinguish an abandoned capture from unrelated
+# runtime failures. The pinned shim omits the names; declaring them does not
+# claim that CuMetal reproduces NVIDIA's capture rejection behavior.
+error_anchor = "    cudaErrorNotSupported = 801,\n"
+if text.count(error_anchor) != 1:
+    raise SystemExit("CuMetal capture-error enum anchor not found exactly once")
+text = text.replace(
+    error_anchor,
+    error_anchor
+    + "    cudaErrorStreamCaptureUnsupported = 900,\n"
+    + "    cudaErrorStreamCaptureInvalidated = 901,\n",
+    1,
+)
+header.write_text(text, encoding="utf-8")

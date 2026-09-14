@@ -367,7 +367,8 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
     if (status != VIBEQC_STATUS_SUCCESS) return status;
   }
   bool graph_replay = state->graph_replay;
-  if (!graph_replay && (!plan->streamed || plan->integral_source != nullptr)) {
+  if (!graph_replay && !state->graph_capture_rejected &&
+      (!plan->streamed || plan->integral_source != nullptr)) {
     iteration_graph.reset();
     cuda_error = cudaStreamSynchronize(plan->stream);
     if (cuda_error == cudaSuccess) {
@@ -399,7 +400,12 @@ vibeqc_status run_cuda_density_fitting_uhf_device_scf(
         cuda_error = end_error;
       }
     }
-    if (!graph_replay) cuda_error = cudaSuccess;
+    if (!graph_replay) {
+      status = recover_scf_capture(plan->stream, cuda_error, status, state->graph_capture_rejected,
+                                   detail);
+      if (status != VIBEQC_STATUS_SUCCESS) return status;
+      cuda_error = cudaSuccess;
+    }
   }
   bool all_converged = false;
   const auto all_terminal = [&]() {

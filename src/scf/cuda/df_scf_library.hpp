@@ -20,4 +20,11 @@ vibeqc_status solve_device_batch(DeviceSolver& solver, std::size_t nbf, std::siz
                                  double* eigensystem, double* eigenvalues, int* info,
                                  std::string& detail);
 
+/** After ending a failed capture, clear only expected capture/mode errors.
+ * Ordinary launches must start on a noncapturing stream with no stale CUDA
+ * error. Unrelated runtime failures remain failures; this is not a CPU retry. */
+vibeqc_status recover_scf_capture(cudaStream_t stream, cudaError_t capture_error,
+                                  vibeqc_status iteration_status, bool& capture_rejected,
+                                  std::string& detail);
+
 }  // namespace vibeqc::scf::cuda_df

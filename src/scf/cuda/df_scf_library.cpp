@@ -15,6 +15,39 @@
 
 namespace vibeqc::scf::cuda_df {
 
+vibeqc_status recover_scf_capture(cudaStream_t stream, cudaError_t capture_error,
+                                  vibeqc_status iteration_status, bool& capture_rejected,
+                                  std::string& detail) {
+  const auto expected = [](cudaError_t error) {
+    return error == cudaSuccess || error == cudaErrorStreamCaptureUnsupported ||
+           error == cudaErrorStreamCaptureInvalidated || error == cudaErrorNotSupported;
+  };
+  // Assigning a local cudaSuccess does not clear the runtime's last-error
+  // slot. Otherwise the next successful generated tile launch can still fail
+  // its cudaPeekAtLastError check with the abandoned capture's error 901.
+  const auto pending = cudaGetLastError();
+  if (!expected(pending)) return cuda_failure(pending, "CUDA DF capture pending error", detail);
+  if (!expected(capture_error))
+    return cuda_failure(capture_error, "CUDA DF capture failure", detail);
+  // A library can report failure without setting CUDA's last-error slot.
+  // Preserve that failure unless an explicit capture/mode error explains it;
+  // in particular a solver allocation failure must never become a retry.
+  if (iteration_status != VIBEQC_STATUS_SUCCESS &&
+      (iteration_status != VIBEQC_STATUS_CUDA_ERROR ||
+       (capture_error == cudaSuccess && pending == cudaSuccess)))
+    return iteration_status;
+  cudaStreamCaptureStatus capture{};
+  const auto status = cudaStreamIsCapturing(stream, &capture);
+  if (status != cudaSuccess) return cuda_failure(status, "query recovered DF stream", detail);
+  if (capture != cudaStreamCaptureStatusNone) {
+    detail = "CUDA DF capture must be ended before ordinary execution";
+    return VIBEQC_STATUS_CUDA_ERROR;
+  }
+  capture_rejected = true;
+  detail.clear();
+  return VIBEQC_STATUS_SUCCESS;
+}
+
 vibeqc_status scf_gemm(CudaDensityFittingJkPlan& plan, bool transpose_left, std::size_t batch_size,
                        std::size_t nbf, const double* left, const double* right, double* output,
                        std::string& detail) {
