@@ -48,6 +48,13 @@ def test_independent_fitted_scf_providers_and_complete_forces(
     # Bent H2O+ avoids OH's degenerate Pi occupation: equally valid density
     # orientations must not be mistaken for a device-provider discrepancy.
     atoms = [("O", (0, 0, 0)), ("H", (0, 0, 1.8)), ("H", (1.7, 0, -0.6))]
+    controls = dict(CONTROLS)
+    if separate and j != k:
+        # The open-shell frontier perturbation has a solver-phase-dependent
+        # sign. Its small out-of-plane remnant decays slowly for mixed J/K;
+        # converge both independent owners more tightly before comparing D
+        # elementwise, retaining the same 1e-8 physical comparison threshold.
+        controls["density_tolerance"] = 1e-12
     spec = FockBuildSpec.hf(spin, coulomb=j, exchange=k)
     mol = gto.M(
         atom=atoms,
@@ -99,7 +106,7 @@ def test_independent_fitted_scf_providers_and_complete_forces(
                     result = owner.solve(
                         initial_density=seeds.get(name),
                         compute_forces=forces,
-                        **CONTROLS,
+                        **controls,
                     )
                 finally:
                     monkeypatch.delenv("VIBEQC_DF_HOST_TRACE")
