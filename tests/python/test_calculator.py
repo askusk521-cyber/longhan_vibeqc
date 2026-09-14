@@ -306,7 +306,6 @@ def test_uks_rejects_invalid_spin_occupations(method, charge, multiplicity):
 @pytest.mark.parametrize(
     "kwargs",
     (
-        {"device": "cuda"},
         {"density_fitting": "cpu"},
         {"precision": "auto"},
     ),

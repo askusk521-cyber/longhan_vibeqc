@@ -20,22 +20,22 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 28826,
+      "bytes": 34503,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 447,
+        "runtime": 558,
         "scientific": 89
       },
       "path": "src/dft/cuda_grid.cu",
-      "physical_lines": 578,
+      "physical_lines": 699,
       "reason": "Native plan/arena ownership around the bounded AO/feature kernels.",
       "regions": [
         {
           "code_lines": 89,
-          "first_line": 54,
-          "last_line": 148,
+          "first_line": 55,
+          "last_line": 149,
           "reason": "Normalized primitive traversal and D/C feature layout/reduction adapters remain counted conservatively as scientific glue. Axis derivative polynomials and the bilinear ingredient/sigma arithmetic shared by both routes are compiler-owned.",
           "role": "scientific",
           "start": "__global__ void ao_kernel",
@@ -43,11 +43,11 @@
         }
       ],
       "role": "runtime",
-      "sha256": "c33943bbfef00fdceac88c5338ef2333c3d00fb8c5022638ea0d40904763f31f",
+      "sha256": "49c4a00fed17262584beb6559baa6a587bc3aa392db848385bc3ea754e013291",
       "subsystem": "ao_grid"
     },
     {
-      "bytes": 1093,
+      "bytes": 1192,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
@@ -56,11 +56,11 @@
         "scientific": 0
       },
       "path": "src/dft/grid_task_view.cuh",
-      "physical_lines": 30,
+      "physical_lines": 31,
       "reason": "Versioned borrowed device buffer, stream and generation ABI; no scientific arithmetic.",
       "regions": [],
       "role": "runtime",
-      "sha256": "6b2c2d0439697d50e13799f8e9145b2f47e2ffa6b47b6a31ba1490b9e68a80ba",
+      "sha256": "f8ff83ddfabd2cd1ee7fdd595d55e60a15c08d882da3f89506a6e1fb7a8a1fc5",
       "subsystem": "ao_grid"
     },
     {
@@ -3188,7 +3188,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8839,
+    "runtime": 8950,
     "scientific": 10431
   },
   "migration_ledger": {
@@ -3341,7 +3341,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 462,
+      "runtime": 573,
       "scientific": 89
     },
     "df_derivatives": {
