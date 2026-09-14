@@ -160,6 +160,7 @@ add_library(vibeqc SHARED
   src/api/error.cpp
   src/dft/ao_grid.cpp
   src/dft/bridge.cpp
+  src/dft/cuda_xc.cpp
   src/dft/grid.cpp
   src/dft/rks.cpp
   src/dft/xc.cpp
@@ -747,6 +748,10 @@ set_target_properties(vibeqc PROPERTIES
 if(VIBEQC_BUILD_TESTS)
   enable_testing()
   if(VIBEQC_ENABLE_CUDA)
+    # Only this runtime contains grid fault injection; keep unrelated CUDA
+    # translation units and generated integral bundles free of test hooks.
+    set_property(SOURCE "${VIBEQC_GRID_SOURCE}" APPEND PROPERTY
+                 COMPILE_DEFINITIONS VIBEQC_TEST_HOOKS=1)
     # Manual numerical/performance tier: invoked through the Slurm validator,
     # never registered as an unallocated login-node GPU test.
     add_executable(vibeqc_weighted_eri_probe tests/native/weighted_eri_probe.cpp)

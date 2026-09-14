@@ -3,7 +3,8 @@
 VibeQC's long-term mission is to cover **all quantum-chemistry methods** in one
 accelerator-native system. This is a roadmap commitment, not a statement of
 current availability. RHF and UHF provide energies and analytic nuclear forces;
-closed-shell MP2 and CPU LDA/PBE RKS/UKS slices provide energy-only execution.
+closed-shell MP2 and CPU/prepared-CUDA LDA/PBE RKS/UKS slices provide
+energy-only execution.
 
 ## Current method status
 
@@ -13,9 +14,9 @@ closed-shell MP2 and CPU LDA/PBE RKS/UKS slices provide energy-only execution.
 | Hartree-Fock | UHF | Implemented: energy and analytic forces |
 | Hartree-Fock | ROHF, GHF, spinor HF | Planned |
 | Density fitting | Two-/three-center integral oracle, first nuclear derivatives, metric conditioning, memory planner | CPU oracle plus CUDA-native batched integral generation, RI-J/K, raw two-electron force-response contractions, and device-resident SCF integration implemented; streamed host tiles and provider-dependent Graph replay are documented acceptance-boundary modes |
-| Density functional theory | LDA RKS | Implemented vertical slice: CPU energy only, closed shell, conventional J; independent matched-grid SCF endpoint accepted for H2 and He |
-| Density functional theory | PBE RKS | Limited CPU energy-only slice: closed shell, conventional J, exact interior PBE and versioned LDA fallback tail; independent matched-grid SCF endpoint accepted for H2 |
-| Density functional theory | LDA/PBE UKS | Limited CPU energy-only slices: independent spin densities, total-density conventional J and versioned spin-tail policies; matched-grid H2- doublet and fully polarized H2+ endpoints accepted |
+| Density functional theory | LDA RKS | Energy-only CPU and prepared-CUDA slice: closed shell, conventional exact J; independent matched-grid SCF endpoints cover H2 and He |
+| Density functional theory | PBE RKS | Energy-only CPU and prepared-CUDA slice: closed shell, conventional exact J, exact interior PBE and versioned LDA fallback tail; independent matched-grid SCF endpoints cover H2 |
+| Density functional theory | LDA/PBE UKS | Energy-only CPU and prepared-CUDA slices: independent spin densities, total-density conventional exact J and versioned spin-tail policies; matched-grid H2- doublet and fully polarized H2+ endpoints cover open-shell behavior |
 | Density functional theory | meta-GGA, hybrid, range-separated, nonlocal correlation | Planned |
 | Perturbation theory | Closed-shell MP2 | Conventional and RI energy implemented on CPU/CUDA; analytic forces planned |
 | Perturbation theory | Open-shell, frozen-core, ECP and higher-order variants | Planned |
@@ -58,11 +59,20 @@ Method capability discovery and prepared execution are now registry-driven:
 the public API is independent of RHF/UHF dispatch, while each method family
 owns its validation, options, retained state, and batch policy.
 The native LDA and PBE RKS/UKS paths compose versioned atom-centered grids,
-generated XC, the common Coulomb provider and host SCF. Their small matched-grid
-endpoints pass the independent PySCF/Libxc gates recorded under the issue-162-a
-and issue-0162-b validation records. These records cover only CPU energy-only
-closed-shell H2/He and open-shell H2-/H2+/OH slices; broader DFT still requires
-representative systems, prepared CUDA, resource planning and gradients.
+generated XC and the common Coulomb provider. CPU and prepared-CUDA execution
+share host-controlled SCF iteration, DIIS and eigensolution. The CUDA path owns
+the conventional exact-J build and bounded tiled XC density/potential work on
+device, but returns matrices and scalar diagnostics to the host; it is not a
+fully GPU-resident SCF loop. Prepared energy-only batches preserve input order,
+isolate item failures, retain compatible fixed-geometry warm densities and
+rebuild plans when geometry changes. Density fitting, forces and gradients are
+not supported for these DFT methods. Their small matched-grid endpoints pass
+the independent PySCF/Libxc CPU gates recorded under the issue-162-a and
+issue-0162-b validation records, with CPU/CUDA endpoint parity checked
+separately. No DFT performance-leadership claim follows from this correctness
+slice; broader representative-system and resource evidence remains future
+work. `tools/validate_dft_endpoints.py` records the method-resolved prepared
+CUDA cold, fixed-geometry, changed-geometry, batch-1 and ragged endpoint gates.
 The public `Result.density_rms` retains its density-update convergence meaning.
 The separate `Result.physical_residual_rms` reports the physical commutator
 RMS for these KS methods; UKS combines the alpha/beta matrix entries in one RMS.

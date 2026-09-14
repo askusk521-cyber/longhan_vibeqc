@@ -15,6 +15,12 @@ std::unique_ptr<PreparedCalculation> prepare_dft_calculation(
     const Capabilities& capabilities, core::ContextState& context, const core::System& system,
     const vibeqc_method_descriptor& descriptor);
 
+std::unique_ptr<PreparedBatch> prepare_dft_batch(const Capabilities& capabilities,
+                                                 core::ContextState& context,
+                                                 std::vector<core::System> systems,
+                                                 const vibeqc_method_descriptor& descriptor,
+                                                 vibeqc_batch_flags flags);
+
 }  // namespace vibeqc::methods::detail
 
 #endif

@@ -489,10 +489,6 @@ class Calculator:
                 raise NotImplementedError(
                     "the current DFT energy slice supports explicit FP64 precision only"
                 )
-            if device != "cpu":
-                raise NotImplementedError(
-                    "the current DFT energy slice is available on the CPU backend only"
-                )
             if density_fitting_mode != _native.DENSITY_FITTING_NONE:
                 raise NotImplementedError(
                     "the current DFT energy slice supports conventional Coulomb only"

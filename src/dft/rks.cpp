@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -8,6 +9,7 @@
 #include <utility>
 
 #include "dft/ao_grid.hpp"
+#include "dft/cuda_xc.hpp"
 #include "dft/grid.hpp"
 #include "dft/xc.hpp"
 #include "runtime/resource_usage.hpp"
@@ -64,8 +66,8 @@ struct UksEvaluation {
   double energy{};
 };
 
-using RksXcEvaluator = dft::XcIntegral (*)(const dft::AoBasis&, const dft::MolecularGrid&,
-                                           const Matrix&, dft::XcDensitySource);
+using RksXcEvaluator = std::function<dft::XcIntegral(const dft::AoBasis&, const dft::MolecularGrid&,
+                                                     const Matrix&, dft::XcDensitySource)>;
 
 dft::XcIntegral evaluate_lda_xc_rks(const dft::AoBasis& basis, const dft::MolecularGrid& grid,
                                     const Matrix& density, dft::XcDensitySource source) {
@@ -117,8 +119,8 @@ RksEvaluation evaluate_rks(const PreparedFockPlan& plan, const dft::AoBasis& bas
   return result;
 }
 
-using UksXcEvaluator = dft::SpinXcIntegral (*)(const dft::AoBasis&, const dft::MolecularGrid&,
-                                               const Matrix&, const Matrix&);
+using UksXcEvaluator = std::function<dft::SpinXcIntegral(
+    const dft::AoBasis&, const dft::MolecularGrid&, const Matrix&, const Matrix&)>;
 
 UksEvaluation evaluate_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                            const dft::MolecularGrid& grid, const Matrix& alpha_density,
@@ -150,7 +152,7 @@ UksEvaluation evaluate_uks(const PreparedFockPlan& plan, const dft::AoBasis& bas
 ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                   const dft::MolecularGrid& grid, const ScfOptions& options,
                   const std::vector<double>* initial_density, RksXcEvaluator evaluate_xc,
-                  const char* method_name) {
+                  const char* method_name, FockBackend backend) {
   if (options.xc_density_route != dft::XcDensityRoute::DensityMatrix &&
       options.xc_density_route != dft::XcDensityRoute::OccupiedOrbitals)
     throw std::invalid_argument("unsupported RKS XC density route");
@@ -160,11 +162,12 @@ ScfResult run_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
   const auto& ints = plan.one_electron();
   if (options.compute_forces)
     throw std::invalid_argument(std::string(method_name) + " RKS forces are not implemented");
-  if (strategy.backend != FockBackend::Cpu || strategy.spec.spin != FockSpin::Restricted ||
+  if (strategy.backend != backend || strategy.spec.spin != FockSpin::Restricted ||
       strategy.spec.derivative_order != 0 || !strategy.spec.coulomb.present ||
       strategy.spec.coulomb.coefficient != 1.0 || strategy.spec.exchange.present)
-    throw std::invalid_argument(std::string(method_name) +
-                                " RKS requires a CPU Coulomb-only Fock strategy");
+    throw std::invalid_argument(std::string(method_name) + " RKS requires a matching " +
+                                (backend == FockBackend::Cuda ? "CUDA" : "CPU") +
+                                " Coulomb-only Fock strategy");
   if (system.electron_count <= 0 || system.electron_count % 2 || system.multiplicity != 1)
     throw std::invalid_argument(std::string(method_name) +
                                 " RKS requires a closed-shell electron count");
@@ -325,18 +328,19 @@ EigenResult stabilized_uks_orbitals(Matrix fock, const Matrix& density, const Ma
 ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                   const dft::MolecularGrid& grid, const ScfOptions& options,
                   const std::vector<double>* initial_density, UksXcEvaluator evaluate_xc,
-                  const char* method_name) {
+                  const char* method_name, FockBackend backend) {
   const auto& strategy = plan.strategy();
   validate_resolved_fock_build(strategy);
   const auto& system = plan.system();
   const auto& ints = plan.one_electron();
   if (options.compute_forces)
     throw std::invalid_argument(std::string(method_name) + " UKS forces are not implemented");
-  if (strategy.backend != FockBackend::Cpu || strategy.spec.spin != FockSpin::Unrestricted ||
+  if (strategy.backend != backend || strategy.spec.spin != FockSpin::Unrestricted ||
       strategy.spec.derivative_order != 0 || !strategy.spec.coulomb.present ||
       strategy.spec.coulomb.coefficient != 1.0 || strategy.spec.exchange.present)
-    throw std::invalid_argument(std::string(method_name) +
-                                " UKS requires a CPU Coulomb-only unrestricted Fock strategy");
+    throw std::invalid_argument(std::string(method_name) + " UKS requires a matching " +
+                                (backend == FockBackend::Cuda ? "CUDA" : "CPU") +
+                                " Coulomb-only unrestricted Fock strategy");
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (basis.nao != ints.nbf || basis.natom != system.atoms.size() || grid.point_count() == 0 ||
       grid.system().atoms.size() != system.atoms.size())
@@ -438,25 +442,73 @@ ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
 ScfResult run_lda_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density) {
-  return run_rks(plan, basis, grid, options, initial_density, evaluate_lda_xc_rks, "LDA");
+  return run_rks(plan, basis, grid, options, initial_density, evaluate_lda_xc_rks, "LDA",
+                 FockBackend::Cpu);
 }
 
 ScfResult run_pbe_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density) {
-  return run_rks(plan, basis, grid, options, initial_density, evaluate_pbe_xc_rks, "PBE");
+  return run_rks(plan, basis, grid, options, initial_density, evaluate_pbe_xc_rks, "PBE",
+                 FockBackend::Cpu);
 }
 
 ScfResult run_lda_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density) {
-  return run_uks(plan, basis, grid, options, initial_density, evaluate_lda_xc_uks, "LDA");
+  return run_uks(plan, basis, grid, options, initial_density, evaluate_lda_xc_uks, "LDA",
+                 FockBackend::Cpu);
 }
 
 ScfResult run_pbe_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density) {
-  return run_uks(plan, basis, grid, options, initial_density, evaluate_pbe_xc_uks, "PBE");
+  return run_uks(plan, basis, grid, options, initial_density, evaluate_pbe_xc_uks, "PBE",
+                 FockBackend::Cpu);
+}
+
+ScfResult run_lda_rks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
+                           const ScfOptions& options, const std::vector<double>* initial_density) {
+  const auto evaluate = [&xc](const dft::AoBasis&, const dft::MolecularGrid& current_grid,
+                              const Matrix& density, dft::XcDensitySource source) {
+    if (source.route != dft::XcDensityRoute::DensityMatrix)
+      throw std::invalid_argument("CUDA LDA RKS supports density-matrix XC input only");
+    return xc.evaluate_rks(current_grid, density);
+  };
+  return run_rks(plan, basis, grid, options, initial_density, evaluate, "LDA", FockBackend::Cuda);
+}
+
+ScfResult run_pbe_rks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
+                           const ScfOptions& options, const std::vector<double>* initial_density) {
+  const auto evaluate = [&xc](const dft::AoBasis&, const dft::MolecularGrid& current_grid,
+                              const Matrix& density, dft::XcDensitySource source) {
+    if (source.route != dft::XcDensityRoute::DensityMatrix)
+      throw std::invalid_argument("CUDA PBE RKS supports density-matrix XC input only");
+    return xc.evaluate_rks(current_grid, density);
+  };
+  return run_rks(plan, basis, grid, options, initial_density, evaluate, "PBE", FockBackend::Cuda);
+}
+
+ScfResult run_lda_uks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
+                           const ScfOptions& options, const std::vector<double>* initial_density) {
+  const auto evaluate = [&xc](const dft::AoBasis&, const dft::MolecularGrid& current_grid,
+                              const Matrix& alpha, const Matrix& beta) {
+    return xc.evaluate_uks(current_grid, alpha, beta);
+  };
+  return run_uks(plan, basis, grid, options, initial_density, evaluate, "LDA", FockBackend::Cuda);
+}
+
+ScfResult run_pbe_uks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
+                           const ScfOptions& options, const std::vector<double>* initial_density) {
+  const auto evaluate = [&xc](const dft::AoBasis&, const dft::MolecularGrid& current_grid,
+                              const Matrix& alpha, const Matrix& beta) {
+    return xc.evaluate_uks(current_grid, alpha, beta);
+  };
+  return run_uks(plan, basis, grid, options, initial_density, evaluate, "PBE", FockBackend::Cuda);
 }
 
 }  // namespace vibeqc::scf

@@ -27,7 +27,9 @@ def test_grid_native_generator_matches_jit_policy(tmp_path):
         check=True,
         cwd=tmp_path,
     )
-    assert output.read_text() == emit_grid_source()[0]
+    source, _, headers = emit_grid_source()
+    assert output.read_text() == source
+    assert headers[-1] == ROOT / "include/vibeqc/vibeqc.h"
 
 
 def test_dependency_directions():

@@ -33,7 +33,18 @@ from vibeqc_compiler.dft.spatial_prepared import PreparedSpatialGrid
 from .contractions import GeometryPartials
 from .integration import _tiles
 from .native import NativeContractionProgram
-from .spec import UnsupportedXC
+from .spec import UnsupportedXC, functional
+
+
+def _native_device_xc(program, spatial, density_grid):
+    """Keep feature validation and execution on the same canonical CUDA route."""
+    return (
+        spatial is not None
+        and density_grid is not None
+        and program.contract.request.observable == "potential"
+        and program.spec.identifier in ("LDA_XC_PW", "PBE")
+        and program.spec == functional(program.spec.identifier, spin=program.spec.spin)
+    )
 
 
 class PreparedXCContractions:
@@ -42,8 +53,8 @@ class PreparedXCContractions:
     Output matrices retain functional-spin layout; the existing method adapter
     owns averaging for total-density input. Geometry returns independent point,
     AO-center and weight partials. A spatial adapter keeps its fixed mask and
-    must cover the requested jet domain. CUDA spatial collocation supports
-    fixed-density E/V with explicit per-tile transfers to native CPU XC.
+    must cover the requested jet domain. Canonical LDA/PBE potentials on CUDA
+    spatial owners use native device XC; other compositions retain CPU XC.
     """
 
     def __init__(
@@ -124,11 +135,13 @@ class PreparedXCContractions:
                 )
             if program.contract.request.observable != "potential":
                 raise ValueError("CUDA density adapter supports fixed-density E/V only")
-            required = (
-                {"rho"}
-                if program.contract.ingredients.family == "lda"
-                else {"rho", "gradient", "sigma"}
-            )
+            required = {"rho"}
+            if program.contract.ingredients.family != "lda":
+                required.add("gradient")
+                # Native CUDA XC forms sigma from gradients. The CPU fallback
+                # consumes an explicit sigma feature in its collocation tiles.
+                if not _native_device_xc(program, spatial, density_grid):
+                    required.add("sigma")
             if (
                 density_grid.basis_identity != basis.identity
                 or density_grid.plan.nao != basis.nao
@@ -371,6 +384,50 @@ class PreparedXCContractions:
                     tile.features,
                 )
 
+    def _device_xc(self, density, stamp, route, nspin):
+        """Run the audited LDA/PBE potential contract entirely on CUDA tiles."""
+        result = {
+            "energy": 0.0,
+            "electrons": np.zeros(2),
+            "potential": np.zeros((nspin, self.basis.nao, self.basis.nao)),
+        }
+        tiles = evaluated = 0
+        last_nonempty = max(
+            (
+                index
+                for index, (task, _) in enumerate(self.spatial._tiles())
+                if len(task.ao_ids)
+            ),
+            default=None,
+        )
+        with self.spatial.device_xc_tasks(
+            density, self.program.spec.identifier, stamp=stamp, route=route
+        ) as tasks:
+            for index, (_, ids, lease) in enumerate(tasks):
+                active = lease.view.nactive
+                if active:
+                    try:
+                        integrals, potential = lease.xc(
+                            self.spatial.grid.weights[ids],
+                            self.program.spec.identifier,
+                            restricted=nspin == 1,
+                            reset=evaluated == 0,
+                            download=index == last_nonempty,
+                        )
+                    except RuntimeError as error:
+                        if str(error) == "invalid or nonfinite CUDA XC output":
+                            raise UnsupportedXC(
+                                "CUDA XC output is outside the audited interior-v1 domain"
+                            ) from error
+                        raise
+                    result["energy"] += integrals[0]
+                    result["electrons"] += integrals[1:]
+                    evaluated += 1
+                    if potential is not None:
+                        result["potential"] = potential if nspin == 2 else potential[:1]
+                tiles += 1
+        return result, tiles, evaluated
+
     def execute(self, density, *, delta_density=None, stamp=None, route="auto"):
         """Execute fixed-density XC; the optional CUDA owner requires DensitySource.
 
@@ -415,17 +472,27 @@ class PreparedXCContractions:
                 raise UnsupportedXC(
                     "unpolarized native XC requires equal spin matrices and directions"
                 )
+            device_xc = _native_device_xc(self.program, self.spatial, self.density_grid)
             if self.density_grid is not None:
                 before_metrics = self.density_grid.metrics()
-                if self.spatial is None:
-                    self.density_grid.set_source(density, stamp=stamp, route=route)
-                else:
-                    self.spatial._start_execution(density, stamp=stamp, route=route)
+                if not device_xc:
+                    if self.spatial is None:
+                        self.density_grid.set_source(density, stamp=stamp, route=route)
+                    else:
+                        self.spatial._start_execution(density, stamp=stamp, route=route)
                 self._execution_stamp = stamp
             nspin = 2 if self.program.spec.spin == "polarized" else 1
-            result = {"energy": 0.0, "electrons": np.zeros(2)}
-            if observable in ("potential", "response"):
-                result[observable] = np.zeros((nspin, self.basis.nao, self.basis.nao))
+            if device_xc:
+                result, tiles, evaluated_tiles = self._device_xc(
+                    density, stamp, route, nspin
+                )
+                cpu_contraction_seconds = 0.0
+            else:
+                result = {"energy": 0.0, "electrons": np.zeros(2)}
+                if observable in ("potential", "response"):
+                    result[observable] = np.zeros(
+                        (nspin, self.basis.nao, self.basis.nao)
+                    )
             if observable == "geometry":
                 centers, points, weights = (
                     np.zeros((self.basis.natom, 3)),
@@ -441,9 +508,12 @@ class PreparedXCContractions:
                         for s in self.basis.shells
                     ],
                 )
-            tiles = evaluated_tiles = 0
-            cpu_contraction_seconds = 0.0
-            for ids, active, quadrature, jets, features in self._collocation(d):
+            if not device_xc:
+                tiles = evaluated_tiles = 0
+                cpu_contraction_seconds = 0.0
+            for ids, active, quadrature, jets, features in (
+                () if device_xc else self._collocation(d)
+            ):
                 self._check()
                 if active is not None and len(active) == 0:
                     # The fixed empty map contributes constant zero for every
@@ -571,7 +641,7 @@ class PreparedXCContractions:
                 )
                 self.statistics.update(
                     collocation_backend="cuda",
-                    xc_backend="native_cpu",
+                    xc_backend="native_cuda" if device_xc else "native_cpu",
                     cpu_contraction_seconds=cpu_contraction_seconds,
                     source=dict(cuda.source_statistics),
                     native_metrics=after_metrics,
@@ -598,7 +668,9 @@ class PreparedXCContractions:
                         ),
                         "orbital_tile": cuda.plan.orbital_tile,
                         "ingredients": cuda.ingredients,
-                        "potential_scatter_backend": "native_cpu",
+                        "potential_scatter_backend": (
+                            "native_cuda" if device_xc else "native_cpu"
+                        ),
                     }
             self.statistics["seconds"] = perf_counter() - started
             return result
