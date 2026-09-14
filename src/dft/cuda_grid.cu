@@ -7,8 +7,8 @@
 
 #include "../tensor/cuda_runtime.cuh"
 #include "grid_task_view.cuh"
-#include "xc_point.hpp"
 #include "vibeqc/vibeqc.h"
+#include "xc_point.hpp"
 
 namespace {
 using namespace vibeqc_tensor;
