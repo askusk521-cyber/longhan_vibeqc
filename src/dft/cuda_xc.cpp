@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "runtime/device_error.hpp"
 #include "vibeqc/vibeqc.h"
 
 #if VIBEQC_HAS_CUDA
@@ -47,6 +48,7 @@ void checked(int status, const std::array<char, kErrorSize>& error, const char* 
   if (status == 0) return;
   const std::string detail(error.data());
   if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+  if (status == VIBEQC_STATUS_CUDA_ERROR) throw runtime::CudaError(detail);
   throw std::runtime_error(std::string(operation) + " failed" +
                            (detail.empty() ? std::string{} : ": " + detail));
 }

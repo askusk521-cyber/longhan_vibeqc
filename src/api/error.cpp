@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "methods/method.hpp"
+#include "runtime/device_error.hpp"
 
 namespace vibeqc::api {
 
@@ -17,6 +18,9 @@ vibeqc_status map_exception(std::string* detail) noexcept {
   } catch (const std::bad_alloc& error) {
     if (detail != nullptr) *detail = error.what();
     return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const runtime::CudaError& error) {
+    if (detail != nullptr) *detail = error.what();
+    return VIBEQC_STATUS_CUDA_ERROR;
   } catch (const std::invalid_argument& error) {
     if (detail != nullptr) *detail = error.what();
     return VIBEQC_STATUS_INVALID_ARGUMENT;

@@ -50,6 +50,9 @@ int guarded(char* error, size_t size, F operation) noexcept {
   } catch (const DeviceAllocationError& e) {
     error_text(error, size, e.what());
     return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const vibeqc::runtime::CudaError& e) {
+    error_text(error, size, e.what());
+    return VIBEQC_STATUS_CUDA_ERROR;
   } catch (const std::exception& e) {
     error_text(error, size, e.what());
     return 1;
@@ -294,6 +297,7 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
       const auto failure = fail_next_grid_allocation;
       fail_next_grid_allocation = 0;
       if (failure == 2) throw std::bad_alloc();
+      if (failure == 3) throw vibeqc::runtime::CudaError("injected CUDA runtime failure");
       throw DeviceAllocationError("injected CUDA grid allocation failure");
     }
 #endif
@@ -392,6 +396,7 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
 #if VIBEQC_TEST_HOOKS
 void grid_cuda_fail_next_allocation_for_test_v1() { fail_next_grid_allocation = 1; }
 void grid_cuda_fail_next_host_allocation_for_test_v1() { fail_next_grid_allocation = 2; }
+void grid_cuda_fail_next_runtime_error_for_test_v1() { fail_next_grid_allocation = 3; }
 #endif
 int grid_cuda_create_v2(int device, int major, int minor, const size_t* dimensions,
                         const double* basis, size_t capacity, unsigned order, size_t expected_bytes,

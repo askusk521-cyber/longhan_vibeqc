@@ -20,22 +20,22 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 36613,
+      "bytes": 36918,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 528,
+        "runtime": 533,
         "scientific": 167
       },
       "path": "src/dft/cuda_grid.cu",
-      "physical_lines": 748,
+      "physical_lines": 753,
       "reason": "Native plan/arena ownership around the bounded AO/feature kernels.",
       "regions": [
         {
           "code_lines": 89,
-          "first_line": 66,
-          "last_line": 160,
+          "first_line": 69,
+          "last_line": 163,
           "reason": "Normalized primitive traversal and D/C feature layout/reduction adapters remain counted conservatively as scientific glue. Axis derivative polynomials and the bilinear ingredient/sigma arithmetic shared by both routes are compiler-owned.",
           "role": "scientific",
           "start": "__global__ void ao_kernel",
@@ -43,8 +43,8 @@
         },
         {
           "code_lines": 78,
-          "first_line": 197,
-          "last_line": 281,
+          "first_line": 200,
+          "last_line": 284,
           "reason": "Native CUDA LDA/PBE point dispatch, deterministic energy/electron integration and spin-potential matrix contraction. Scalar XC algebra is shared with the CPU implementation, but this endpoint-specific device contraction remains maintained scientific glue.",
           "role": "scientific",
           "start": "__device__ vibeqc::dft::point::Value evaluate_xc_point",
@@ -52,7 +52,7 @@
         }
       ],
       "role": "runtime",
-      "sha256": "166d78bf03a8eba4b641bcfb58e6997d15e957eac29e43c33388441f15981e5c",
+      "sha256": "009f20dda9d5264e8d641e793996d268da28e17e5326dfc3f288dea0dfe0da07",
       "subsystem": "ao_grid"
     },
     {
@@ -3038,24 +3038,24 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 753,
+      "bytes": 801,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 12,
+        "runtime": 13,
         "scientific": 0
       },
       "path": "src/tensor/cuda_error.hpp",
-      "physical_lines": 21,
+      "physical_lines": 23,
       "reason": "Shared host CUDA error and typed allocation-failure boundary, extracted unchanged so ordinary C++ reference export does not import device kernels.",
       "regions": [],
       "role": "runtime",
-      "sha256": "f0f4d6ee90c4eb5ef7258547c578bffc540553c7d937d88be6efc05ca3f44795",
+      "sha256": "4f48cc328699ea38e9f2cd46e9d80f7d55886a1b115489778541cc6c1e6c742b",
       "subsystem": "runtime"
     },
     {
-      "bytes": 7980,
+      "bytes": 7988,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
@@ -3068,7 +3068,7 @@
       "reason": "Shared arena, streams/events, cuBLAS workspace and error/metrics handling.",
       "regions": [],
       "role": "runtime",
-      "sha256": "ed9bf66b47522441777f910f774d8f2718a74e086aea1e9215c7d5e5bf1dfbbe",
+      "sha256": "b0f22b9725ae8ad962122fd82ce1beb453ea741f594fcca81ac3d9eb6a825709",
       "subsystem": "runtime"
     }
   ],
@@ -3197,7 +3197,7 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 8955,
+    "runtime": 8961,
     "scientific": 10556
   },
   "migration_ledger": {
@@ -3353,7 +3353,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 543,
+      "runtime": 548,
       "scientific": 167
     },
     "df_derivatives": {
@@ -3409,7 +3409,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4202,
+      "runtime": 4203,
       "scientific": 5
     },
     "scf_tensor": {

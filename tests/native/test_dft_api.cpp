@@ -16,6 +16,7 @@
 #if VIBEQC_HAS_CUDA
 extern "C" void grid_cuda_fail_next_allocation_for_test_v1();
 extern "C" void grid_cuda_fail_next_host_allocation_for_test_v1();
+extern "C" void grid_cuda_fail_next_runtime_error_for_test_v1();
 #endif
 
 namespace {
@@ -178,12 +179,50 @@ void warm_preparation_failure(bool retained_plan) {
           "warm preparation failure lost the imported seed or target geometry");
 }
 
+void warm_execution_allocation_failure() {
+  Fixture fixture;
+  auto method = lda_method();
+  vibeqc_system* systems[]{fixture.system, fixture.system};
+  vibeqc_batch* batch = nullptr;
+  require(vibeqc_batch_prepare(fixture.context, systems, 2, &method,
+                               VIBEQC_BATCH_ENABLE_WARM_STARTS, &batch) == VIBEQC_STATUS_SUCCESS,
+          "warm execution failure preparation failed");
+  std::unique_ptr<vibeqc_batch, decltype(&vibeqc_batch_destroy)> owner(batch,
+                                                                       &vibeqc_batch_destroy);
+  std::array<vibeqc_batch_item_result_descriptor, 2> results{};
+  const auto execute = [&] {
+    for (auto& item : results) {
+      item = {};
+      item.struct_size = sizeof(item);
+      item.abi_version = VIBEQC_ABI_VERSION;
+    }
+    return vibeqc_batch_execute(batch, nullptr, 0, results.data(), results.size());
+  };
+  require(execute() == VIBEQC_STATUS_SUCCESS && results[0].converged && results[1].converged,
+          "warm execution failure source did not converge");
+  const auto energy = results[0].energy;
+  // Geometry and owners are already prepared. Fail the first 2x2 SCF matrix
+  // allocation, then prove that a cold retry cannot hide this resource error.
+  fail_allocation_bytes = 4 * sizeof(double);
+  const auto status = execute();
+  const bool injected = fail_allocation_bytes == 0;
+  fail_allocation_bytes = 0;
+  require(injected && status == VIBEQC_STATUS_SUCCESS &&
+              results[0].status == VIBEQC_STATUS_OUT_OF_MEMORY && results[0].warm_start_used &&
+              !results[0].warm_start_fallback && results[1].converged,
+          "warm SCF allocation failure was hidden by a cold retry or affected its neighbor");
+  require(execute() == VIBEQC_STATUS_SUCCESS && results[0].converged &&
+              results[0].warm_start_used && std::abs(results[0].energy - energy) < 2e-10,
+          "warm SCF allocation failure lost its last-good seed");
+}
+
 }  // namespace
 
 int main() {
   try {
     warm_preparation_failure(false);
     warm_preparation_failure(true);
+    warm_execution_allocation_failure();
     vibeqc_method_capabilities_descriptor capabilities{
         sizeof(vibeqc_method_capabilities_descriptor), VIBEQC_ABI_VERSION, 0, 0, 0, 0, 0};
     require(vibeqc_method_get_capabilities(VIBEQC_METHOD_LDA_RKS, &capabilities) ==
@@ -370,14 +409,18 @@ int main() {
       vibeqc_system* cuda_system = Fixture::create_system(cuda_context);
       vibeqc_calculation* cuda_calculation = nullptr;
 #if VIBEQC_HAS_CUDA
-      // Host ownership and device arena failures share the public OOM contract.
-      for (auto fail : {grid_cuda_fail_next_allocation_for_test_v1,
-                        grid_cuda_fail_next_host_allocation_for_test_v1}) {
+      // Preserve allocation and driver categories through the public boundary.
+      for (const auto [fail, expected] : {
+               std::pair{&grid_cuda_fail_next_allocation_for_test_v1, VIBEQC_STATUS_OUT_OF_MEMORY},
+               std::pair{&grid_cuda_fail_next_host_allocation_for_test_v1,
+                         VIBEQC_STATUS_OUT_OF_MEMORY},
+               std::pair{&grid_cuda_fail_next_runtime_error_for_test_v1, VIBEQC_STATUS_CUDA_ERROR},
+           }) {
         fail();
         require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==
-                        VIBEQC_STATUS_OUT_OF_MEMORY &&
+                        expected &&
                     cuda_calculation == nullptr,
-                "CUDA grid allocation failure lost its out-of-memory status");
+                "CUDA grid failure lost its public status");
       }
 #endif
       require(vibeqc_calculation_prepare(cuda_context, cuda_system, &method, &cuda_calculation) ==

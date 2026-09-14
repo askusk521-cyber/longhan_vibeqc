@@ -24,7 +24,7 @@ using I = int64_t;
 inline void blas_check(cublasStatus_t status) {
   if (status == CUBLAS_STATUS_ALLOC_FAILED) throw DeviceAllocationError("cuBLAS allocation failed");
   if (status != CUBLAS_STATUS_SUCCESS)
-    throw std::runtime_error("cuBLAS status " + std::to_string(status));
+    throw vibeqc::runtime::CudaError("cuBLAS status " + std::to_string(status));
 }
 inline void error_text(char* out, size_t size, const char* text) noexcept {
   if (out && size) std::snprintf(out, size, "%s", text);
