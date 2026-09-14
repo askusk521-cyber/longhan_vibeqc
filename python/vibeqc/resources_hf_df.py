@@ -307,7 +307,13 @@ def cuda_df_candidates(
             # recovery. This is independent of allocation-failure retries.
             device_work.append(
                 checked_bytes(
-                    max(setup, force, generation) + persistent_device // b + solver
+                    max(setup, force, generation)
+                    + (persistent_device - ordinary_eigen_device) // b
+                    # A separate single-item retry needs its own whole ordinary
+                    # workspace; this bucket-serialized capacity does not scale
+                    # down with the original batch's item count.
+                    + ordinary_eigen_device
+                    + solver
                 )
             )
             inventories.append(

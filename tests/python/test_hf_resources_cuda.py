@@ -132,8 +132,10 @@ def test_cuda_df_budget_freezes_exchange_policy(monkeypatch, initial, changed):
 @pytest.mark.parametrize(
     "mode,old_peak", [("resident", 805315268), ("recomputed", 805316952)]
 )
-def test_cuda_df_common_ledger_preserves_dense_capacity(monkeypatch, mode, old_peak):
-    """Exact H2 device boundaries verified against the pre-occupied inventory."""
+def test_cuda_df_common_ledger_preserves_factor_differential(
+    monkeypatch, mode, old_peak
+):
+    """Charge ordinary eigen retention equally to both exchange policies."""
     from vibeqc.resources import ResourcePlan, plan_resources
 
     calculator = Calculator(device="cuda", density_fitting="cuda")
@@ -143,11 +145,13 @@ def test_cuda_df_common_ledger_preserves_dense_capacity(monkeypatch, mode, old_p
     selected = ResourcePlan(
         ResourceBudget(), (dense,), (("hf", candidate.name),), "feasible"
     )
-    assert selected.peak_bytes["device"] == old_peak
+    # H2 adds 1,049,205 bytes for the serialized AO frame/solver allowance,
+    # plus the same amount in the existing independently reserved cold retry.
+    # The occupied-factor differential keeps its pre-provider value below.
+    peak = old_peak + 2 * 1049205
+    assert selected.peak_bytes["device"] == peak
     # The source route needs a host cap to force its selection over resident.
-    budget = ResourceBudget(
-        host_bytes=selected.peak_bytes["host"], device_bytes=old_peak
-    )
+    budget = ResourceBudget(host_bytes=selected.peak_bytes["host"], device_bytes=peak)
     assert plan_resources([dense], budget).status == "feasible"
     monkeypatch.setenv("VIBEQC_DF_EXCHANGE", "occupied")
     occupied = calculator._resource_request([H2])
@@ -156,7 +160,7 @@ def test_cuda_df_common_ledger_preserves_dense_capacity(monkeypatch, mode, old_p
         ResourceBudget(), (occupied,), (("hf", factor_candidate.name),), "feasible"
     )
     # Two full 2x2 factors plus the independently reserved cold-retry item.
-    assert factored.peak_bytes["device"] - old_peak == 2 * 2 * 2 * 8 * 2
+    assert factored.peak_bytes["device"] - peak == 2 * 2 * 2 * 8 * 2
     assert plan_resources([occupied], budget).status == "infeasible"
 
 

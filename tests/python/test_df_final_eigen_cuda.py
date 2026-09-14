@@ -122,6 +122,10 @@ def test_final_provider_matches_reference_across_replans(
             if step == 0:
                 device.set_warm_start_updates(False)
                 oracle.set_warm_start_updates(False)
+            if step == 2:
+                # A subsequent positions=None evaluates the prepared original
+                # geometry. Recovery below explicitly submits `changed` again.
+                changed_result = outputs[1]
         if batch_size > 1:
             broken = changed.copy()
             broken[-1, 0] = np.nan
@@ -131,5 +135,11 @@ def test_final_provider_matches_reference_across_replans(
                 [None] * (batch_size - 1) + [changed], strict=True
             )
             np.testing.assert_allclose(
-                recovered.energies, outputs[1].energies, atol=1e-9, rtol=0
+                recovered.energies, changed_result.energies, atol=1e-9, rtol=0
             )
+            for actual, expected in zip(
+                recovered.items, changed_result.items, strict=True
+            ):
+                np.testing.assert_allclose(
+                    actual.forces, expected.forces, atol=1e-8, rtol=0
+                )
