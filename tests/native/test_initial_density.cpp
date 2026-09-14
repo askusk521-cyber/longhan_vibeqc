@@ -9,6 +9,7 @@
 #include "core/types.hpp"
 #include "integrals/s_integrals.hpp"
 #include "scf/initial_guess/density.hpp"
+#include "scf/initial_guess/overlap.hpp"
 #include "scf/reference/mean_field.hpp"
 #include "scf/reference/observation.hpp"
 
@@ -105,12 +106,50 @@ void check_initial_density_contract() {
   prepare_initial_density(system, ints, x, 1, nullptr, a);
   require(solves == 1 && a, "cold retry did not rebuild a valid frame");
 }
+
+void check_overlap_cache_contract() {
+  core::System system;
+  system.atoms.push_back({1, {0, 0, 0}});
+  OverlapOrthogonalizer cache;
+  Matrix overlap{2, 0, 0, 0, 1, 0, 0, 0, .5};
+  solves = 0;
+  close(cache.get(system, overlap, 3), {std::sqrt(.5), 0, 0, 0, 1, 0, 0, 0, std::sqrt(2.)});
+  require(solves == 1, "cold overlap cache missed its actual solve");
+  cache.get(system, overlap, 3);
+  require(solves == 1, "identical overlap was diagonalized again");
+  require(cache.numeric_capacity_bytes() == (2 * 9 + 3) * sizeof(double),
+          "overlap cache did not account for both matrices and its geometry");
+  // Same dimensions and geometry must not hide different overlap values.
+  // A stale-X mutation that drops the S comparison fails this analytic gate.
+  overlap[0] = 4;
+  close(cache.get(system, overlap, 3), {.5, 0, 0, 0, 1, 0, 0, 0, std::sqrt(2.)});
+  require(solves == 2, "changed overlap reused stale X");
+  system.atoms[0].position[0] = .1;
+  cache.get(system, overlap, 3);
+  require(solves == 3, "changed geometry did not replace the cached frame");
+  overlap[0] = 9e-11;
+  bool rejected = false;
+  try {
+    cache.get(system, overlap, 3);
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  require(rejected && cache.numeric_capacity_bytes() == 0,
+          "singular overlap changed its policy or retained stale state");
+  overlap[0] = 1e-10;  // The existing strict '<' policy admits the boundary.
+  const auto& x = cache.get(system, overlap, 3);
+  close(multiply(transpose(x, 3), multiply(overlap, x, 3), 3), identity(3));
+  const auto previous = solves;
+  cache.get(system, overlap, 3);
+  require(solves == previous, "successful retry did not retain its new X");
+}
 }  // namespace
 
 int main() {
   observation::active = &observer;
   try {
     check_initial_density_contract();
+    check_overlap_cache_contract();
     observation::active = nullptr;
     return 0;
   } catch (const std::exception& error) {

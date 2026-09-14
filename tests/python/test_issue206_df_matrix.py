@@ -142,3 +142,59 @@ def test_eager_lazy_timing_rejects_iteration_or_retry_changes(field, value):
     rows[1]["diagnostics"]["convergence"][0][field] = value
     with pytest.raises(ValueError, match="matching SCF"):
         validate_ablation_branches(rows)
+
+
+@pytest.mark.parametrize("ablation", ("lazy-core", "overlap-cache", "combined"))
+@pytest.mark.parametrize(
+    "workload", ("cold-start", "unchanged-geometry", "changed-geometry")
+)
+@pytest.mark.parametrize("selection", ("baseline", "candidate"))
+def test_preparation_ablation_rejects_wrong_actual_counts(
+    ablation, workload, selection
+):
+    """Reinstated solves or stale changed-item cache hits must fail promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import (
+        preparation_policies,
+        validate_preparation_counts,
+    )
+
+    eager, rebuild = preparation_policies(ablation)[selection]
+    overlap = (
+        4
+        if rebuild or workload == "cold-start"
+        else int(workload == "changed-geometry")
+    )
+    core = 4 if eager or workload == "cold-start" else 0
+    misses = 0 if rebuild else overlap
+    hits = 0 if rebuild else 4 - misses
+    components = {
+        "eigensolves_by_reason": {
+            "core_guess": {"calls": core},
+            "overlap": {"calls": overlap},
+        },
+        "exclusive_phases": {
+            "initial_density": {"calls": 4},
+            "overlap_cache_miss": {"calls": misses},
+            "overlap_cache_hit": {"calls": hits},
+        },
+    }
+
+    def validate(value):
+        validate_preparation_counts(
+            value, batch_size=4, workload=workload, eager=eager, rebuild=rebuild
+        )
+
+    validate(components)
+    for group, name in (
+        ("eigensolves_by_reason", "core_guess"),
+        ("eigensolves_by_reason", "overlap"),
+        ("exclusive_phases", "initial_density"),
+        ("exclusive_phases", "overlap_cache_hit"),
+        ("exclusive_phases", "overlap_cache_miss"),
+    ):
+        broken = copy.deepcopy(components)
+        broken[group][name]["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared solve/cache policy"):
+            validate(broken)

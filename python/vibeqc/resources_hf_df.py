@@ -257,6 +257,11 @@ def cuda_df_candidates(
                 (d + 1) * 2 * c * c + (0 if source else ac * ac + c * c * ac)
             )
             persistent_host = row["host_metadata"] + 8 * b * (32 * n * n + 16 * d)
+            # One verified X and its exact S/geometry key per source survive
+            # value-plan rebuilds. Device SCF already reserves d_orthogonalizer;
+            # these are additional host copies only, retained through teardown.
+            overlap_cache_host = 2 * matrix + 8 * b * d
+            persistent_host += overlap_cache_host
             one_electron = 8 * b * ((d + 1) * 2 * n * n + d)
             raw = 8 * b * (aux * aux + n * n * aux)
             if not source:
@@ -304,6 +309,7 @@ def cuda_df_candidates(
                     **{k: v for k, v in row.items() if k != "default_tile"},
                     "tiles": asdict(tile),
                     "resident_host_bytes": persistent_host,
+                    "overlap_cache_host_bytes": overlap_cache_host,
                     "resident_device_bytes": persistent_device,
                 }
             )

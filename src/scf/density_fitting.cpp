@@ -928,8 +928,7 @@ DensityFittingTilePlan plan_density_fitting_tiles(std::size_t batch_size, std::s
     } else if (plan.ao_pair_tile > 1) {
       plan.ao_pair_tile = (plan.ao_pair_tile + 1) / 2;
     } else {
-      throw std::invalid_argument(
-          "DF memory budget cannot hold the metric and one contraction tile");
+      throw DensityFittingBudgetError();
     }
     update_bytes();
   }

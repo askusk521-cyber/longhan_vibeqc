@@ -133,3 +133,23 @@ def test_generated_residency_uses_complete_source_specific_budget():
     assert 8 * 192**3 > constrained.budget_bytes
     assert not constrained.stores_full_three_center
     assert constrained.peak_workspace_bytes <= constrained.budget_bytes
+
+
+def test_overlap_storage_is_reserved_in_every_cuda_df_candidate():
+    """Shape-only admission must charge retained S/X/coordinates for each item."""
+    import json
+
+    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
+    request = Calculator(device="cuda", density_fitting="cuda")._resource_request(
+        [atoms] * 4
+    )
+    # A CPU-only build deliberately publishes no CUDA candidates. Its pure
+    # common shape planner is already covered by the tests above.
+    if not request.candidates:
+        pytest.skip("requires a CUDA-enabled library, no GPU execution")
+    for candidate in request.candidates:
+        inventory = json.loads(dict(candidate.decisions)["bucket_inventory"])
+        for row in inventory:
+            expected = 8 * row["batch"] * (2 * row["nbf"] ** 2 + row["coordinates"])
+            assert row["overlap_cache_host_bytes"] == expected
+            assert row["resident_host_bytes"] >= expected
