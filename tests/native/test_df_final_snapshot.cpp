@@ -207,6 +207,8 @@ void lifecycle(bool uhf, std::size_t batch) {
             "UHF alpha/beta final frames alias shared scratch");
   }
   plan->final_state_solve_epoch = std::numeric_limits<std::uint64_t>::max();
+  require(cuda_density_fitting_solve_epoch(plan.get()) == 0,
+          "saturated epoch authorized a host-recovery final state");
   require(run(8) == VIBEQC_STATUS_NUMERICAL_FAILURE, "solve epoch wrapped around");
   require(read_cuda_density_fitting_final_state(plan.get(), recovered, snapshot, detail) ==
               VIBEQC_STATUS_INVALID_ARGUMENT,

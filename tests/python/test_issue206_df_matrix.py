@@ -11,6 +11,41 @@ import pytest
 from benchmarks import issue206_df_matrix as matrix
 
 
+def test_strict_provider_ablation_requires_actual_fock_validation_and_correction():
+    """Several real corrections are valid; missing current-F work never is."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_final_eigen_counts
+
+    record = {
+        "eigensolves_by_reason": {},
+        "device_eigensolves_by_reason": {"final_fock": {"calls": 5}},
+        "exclusive_phases": {
+            "final_state_fock_build": {"calls": 7},
+            "strict_final_correction": {"calls": 5},
+            "final_state_corrected": {"calls": 2},
+            "final_state_validation": {"calls": 7},
+        },
+    }
+    kwargs = {
+        "batch_size": 2,
+        "method": "rhf",
+        "reference": False,
+        "strict_energy": True,
+    }
+    validate_final_eigen_counts(record, **kwargs)
+    for phase in record["exclusive_phases"]:
+        changed = copy.deepcopy(record)
+        changed["exclusive_phases"][phase]["calls"] = 0
+        with pytest.raises(RuntimeError, match="strict rebuilding"):
+            validate_final_eigen_counts(changed, **kwargs)
+    changed = copy.deepcopy(record)
+    changed["exclusive_phases"] = {}
+    changed["device_eigensolves_by_reason"]["final_fock"]["calls"] = 2
+    with pytest.raises(RuntimeError, match="strict rebuilding"):
+        validate_final_eigen_counts(changed, **kwargs)
+
+
 @pytest.mark.parametrize("reference", (False, True))
 @pytest.mark.parametrize("method", ("rhf", "uhf"))
 def test_final_provider_ablation_rejects_missing_or_unexpected_solves(
