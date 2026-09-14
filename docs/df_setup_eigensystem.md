@@ -31,6 +31,12 @@ work-count gates sum reference and device leaves; provider comparison checks
 each side separately. Production must not silently retry a rejected device
 setup through the reference eigensolver.
 
+The #206 matrix runner exposes `--host-workloads --setup-eigen-ablation` for
+five-pair comparisons with frozen warm seeds and matching iteration/retry
+branches. It rejects ambient provider controls and mixed ablations. Use
+`--host-trace-dir` in a separate intrusive run to verify actual setup and final
+calls; those recorded intervals are excluded from clean endpoint timing.
+
 Native tests cover callback forwarding, analytic cold densities/UHF mixing,
 warm bypass, cutoff boundaries, failed replacement, actual device cutoff
 handling, and a corrupted overlap in a prepared bucket followed by recovery.

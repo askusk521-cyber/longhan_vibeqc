@@ -242,3 +242,38 @@ def test_preparation_ablation_rejects_wrong_actual_counts(
         broken[group][name]["calls"] += 1
         with pytest.raises(RuntimeError, match="declared solve/cache policy"):
             validate(broken)
+
+
+@pytest.mark.parametrize("reference", (False, True))
+@pytest.mark.parametrize(
+    "workload,overlap,core",
+    (("cold-start", 4, 4), ("energy-only", 0, 0), ("changed-geometry", 1, 0)),
+)
+def test_setup_provider_counts_reject_wrong_provider(
+    reference, workload, overlap, core
+):
+    """Missing or unexpectedly substituted leaves cannot pass setup promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_setup_eigen_counts
+
+    record = {
+        key: {
+            "overlap": {"calls": overlap if selected else 0},
+            "core_guess": {"calls": core if selected else 0},
+        }
+        for key, selected in (
+            ("eigensolves_by_reason", reference),
+            ("device_eigensolves_by_reason", not reference),
+        )
+    }
+    validate_setup_eigen_counts(
+        record, batch_size=4, workload=workload, reference=reference
+    )
+    for key in record:
+        changed = copy.deepcopy(record)
+        changed[key]["overlap"]["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared provider"):
+            validate_setup_eigen_counts(
+                changed, batch_size=4, workload=workload, reference=reference
+            )
