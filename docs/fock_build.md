@@ -57,7 +57,9 @@ property returns a copy so caller edits cannot change recorded provenance.
 
 `diagnostics` distinguishes the resolver's preferred standard-HF schedule from
 the actual independent plan's source schedule. On CUDA, the public plan uses
-CUDA integral/J/K/response consumers with host DIIS and eigensolves. Standard
+CUDA integral/J/K/response consumers with host DIIS. Plans containing a fitted
+term borrow the existing prepared ordinary device eigensolver for setup,
+iterations and finalization; exact-only plans keep reference eigensolves. Standard
 `Calculator` HF continues to use the established fused CUDA solvers. CUDA
 device-byte diagnostics cover explicit source buffers and exclude modules,
 driver/library-private storage and recurrence stacks.
@@ -146,7 +148,7 @@ operator executable.
 | CUDA DF raw services | Independently selected J/K, resident/streamed/tiled/batch/item/device-pointer execution |
 | CUDA direct raw services | Independent terms, public Cartesian/spherical AOs through f, nonsymmetric densities, batch/item execution and matching first derivatives |
 | CUDA DF SCF adapter | Existing standard HF DF pair, using existing DF implementations |
-| Independent CUDA SCF | Any exact/DF/absent pair and signed coefficients; host DIIS/eigensolves with CUDA integrals, J/K and two-electron derivatives |
+| Independent CUDA SCF | Any exact/DF/absent pair and signed coefficients; host DIIS with CUDA integrals, J/K and two-electron derivatives; fitted plans use ordinary device eigensolves |
 | SR/LR operators | Rejected; #166 supplies these additional mathematical operators |
 
 The CPU reference consumes already materialized four-center integral and

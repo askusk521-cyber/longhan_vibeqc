@@ -36,8 +36,9 @@ inline std::size_t df_eigen_device_reservation(std::size_t n) {
 }
 
 /** Per-operation numerical and allocation evidence; not a convergence claim.
- * Eigen residuals refer to the supplied physical matrix, never a DIIS Fock
- * substituted by this adapter. All matrices use detached row-major layout. */
+ * Eigen residuals refer to the supplied matrix; the adapter never substitutes
+ * another Fock. A caller solving a DIIS matrix must not interpret this as a
+ * physical-state validation. All matrices use detached row-major layout. */
 struct CudaDfEigenDiagnostic : solver::EigenFrameDiagnostic {
   std::size_t device_bytes{}, host_workspace_bytes{}, solver_calls{};
   bool workspace_reused{};

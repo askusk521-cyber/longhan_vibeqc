@@ -308,6 +308,44 @@ void prepared_replay() {
   require(!cache->matches(system, nullptr, *options.resolved_fock_build, 1, 0),
           "changed CUDA device accepted as compatible");
 }
+
+void independent_reference_export() {
+  // Calling the prepared entry directly exercises the independent host driver
+  // even for a standard fitted HF pair. Its exported physical frame must not
+  // inherit the compact solver's retained-state identity.
+  const auto system = fixture(true);
+  auto spec = make_hf_fock_spec(FockSpin::Restricted);
+  spec.coulomb.approximation = spec.exchange.approximation = FockApproximation::DensityFitted;
+  ScfOptions options;
+  options.export_physical_reference = true;
+  options.screening_tolerance = 0;
+  options.energy_tolerance = 1e-12;
+  options.density_tolerance = 1e-10;
+  options.resolved_fock_build = resolve_fock_build(spec, FockBackend::Cpu, 0);
+  PreparedFockPlan cpu(system, &system, *options.resolved_fock_build, -1, 0);
+  const auto expected = run_prepared_fock_strategy(cpu, options);
+  require(expected.converged && expected.reference, "independent CPU export failed");
+  options.resolved_fock_build = resolve_fock_build(spec, FockBackend::Cuda, 0);
+  PreparedFockPlan gpu(system, &system, *options.resolved_fock_build, 0, 16U << 20);
+  std::vector<double> seed;
+  for (bool forces : {false, true, false}) {
+    options.compute_forces = forces;
+    const auto actual = run_prepared_fock_strategy(gpu, options, seed.empty() ? nullptr : &seed);
+    require(actual.converged && actual.reference, "independent CUDA export failed");
+    auto frame = *actual.reference;
+    validate_physical_reference(frame);
+    close(actual.energy, expected.energy, 1e-9, "independent exported energy");
+    matrix(actual.density, expected.density, "independent exported density");
+    matrix(frame.fock, expected.reference->fock, "independent exported physical Fock");
+    matrix(frame.orbital_energies, expected.reference->orbital_energies,
+           "independent exported canonical energies");
+    if (forces)
+      matrix(actual.forces, expected.forces, "independent exported complete forces");
+    else
+      require(actual.forces.empty(), "energy-only independent export computed forces");
+    if (seed.empty()) seed = actual.density;
+  }
+}
 }  // namespace
 int main() {
   try {
@@ -315,6 +353,7 @@ int main() {
     molecular_endpoints();
     ragged_replay();
     prepared_replay();
+    independent_reference_export();
     std::cout << "CUDA common Fock composition: exact/DF/absent pairs, signed gradients, batch "
                  "items, SCF/replay/geometry PASS\n";
     return 0;
