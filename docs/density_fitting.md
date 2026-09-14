@@ -191,3 +191,13 @@ that rejected capture, including on warm replay. A new owner checks again.
 This policy applies to both RHF and UHF and adds no fixed AO dimension limit.
 Unrelated runtime errors and allocation failures remain failures. SCF
 convergence and strict final-state checks are unchanged.
+
+### Host DIIS retry eigensolves
+
+When the compact device iteration needs the existing host DIIS retry, CUDA
+DF keeps using the prepared ordinary device eigensolver. This applies to
+single and fleet RHF/UHF, and records the actual device leaves as `fallback`.
+The DIIS sequence, iteration limits and convergence thresholds are unchanged;
+provider failures propagate. `VIBEQC_DF_REFERENCE_ITERATION_EIGEN=1` selects the
+independent reference operation explicitly for a diagnostic comparison. It
+controls only retry iterations, independently of setup and finalization.
