@@ -1,17 +1,49 @@
 """Shell-shared lowering of the existing weighted DF derivative moment DAG.
 
-The prototype covers the seven non-SSS s/p classes. Geometry and Boys values
-come from the scalar generated evaluator; only ownership and reuse change.
+All s/p/d/f classes use the scalar generated geometry, Boys values and axis
+moments. The original seven non-SSS s/p classes remain a comparison subset.
+Bounded schedules change component ownership and shell packing, not the DAG.
 No derivative tensor is produced: the consumer accumulates six independent
 center coordinates and recovers the auxiliary center by translation.
 """
 
+from dataclasses import dataclass
 from itertools import product
 
 from .cuda import CudaEmitter
 from .df_derivatives import axis_polynomial
 
 PROTOTYPE_CLASSES = tuple(a for a in product(range(2), repeat=3) if any(a))
+SHELL_CLASSES = tuple(product(range(4), repeat=3))
+
+
+@dataclass(frozen=True)
+class ShellSchedule:
+    """One bounded ownership variant; the scientific cache is unchanged."""
+
+    component_lanes: int
+    triples_per_block: int
+    shared_bytes: int
+
+
+def shell_schedule(angular, variant):
+    """Bound warp, packed-warp and compact-subgroup variants below 48 KiB.
+
+    Reserve 1 KiB for compiler/runtime shared state. Compact groups use at
+    least four lanes, so all three axis preparers remain independent. Larger
+    component blocks cycle across the same lanes without increasing storage.
+    """
+    if variant not in (0, 1, 2):
+        raise ValueError("unknown generated shell schedule")
+    components = 1
+    for l in angular:
+        components *= (l + 1) * (l + 2) // 2
+    _, axis_size = axis_cache_layout(angular)
+    group_bytes = 8 * (components + 3 * axis_size + 25)
+    lanes = 32 if variant != 2 else min(32, max(4, 1 << (components - 1).bit_length()))
+    limit = 1 if variant == 0 else min(128 // lanes, (48 * 1024 - 1024) // group_bytes)
+    groups = 1 << (limit.bit_length() - 1)
+    return ShellSchedule(lanes, groups, groups * group_bytes + 1024)
 
 
 def axis_cache_layout(angular):
@@ -40,6 +72,7 @@ def emit_df_shell_derivatives_cuda():
 namespace vibeqc::scf::generated_df_shell {
 namespace scalar = generated_df_derivatives;
 template<unsigned A,unsigned B,unsigned C> struct Shell;
+template<unsigned A,unsigned B,unsigned C,unsigned Variant> struct Schedule;
 struct Contracted { double gradient[3][3]; };
 
 /** CCA index of one normalized expansion's Cartesian component. */
@@ -77,6 +110,20 @@ struct Moments {
     return a*rows*columns*(a+rows+columns-1)/2
          + b*columns*(2*a+b+columns)/2 + c*(a+b+1)+c*(c-1)/2;
   }
+  /** High-angular caches distribute unique moment polynomials over all lanes.
+   * The same scalar-generated moment DAG supplies every coefficient; the
+   * doubly-raised boundary is unused by a first derivative and stays unread.
+   */
+  __device__ static void prepare(const scalar::Geometry& g,double* cache,unsigned lane,unsigned lanes) {
+    constexpr unsigned entries=(A+2)*(B+2)*(C+1);
+    for(unsigned item=lane;item<3*entries;item+=lanes) {
+      const unsigned axis=item/entries,index=item%entries;
+      const unsigned a=index/rows/columns,b=index/columns%rows,c=index%columns;
+      if(a==A+1 && b==B+1) continue;
+      scalar::axis_polynomial(a,b,c,g.pa[axis],g.pb[axis],g.dx[axis],g.sx,g.sy,g.ip,g.iq,
+                              cache+axis*axis_size+offset(a,b,c));
+    }
+  }
   /** Fuse the differentiated axis before integrating shared other-axis moments.
    * alpha/beta and all external weights stay fixed under nuclear response.
    */
@@ -111,7 +158,10 @@ struct Moments {
 };
 """
     ]
-    for angular in PROTOTYPE_CLASSES:
+    lines += [
+        "template<unsigned A,unsigned B,unsigned C> struct Shell : Moments<A,B,C> {};"
+    ]
+    for angular in product(range(2), repeat=3):
         offsets, _ = axis_cache_layout(angular)
         parameters = ",".join(map(str, angular))
         lines += [
@@ -132,9 +182,26 @@ struct Moments {
                 for i, root in enumerate(roots)
             ]
             lines += ["    }"]
-        lines += ["  }", "};"]
+        lines += [
+            "  }",
+            "  __device__ static void prepare(const scalar::Geometry& g,double* cache,unsigned lane,unsigned) {",
+            "    if(lane<3) prepare_axis(g,lane,cache+lane*axis_size);",
+            "  }",
+            "};",
+        ]
+    for angular in SHELL_CLASSES:
+        for variant in range(3):
+            schedule = shell_schedule(angular, variant)
+            parameters = ",".join(map(str, (*angular, variant)))
+            lines += [
+                f"template<> struct Schedule<{parameters}> {{",
+                f"  static constexpr unsigned lanes={schedule.component_lanes};",
+                f"  static constexpr unsigned groups={schedule.triples_per_block};",
+                f"  static constexpr unsigned shared_bytes={schedule.shared_bytes};",
+                "};",
+            ]
     lines += ["template<class Function> void for_each_class(Function function) {"]
-    for angular in PROTOTYPE_CLASSES:
+    for angular in SHELL_CLASSES:
         lines += [f"  function.template operator()<{','.join(map(str, angular))}>();"]
     lines += ["}", "} // namespace vibeqc::scf::generated_df_shell", "#endif", ""]
     return "\n".join(lines)

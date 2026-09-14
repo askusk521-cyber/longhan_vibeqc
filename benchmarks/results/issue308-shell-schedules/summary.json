@@ -1,0 +1,143 @@
+{
+  "scope": "intrusive attribution, not promotion timing",
+  "source_identity": "fae89ad116237b6c5539cde327731f38c91797250983ac4a3d914f29f9130820",
+  "rows": [
+    {
+      "candidate": "generic",
+      "seconds": 12.146240030182526,
+      "derivative_event_seconds": 3.140758804,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 1.0637635564081371e-10,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "shell-warp",
+      "seconds": 10.207477604039013,
+      "derivative_event_seconds": 1.4105578999000001,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 1.062768796578073e-10,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "shell-packed",
+      "seconds": 10.528970883926377,
+      "derivative_event_seconds": 1.4475141521000001,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 1.062679978736103e-10,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "shell-compact",
+      "seconds": 9.886008199071512,
+      "derivative_event_seconds": 0.9903637650999999,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 1.062804323714861e-10,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "blas",
+      "seconds": 10.597546324832365,
+      "derivative_event_seconds": 3.1342514050000005,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 8.277212595886319e-11,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "pinned",
+      "seconds": 6.263596976874396,
+      "derivative_event_seconds": 3.141722504,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 8.276324417466618e-11,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "combined-warp",
+      "seconds": 4.533167584100738,
+      "derivative_event_seconds": 1.4094881982,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 8.261580655699596e-11,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "combined-packed",
+      "seconds": 4.568434857996181,
+      "derivative_event_seconds": 1.4450784148,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 8.259626663176256e-11,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    },
+    {
+      "candidate": "combined-compact",
+      "seconds": 4.111912924097851,
+      "derivative_event_seconds": 0.9933624396,
+      "energy_error": 1.8189894035458565e-12,
+      "force_error": 8.260870112963836e-11,
+      "iterations": [
+        3
+      ],
+      "raw_bytes": 4015521792,
+      "reference_eigensolves": 0
+    }
+  ],
+  "status": "Draft qualification evidence; clean endpoints and default promotion pending",
+  "v3_source_identity": "fae89ad116237b6c5539cde327731f38c91797250983ac4a3d914f29f9130820",
+  "v3_library_sha256": "2c8f82025c279f1bc99515cdde297c7efb1f4e59ab75619b96c10ccfd7b16e0a",
+  "v3_git_head": "6303871473eeed248cf8523d9317f5f9ba8c696f",
+  "v3_memcheck": {
+    "tests_passed": 28,
+    "seconds": 283.92,
+    "errors": 0,
+    "slurm_job_id": "9602",
+    "test_log_sha256": "fda74c481125742120402e0997789abf07d986aa5df6f7511afc7704bf935d20",
+    "sanitizer_log_sha256": "a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425"
+  },
+  "v4_cpu": {
+    "tests_passed": 138,
+    "independent_arithmetic_cases": 128,
+    "ownership_cases": 10
+  },
+  "v4_gpu_status": "queued; no v4 GPU qualification or performance claim",
+  "files": {
+    "README.md": "a22e9e765db4f96437a88a57b32092c95e082e2201661e1f281fe71281b7cff8",
+    "measurements/v3-384ao-b1-traced.json": "4b34ecc05e14a45d8f1c33555af09be9a8bf77027f7ba25f3a06d51475be9525",
+    "ownership-delta.json": "d92784cbd1c42955c020e94e56a44f2b10b8fe59778903f6e908455fc7418d11",
+    "reproduction/v3-gpu-before.csv": "90b6140047581fe34492e8e4ee76fbc5b26695e69b5b102e5e8137a68c7891cd",
+    "reproduction/v3-measured-source.patch": "da29efa8c6e89db8db6519a110e84aaa68ffb964ad6f1be8da54c14af8289b2d",
+    "reproduction/v3-qualify-and-sweep.sh": "408e0f5493d71a1af8cdb01b10cb2fece879ccc632e27835ac0a000aebf0ae63",
+    "reproduction/v3-runner.py": "1db61fcd3052d0282549911ad91c6fd1721886f616fe10fd5851a0be64642c10",
+    "reproduction/v4-kernel-resources.json": "087de60ba87136b1abd462ad15d784cf926da0a385371672bf58573f11a2db71",
+    "reproduction/v4-provenance.json": "1fb37ce9c3430d04b4b7dcc665e0ee81d73c3ce06b5471f6f2a12dcca5416ed9"
+  }
+}
