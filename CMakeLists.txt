@@ -4,6 +4,9 @@ project(VibeQC VERSION 0.1.0 LANGUAGES CXX)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VibeQCGenerated.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/components/Runtime.cmake")
+
 # Leaf lowering/tuning modules are scientific generator inputs too. Track
 # nested files for regeneration; facade timestamps alone cannot invalidate them.
 file(GLOB_RECURSE VIBEQC_SCIENTIFIC_COMPILER_INPUTS CONFIGURE_DEPENDS
@@ -76,15 +79,6 @@ endif()
 if(NOT Python3_Interpreter_FOUND)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 endif()
-set(VIBEQC_XC_CPU_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/xc_cpu_generated.hpp")
-add_custom_command(
-  OUTPUT "${VIBEQC_XC_CPU_HEADER}"
-  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_xc_cpu.py"
-          --output "${VIBEQC_XC_CPU_HEADER}"
-  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_xc_cpu.py"
-          ${VIBEQC_SCIENTIFIC_COMPILER_INPUTS}
-  VERBATIM)
-add_custom_target(vibeqc_xc_cpu_codegen DEPENDS "${VIBEQC_XC_CPU_HEADER}")
 
 if(NOT VIBEQC_CUDA_SPLIT_COMPILE_THREADS MATCHES "^[0-9]+$")
   message(FATAL_ERROR
@@ -175,7 +169,6 @@ add_library(vibeqc SHARED
   src/posthf/bridge.cpp
   src/posthf/mp2_energy.cpp
   src/posthf/native_provider.cpp
-  src/runtime/context.cpp
   src/scf/density_fitting.cpp
   src/scf/density_factor.cpp
   src/scf/df_response_weights.cpp
@@ -197,7 +190,15 @@ add_library(vibeqc SHARED
   src/scf/initial_guess/density.cpp
   src/scf/cuda/rhf_policy.cpp
 )
-add_dependencies(vibeqc vibeqc_xc_cpu_codegen)
+vibeqc_add_runtime_sources(vibeqc)
+set(VIBEQC_XC_CPU_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/xc_cpu_generated.hpp")
+vibeqc_register_generated_sources(
+  NAME vibeqc_xc_cpu_codegen
+  TARGET vibeqc
+  GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_xc_cpu.py"
+  OUTPUTS "${VIBEQC_XC_CPU_HEADER}"
+  DEPENDS ${VIBEQC_SCIENTIFIC_COMPILER_INPUTS}
+  ARGS --output "${VIBEQC_XC_CPU_HEADER}")
 
 # A local tuned library may replace this build only when its scientific source
 # and generator are identical. Paths and Git metadata are deliberately excluded
@@ -208,7 +209,9 @@ file(GLOB_RECURSE _vibeqc_identity_inputs CONFIGURE_DEPENDS
      "python/vibeqc_compiler/*.json" "python/vibeqc/*.py"
      "tools/vibeqc_tensor/*.py" "tools/vibeqc_mp2/*.py"
      "tools/vibeqc_posthf/plan_spec.py")
-list(APPEND _vibeqc_identity_inputs "CMakeLists.txt" "tools/generate_shell_kernels.py"
+list(APPEND _vibeqc_identity_inputs "CMakeLists.txt"
+     "cmake/VibeQCGenerated.cmake" "cmake/components/Runtime.cmake"
+     "tools/generate_shell_kernels.py"
      "tools/generate_df_kernels.py" "tools/generate_weighted_eri_kernels.py"
      "tools/generate_one_electron_kernels.py" "tools/generate_grid_kernels.py"
      "tools/generate_mp2_native.py" "tools/generate_xc_cpu.py")
@@ -377,13 +380,11 @@ if(VIBEQC_ENABLE_CUDA)
     src/dft/cuda_ks.cpp
     src/dft/cuda_ks_kernels.cu
     src/posthf/df_bridge.cu
-    src/runtime/cuda_runtime.cu
     src/scf/cuda/df_coulomb.cpp
     src/scf/cuda/df_exchange.cpp
     src/scf/cuda/df_occupied_exchange.cpp
     src/scf/cuda/df_scf_factor.cpp
     src/scf/cuda/df_scf_final_state.cpp
-    src/runtime/cuda_component_trace.cpp
     src/scf/cuda/df_force_response.cpp
     src/scf/cuda/df_jk.cpp
     src/scf/cuda/df_jk_kernels.cu
