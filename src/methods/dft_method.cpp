@@ -16,10 +16,10 @@
 #include "dft/cuda_xc.hpp"
 #include "dft/grid.hpp"
 #include "molecule/basis.hpp"
-#include "runtime/device_error.hpp"
 #include "scf/fock_prepared.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
+#include "vibeqc/vibeqc.hpp"
 
 namespace vibeqc::methods::detail {
 namespace {
@@ -62,10 +62,10 @@ vibeqc_status exception_status() {
     throw;
   } catch (const MethodError& error) {
     return error.status();
+  } catch (const vibeqc::Error& error) {
+    return error.status();
   } catch (const std::bad_alloc&) {
     return VIBEQC_STATUS_OUT_OF_MEMORY;
-  } catch (const runtime::CudaError&) {
-    return VIBEQC_STATUS_CUDA_ERROR;
   } catch (const std::invalid_argument&) {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   } catch (const std::exception&) {
@@ -281,12 +281,12 @@ class DftPreparedBatch final : public PreparedBatch {
           retain(item, current_coordinates, native);
         output.calculation = adapt_result(std::move(native), context_->requested_backend);
       } catch (...) {
-        output.status = exception_status();
+        const vibeqc_status first_status = exception_status();
         // A throwing replacement constructor can leave the old owner alive.
         // Retry a seed-related failure at most once, on the current geometry.
         // Resource/driver failures do not authorize another expensive solve.
-        const bool seed_failure = output.status == VIBEQC_STATUS_NUMERICAL_FAILURE ||
-                                  output.status == VIBEQC_STATUS_INVALID_ARGUMENT;
+        const bool seed_failure = first_status == VIBEQC_STATUS_NUMERICAL_FAILURE ||
+                                  first_status == VIBEQC_STATUS_INVALID_ARGUMENT;
         if (use_warm && !output.warm_start_fallback && seed_failure && item.calculation &&
             item.prepared_coordinates == current_coordinates) {
           try {
@@ -301,6 +301,8 @@ class DftPreparedBatch final : public PreparedBatch {
           } catch (...) {
             output.status = exception_status();
           }
+        } else {
+          output.status = first_status;
         }
       }
     }

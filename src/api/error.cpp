@@ -5,7 +5,7 @@
 #include <stdexcept>
 
 #include "methods/method.hpp"
-#include "runtime/device_error.hpp"
+#include "vibeqc/vibeqc.hpp"
 
 namespace vibeqc::api {
 
@@ -15,12 +15,12 @@ vibeqc_status map_exception(std::string* detail) noexcept {
   } catch (const methods::MethodError& error) {
     if (detail != nullptr) *detail = error.what();
     return error.status();
+  } catch (const vibeqc::Error& error) {
+    if (detail != nullptr) *detail = error.what();
+    return error.status();
   } catch (const std::bad_alloc& error) {
     if (detail != nullptr) *detail = error.what();
     return VIBEQC_STATUS_OUT_OF_MEMORY;
-  } catch (const runtime::CudaError& error) {
-    if (detail != nullptr) *detail = error.what();
-    return VIBEQC_STATUS_CUDA_ERROR;
   } catch (const std::invalid_argument& error) {
     if (detail != nullptr) *detail = error.what();
     return VIBEQC_STATUS_INVALID_ARGUMENT;
