@@ -189,6 +189,7 @@ add_library(vibeqc SHARED
   src/scf/solver/proposal_control.cpp
   src/scf/solver/mean_field_driver.cpp
   src/scf/solver/eigen_frame.cpp
+  src/scf/solver/final_state.cpp
   src/scf/gradient/hf_gradient.cpp
   src/scf/reference/linalg.cpp
   src/scf/reference/mean_field.cpp
@@ -775,6 +776,11 @@ if(VIBEQC_BUILD_TESTS)
   # The Windows shared-library ABI intentionally exports only the public C
   # surface; this internal contract target requires private C++ symbols.
   if(NOT WIN32)
+    add_executable(vibeqc_final_state_tests tests/native/test_final_state.cpp)
+    target_link_libraries(vibeqc_final_state_tests PRIVATE vibeqc)
+    target_include_directories(vibeqc_final_state_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_final_state_tests COMMAND vibeqc_final_state_tests)
+
     add_executable(vibeqc_eigen_frame_tests tests/native/test_eigen_frame.cpp)
     target_link_libraries(vibeqc_eigen_frame_tests PRIVATE vibeqc)
     target_include_directories(vibeqc_eigen_frame_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
