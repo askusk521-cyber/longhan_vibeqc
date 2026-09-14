@@ -5,11 +5,31 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "vibeqc/vibeqc.h"
+
+namespace {
+// Fail exactly one grid-coordinate allocation after warm-state import. This
+// executable-only interposition exercises real constructor unwinding without
+// adding fault controls to the production API or exhausting machine memory.
+thread_local std::size_t fail_allocation_bytes = 0;
+}  // namespace
+
+void* operator new(std::size_t bytes) {
+  if (bytes && bytes == fail_allocation_bytes) {
+    fail_allocation_bytes = 0;
+    throw std::bad_alloc();
+  }
+  if (void* pointer = std::malloc(bytes ? bytes : 1)) return pointer;
+  throw std::bad_alloc();
+}
+void operator delete(void* pointer) noexcept { std::free(pointer); }
+void operator delete(void* pointer, std::size_t) noexcept { std::free(pointer); }
 
 namespace {
 
@@ -83,10 +103,82 @@ vibeqc_method_descriptor lda_method() {
           0};
 }
 
+void warm_preparation_failure(bool retained_plan) {
+  Fixture fixture;
+  auto method = lda_method();
+  vibeqc_system* systems[]{fixture.system, fixture.system};
+  vibeqc_batch *source = nullptr, *target = nullptr;
+  require(vibeqc_batch_prepare(fixture.context, systems, 2, &method,
+                               VIBEQC_BATCH_ENABLE_WARM_STARTS, &source) == VIBEQC_STATUS_SUCCESS,
+          "warm failure source preparation failed");
+  std::unique_ptr<vibeqc_batch, decltype(&vibeqc_batch_destroy)> source_owner(
+      source, &vibeqc_batch_destroy);
+  require(vibeqc_batch_prepare(fixture.context, systems, 2, &method,
+                               VIBEQC_BATCH_ENABLE_WARM_STARTS, &target) == VIBEQC_STATUS_SUCCESS,
+          "warm failure target preparation failed");
+  std::unique_ptr<vibeqc_batch, decltype(&vibeqc_batch_destroy)> target_owner(
+      target, &vibeqc_batch_destroy);
+  const std::array<double, 6> changed{0.0, 0.0, -0.9, 0.0, 0.0, 0.9};
+  std::array<vibeqc_batch_input_descriptor, 2> inputs;
+  for (auto& input : inputs)
+    input = {sizeof(input), VIBEQC_ABI_VERSION, changed.data(), changed.size()};
+  std::array<vibeqc_batch_item_result_descriptor, 2> results{};
+  const auto execute = [&](vibeqc_batch* batch, bool moved) {
+    for (auto& result : results) {
+      result = {};
+      result.struct_size = sizeof(result);
+      result.abi_version = VIBEQC_ABI_VERSION;
+    }
+    return vibeqc_batch_execute(batch, moved ? inputs.data() : nullptr, moved ? inputs.size() : 0,
+                                results.data(), results.size());
+  };
+  require(execute(source, true) == VIBEQC_STATUS_SUCCESS && results[0].converged,
+          "warm failure source did not converge");
+  const double expected = results[0].energy;
+  if (retained_plan)
+    require(execute(target, false) == VIBEQC_STATUS_SUCCESS && results[0].converged,
+            "warm failure target's original geometry did not converge");
+  std::array<std::array<double, 4>, 2> densities{};
+  std::array<std::array<double, 6>, 2> coordinates{};
+  std::array<vibeqc_hf_warm_state, 2> seeds{};
+  for (std::size_t i = 0; i < seeds.size(); ++i) {
+    seeds[i].struct_size = sizeof(seeds[i]);
+    seeds[i].abi_version = VIBEQC_ABI_VERSION;
+    seeds[i].density = densities[i].data();
+    seeds[i].density_count = densities[i].size();
+    seeds[i].coordinates = coordinates[i].data();
+    seeds[i].coordinate_count = coordinates[i].size();
+    require(vibeqc_batch_get_hf_warm_state(source, i, &seeds[i]) == VIBEQC_STATUS_SUCCESS &&
+                seeds[i].present,
+            "warm failure seed export failed");
+  }
+  require(vibeqc_batch_restore_hf_warm_states(target, seeds.data(), seeds.size()) ==
+              VIBEQC_STATUS_SUCCESS,
+          "warm failure seed import failed");
+  // H2's default quadrature has two atoms times 48*16*32 points. Its xyz
+  // vector is allocated inside preparation, after the imported seed is ready.
+  fail_allocation_bytes = 3 * 2 * 48 * 16 * 32 * sizeof(double);
+  const auto status = execute(target, true);
+  const bool injected = fail_allocation_bytes == 0;
+  fail_allocation_bytes = 0;
+  require(injected, "warm preparation allocation fault was not reached");
+  require(status == VIBEQC_STATUS_SUCCESS && results[0].status == VIBEQC_STATUS_OUT_OF_MEMORY &&
+              !results[0].converged && !results[0].warm_start_fallback,
+          "failed warm preparation retried a missing or stale calculation");
+  require(results[1].status == VIBEQC_STATUS_SUCCESS && results[1].warm_start_used &&
+              std::abs(results[1].energy - expected) < 2e-10,
+          "warm preparation failure corrupted its neighbor");
+  require(execute(target, true) == VIBEQC_STATUS_SUCCESS && results[0].converged &&
+              results[0].warm_start_used && std::abs(results[0].energy - expected) < 2e-10,
+          "warm preparation failure lost the imported seed or target geometry");
+}
+
 }  // namespace
 
 int main() {
   try {
+    warm_preparation_failure(false);
+    warm_preparation_failure(true);
     vibeqc_method_capabilities_descriptor capabilities{
         sizeof(vibeqc_method_capabilities_descriptor), VIBEQC_ABI_VERSION, 0, 0, 0, 0, 0};
     require(vibeqc_method_get_capabilities(VIBEQC_METHOD_LDA_RKS, &capabilities) ==
