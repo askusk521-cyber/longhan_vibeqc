@@ -29,7 +29,7 @@ __device__ Policy::Accumulator cooperative_contract(const products::Factor (&fac
 }
 
 /** Full dense weights count once; shared atoms are summed by the runtime sink. */
-template <unsigned Lanes = 1>
+template <unsigned Lanes = 1, bool SkipSpShells = false>
 __device__ void contract(DfDerivativeBasisView o, DfDerivativeBasisView x, const double* positions,
                          unsigned kind, std::size_t element, double weight, double* gradient,
                          unsigned lane = 0) {
@@ -40,6 +40,17 @@ __device__ void contract(DfDerivativeBasisView o, DfDerivativeBasisView x, const
     const auto result = cooperative_contract<Lanes>(factors, positions, lane);
     if (lane == 0) products::scatter(factors, result, weight, gradient);
   } else {
+    if constexpr (SkipSpShells) {
+      // Every expansion term has the shell's total angular degree, including
+      // spherical d/f terms. The shell worker consumed these s/p components.
+      const auto mu = element / x.nbf / o.nbf, nu = element / x.nbf % o.nbf;
+      const auto* ai = o.term_angular + 3 * terms * mu;
+      const auto* aj = o.term_angular + 3 * terms * nu;
+      const auto* ap = x.term_angular + 3 * terms * p;
+      const unsigned li = ai[0] + ai[1] + ai[2], lj = aj[0] + aj[1] + aj[2];
+      const unsigned lp = ap[0] + ap[1] + ap[2];
+      if (li <= 1 && lj <= 1 && lp <= 1 && li + lj + lp != 0) return;
+    }
     const products::Factor factors[3]{{o, static_cast<std::int64_t>(element / x.nbf / o.nbf)},
                                       {o, static_cast<std::int64_t>(element / x.nbf % o.nbf)},
                                       {x, p}};
@@ -47,7 +58,7 @@ __device__ void contract(DfDerivativeBasisView o, DfDerivativeBasisView x, const
     if (lane == 0) products::scatter(factors, result, weight, gradient);
   }
 }
-template <bool DistributedSink>
+template <bool DistributedSink, bool SkipSpShells = false>
 __global__ void derivative_tile(DfDerivativeBasisView o, DfDerivativeBasisView x,
                                 const double* positions, unsigned kind, runtime::StridedRange range,
                                 std::size_t count, const double* weights, unsigned schedule,
@@ -60,8 +71,8 @@ __global__ void derivative_tile(DfDerivativeBasisView o, DfDerivativeBasisView x
       for (std::size_t item = 0; item < count; ++item)
         contract(o, x, positions, kind, range.index(begin + item), weights[item], gradient);
   } else if (thread / lanes < count)
-    contract<lanes>(o, x, positions, kind, range.index(begin + thread / lanes),
-                    weights[thread / lanes], gradient, thread % lanes);
+    contract<lanes, SkipSpShells>(o, x, positions, kind, range.index(begin + thread / lanes),
+                                  weights[thread / lanes], gradient, thread % lanes);
 }
 }  // namespace
 cudaError_t launch_df_derivative_tile(DfDerivativeBasisView o, DfDerivativeBasisView x,
@@ -69,7 +80,8 @@ cudaError_t launch_df_derivative_tile(DfDerivativeBasisView o, DfDerivativeBasis
                                       runtime::StridedRange range, std::size_t count,
                                       const double* weights, unsigned schedule, double* gradient,
                                       cudaStream_t stream, std::size_t begin,
-                                      std::size_t gradient_stride, unsigned gradient_copies) {
+                                      std::size_t gradient_stride, unsigned gradient_copies,
+                                      bool skip_sp_shells) {
   const auto maximum = std::numeric_limits<std::size_t>::max();
   if (!o.nbf || !x.nbf || kind > 1 || schedule > 1 || !positions || !weights || !gradient ||
       !count || o.nbf > maximum / o.nbf || o.nbf * o.nbf > maximum / x.nbf ||
@@ -94,7 +106,11 @@ cudaError_t launch_df_derivative_tile(DfDerivativeBasisView o, DfDerivativeBasis
                      !fits((end / range.row_length) * range.row_length - 1)))
     return cudaErrorInvalidValue;
   const auto blocks = schedule ? 1U : static_cast<unsigned>((count - 1) / elements_per_block + 1);
-  if (gradient_copies > 1)
+  if (skip_sp_shells && (kind || schedule || gradient_copies != 1)) return cudaErrorInvalidValue;
+  if (skip_sp_shells)
+    derivative_tile<false, true><<<blocks, threads, 0, stream>>>(
+        o, x, positions, kind, range, count, weights, schedule, gradient, begin, 0, 1);
+  else if (gradient_copies > 1)
     derivative_tile<true><<<blocks, threads, 0, stream>>>(o, x, positions, kind, range, count,
                                                           weights, schedule, gradient, begin,
                                                           gradient_stride, gradient_copies);

@@ -93,26 +93,41 @@ __device__ double dot(unsigned da,const double* a,unsigned db,const double* b,
       for(unsigned k=0;k<=dc;++k) value+=a[i]*b[j]*c[k]*f[i+j+k];
   return value;
 }
+/** One primitive product, independent of the AO components using it. */
+struct Geometry {
+  double pa[3],pb[3],dx[3],sx,sy,ip,iq,prefactor,f[11];
+};
+__device__ __forceinline__ void prepare_geometry(double alpha,Vec3 A,double beta,Vec3 B,
+    double gamma,Vec3 C,unsigned total,Geometry& g) {
+  const double p=alpha+beta,q=gamma,rho=p*q/(p+q);
+  g.sx=q/(p+q);g.sy=p/(p+q);g.ip=0.5/p;g.iq=0.5/q;
+  double distance=0,ab2=0;
+  for(unsigned axis=0;axis<3;++axis) {
+    const double ab=component(A,axis)-component(B,axis);
+    g.pa[axis]=-beta/p*ab;g.pb[axis]=alpha/p*ab;
+    g.dx[axis]=component(A,axis)-component(C,axis)+g.pa[axis];
+    distance+=g.dx[axis]*g.dx[axis];ab2+=ab*ab;
+  }
+  boys_values(total+1,rho*distance,g.f);
+  g.prefactor=34.986836655249725694/(p*q*sqrt(p+q))*exp(-alpha*beta/p*ab2);
+}
 __device__ __noinline__ Response evaluate(bool metric,double alpha,Vec3 A,Angular a,
     double beta,Vec3 B,Angular b,double gamma,Vec3 C,Angular c) {
   const double invalid=nan("");
   if (order(a)>3 || order(b)>3 || order(c)>3 || !(alpha>0) || !(gamma>0) ||
       (!metric && !(beta>0))) return {invalid,{invalid,invalid,invalid},{invalid,invalid,invalid},{invalid,invalid,invalid}};
-  const double p=alpha+beta,q=gamma,rho=p*q/(p+q),sx=q/(p+q),sy=p/(p+q);
-  const double ip=0.5/p,iq=0.5/q;
-  double pa[3],pb[3],dx[3],base[3][11],f[11],distance=0,ab2=0;
+  Geometry geometry;
+  prepare_geometry(alpha,A,beta,B,gamma,C,order(a)+order(b)+order(c),geometry);
+  const auto& pa=geometry.pa;const auto& pb=geometry.pb;const auto& dx=geometry.dx;
+  const auto& f=geometry.f;
+  const double sx=geometry.sx,sy=geometry.sy,ip=geometry.ip,iq=geometry.iq;
+  const double prefactor=geometry.prefactor;
+  double base[3][11];
   unsigned degree[3];
   for(unsigned axis=0;axis<3;++axis) {
-    const double ab=component(A,axis)-component(B,axis);
-    pa[axis]=-beta/p*ab; pb[axis]=alpha/p*ab;
-    dx[axis]=component(A,axis)-component(C,axis)+pa[axis];
-    distance+=dx[axis]*dx[axis]; ab2+=ab*ab;
     degree[axis]=power(a,axis)+power(b,axis)+power(c,axis);
     axis_polynomial(power(a,axis),power(b,axis),power(c,axis),pa[axis],pb[axis],dx[axis],sx,sy,ip,iq,base[axis]);
   }
-  const unsigned total=degree[0]+degree[1]+degree[2];
-  boys_values(total+1,rho*distance,f);
-  const double prefactor=34.986836655249725694/(p*q*sqrt(p+q))*exp(-alpha*beta/p*ab2);
   Response result{};
   result.value=prefactor*dot(degree[0],base[0],degree[1],base[1],degree[2],base[2],f);
   double first[3]{},second[3]{};

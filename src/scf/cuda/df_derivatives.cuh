@@ -33,7 +33,7 @@ cudaError_t launch_df_derivative_tile(DfDerivativeBasisView orbital,
                                       unsigned kind, runtime::StridedRange range, std::size_t count,
                                       const double* weights, unsigned schedule, double* gradient,
                                       cudaStream_t stream, std::size_t begin = 0,
-                                      std::size_t gradient_stride = 0,
-                                      unsigned gradient_copies = 1);
+                                      std::size_t gradient_stride = 0, unsigned gradient_copies = 1,
+                                      bool skip_sp_shells = false);
 }  // namespace vibeqc::scf
 #endif
