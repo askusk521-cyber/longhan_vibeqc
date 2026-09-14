@@ -23,6 +23,7 @@
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/rhf_policy.hpp"
 #include "scf/cuda_density_fitting.hpp"
+#include "scf/cuda_density_fitting_eigen.hpp"
 #include "scf/cuda_density_fitting_integrals.hpp"
 #include "scf/cuda_df_gradient.hpp"
 #include "scf/cuda_fock_provider.hpp"
@@ -391,6 +392,28 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
   return gradient;
 }
 
+/** Keep CPU/reference execution explicit. CUDA finalization uses the plan's
+ * ordinary device provider; a rejection never silently re-enters Jacobi. The
+ * diagnostic control restores the independent oracle for causal comparison. */
+[[maybe_unused]] EigenResult final_df_eigen(const Matrix& fock, const Matrix& overlap,
+                                            const Matrix& orthogonalizer, std::size_t n,
+                                            CudaDensityFittingJkPlan* plan,
+                                            std::size_t system_index) {
+  const char* reference = std::getenv("VIBEQC_DF_REFERENCE_FINAL_EIGEN");
+  if (!plan || (reference && reference[0] == '1' && reference[1] == '\0'))
+    return generalized_eigen(fock, orthogonalizer, n);
+  EigenResult result;
+  CudaDfEigenDiagnostic diagnostic;
+  std::string detail;
+  const auto status =
+      solve_cuda_density_fitting_eigen(plan, fock, &overlap, &orthogonalizer, result.values,
+                                       result.vectors, diagnostic, detail, system_index);
+  if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+  if (status != VIBEQC_STATUS_SUCCESS)
+    throw std::runtime_error(detail.empty() ? "CUDA DF final eigensolve failed" : detail);
+  return result;
+}
+
 [[maybe_unused]] void finalize_density_fitting_rhf(const DensityFittingScfData& data,
                                                    const Matrix& orthogonalizer,
                                                    std::size_t occupied, Matrix& density,
@@ -442,7 +465,8 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
         build_density_fitting_rhf_fock(data.one_electron.hcore, data.three_center, density);
   }
   EigenResult orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
-    return generalized_eigen(final_fock, orthogonalizer, n);
+    return final_df_eigen(final_fock, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                          cuda_system);
   });
   density = density_from_orbitals(orbitals.vectors, n, occupied);
   if (cuda_plan != nullptr) {
@@ -473,7 +497,8 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
   if (options.export_physical_reference) {
     host_trace::Reason export_reason(host_trace::EigenReason::reference_export);
     host_trace::Region export_trace("reference_export", n);
-    auto canonical = generalized_eigen(final_fock, orthogonalizer, n);
+    auto canonical = final_df_eigen(final_fock, data.one_electron.overlap, orthogonalizer, n,
+                                    cuda_plan, cuda_system);
     auto reference = std::make_shared<PhysicalReference>();
     reference->nbf = n;
     reference->nocc = occupied;
@@ -597,10 +622,12 @@ Matrix generated_df_hf_gradient(const DensityFittingScfData& data, CudaDensityFi
         data.one_electron.hcore, data.three_center, alpha_density, beta_density);
   }
   EigenResult alpha_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
-    return generalized_eigen(alpha_fock, orthogonalizer, n);
+    return final_df_eigen(alpha_fock, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                          cuda_system);
   });
   EigenResult beta_orbitals = host_trace::with_reason(host_trace::EigenReason::final_fock, [&] {
-    return generalized_eigen(beta_fock, orthogonalizer, n);
+    return final_df_eigen(beta_fock, data.one_electron.overlap, orthogonalizer, n, cuda_plan,
+                          cuda_system);
   });
   alpha_density = density_from_orbitals(alpha_orbitals.vectors, n, alpha_occupied, 1.0);
   beta_density = density_from_orbitals(beta_orbitals.vectors, n, beta_occupied, 1.0);

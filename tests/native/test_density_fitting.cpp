@@ -977,7 +977,7 @@ int main() {
             const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
                                     bucket_initial, 0, nullptr, &prepared_cache, &overlap_views);
             if (budget == 32768U) {
-              // This sp batch cannot fit its preparation metadata in 32 KiB.
+              // This sp batch cannot fit its minimal DF/eigen allowance in 32 KiB.
               // A stale default cache used to bypass that active limit.
               require(replay.size() == 2 && replay[0].status == VIBEQC_STATUS_OUT_OF_MEMORY &&
                           replay[1].status == VIBEQC_STATUS_OUT_OF_MEMORY && !cached.plan,

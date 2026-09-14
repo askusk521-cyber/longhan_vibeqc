@@ -11,6 +11,48 @@ import pytest
 from benchmarks import issue206_df_matrix as matrix
 
 
+@pytest.mark.parametrize("reference", (False, True))
+@pytest.mark.parametrize("method", ("rhf", "uhf"))
+def test_final_provider_ablation_rejects_missing_or_unexpected_solves(
+    reference, method
+):
+    """A disabled trace hook or silent oracle fallback cannot pass promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_final_eigen_counts
+
+    count = 4 * (2 if method == "uhf" else 1)
+    record = {
+        "eigensolves_by_reason": {"final_fock": {"calls": count if reference else 0}},
+        "exclusive_phases": {"device_eigensolve": {"calls": 0 if reference else count}},
+    }
+    validate_final_eigen_counts(
+        record, batch_size=4, method=method, reference=reference
+    )
+    for group, name in (
+        ("eigensolves_by_reason", "final_fock"),
+        ("eigensolves_by_reason", "fallback"),
+        ("exclusive_phases", "device_eigensolve"),
+    ):
+        changed = copy.deepcopy(record)
+        changed[group].setdefault(name, {"calls": 0})["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared provider"):
+            validate_final_eigen_counts(
+                changed, batch_size=4, method=method, reference=reference
+            )
+    missing = copy.deepcopy(record)
+    group, name = (
+        ("eigensolves_by_reason", "final_fock")
+        if reference
+        else ("exclusive_phases", "device_eigensolve")
+    )
+    missing[group][name]["calls"] = 0
+    with pytest.raises(RuntimeError, match="declared provider"):
+        validate_final_eigen_counts(
+            missing, batch_size=4, method=method, reference=reference
+        )
+
+
 @pytest.mark.parametrize("failure", ["exit", "launch", "missing_result", "gate"])
 @pytest.mark.parametrize("energy_only", [False, True])
 def test_matrix_retains_failures_and_finishes_remaining_cases(

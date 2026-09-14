@@ -15,6 +15,7 @@
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
 #include "scf/cuda/df_setup_internal.hpp"
+#include "scf/cuda_density_fitting_eigen.hpp"
 #include "scf/df_exchange_policy.hpp"
 
 namespace vibeqc::scf::cuda_df {
@@ -512,7 +513,8 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
           (16.0L * sizeof(double) + 2.0L * sizeof(std::int32_t) + 2.0L * sizeof(std::uint8_t) +
            sizeof(std::uint32_t) +
            (candidate->occupied_scf_reserved ? 2 * sizeof(std::uint32_t) + sizeof(int) : 0)) +
-      solver_device_workspace_bytes + matrix_bytes;  // graph bookkeeping
+      solver_device_workspace_bytes + matrix_bytes +  // graph bookkeeping
+      df_eigen_device_reservation(nbf);
   const std::size_t persistent_scf_bytes =
       persistent_scf_estimate >= static_cast<long double>(std::numeric_limits<std::size_t>::max())
           ? std::numeric_limits<std::size_t>::max()
@@ -540,7 +542,7 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
           ? std::numeric_limits<std::size_t>::max()
           : static_cast<std::size_t>(peak_estimate);
   const long double host_resident_estimate =
-      static_cast<long double>(sizeof(*candidate)) +
+      static_cast<long double>(sizeof(*candidate)) + df_eigen_workspace_allowance(nbf) +
       (candidate->integral_source
            ? static_cast<long double>(
                  cuda_density_fitting_integral_source_host_bytes(candidate->integral_source)) +
