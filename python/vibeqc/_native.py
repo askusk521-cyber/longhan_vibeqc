@@ -323,6 +323,22 @@ class KsDiagnosticDescriptor(ctypes.Structure):
     ]
 
 
+class KsTransportDiagnosticDescriptor(ctypes.Structure):
+    """Cumulative measured CUDA KS movement for one prepared owner."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("setup_h2d_bytes", ctypes.c_uint64),
+        ("density_h2d_bytes", ctypes.c_uint64),
+        ("scalar_d2h_bytes", ctypes.c_uint64),
+        ("matrix_d2h_bytes", ctypes.c_uint64),
+        ("synchronizations", ctypes.c_uint64),
+        ("iterations", ctypes.c_uint64),
+        ("occupation_stabilized_proposals", ctypes.c_uint64),
+    ]
+
+
 class PrecisionProvenance(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -661,6 +677,20 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
                 ctypes.c_uint32,
             ]
             ks_query.restype = ctypes.c_int
+    for name, prefix in (
+        ("vibeqc_calculation_get_ks_transport_diagnostic", [ctypes.c_void_p]),
+        (
+            "vibeqc_batch_get_ks_transport_diagnostic",
+            [ctypes.c_void_p, ctypes.c_uint32],
+        ),
+    ):
+        transport_query = getattr(library, name, None)
+        if transport_query is not None:
+            transport_query.argtypes = [
+                *prefix,
+                ctypes.POINTER(KsTransportDiagnosticDescriptor),
+            ]
+            transport_query.restype = ctypes.c_int
 
     library.vibeqc_batch_get_last_eigensolver_diagnostics.argtypes = [
         ctypes.c_void_p,

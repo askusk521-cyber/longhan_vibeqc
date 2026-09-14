@@ -14,7 +14,12 @@ import numpy as np
 from . import _native
 from .accuracy import AccuracyAssessment
 from .calculator import Atom, Calculator
-from .ks_diagnostics import KsDiagnostic, read_ks_diagnostic
+from .ks_diagnostics import (
+    KsDiagnostic,
+    KsTransportDiagnostic,
+    read_ks_diagnostic,
+    read_ks_transport_diagnostic,
+)
 
 
 @dataclass(frozen=True)
@@ -535,6 +540,15 @@ class PreparedBatch:
     def basis_metadata(self):
         """Detached resolved provenance/identities for benchmark and result records."""
         return deepcopy(self._basis_metadata)
+
+    @property
+    def ks_transport_diagnostics(self) -> tuple[KsTransportDiagnostic | None, ...]:
+        """Input-ordered cumulative CUDA KS movement snapshots."""
+        self._ensure_open()
+        return tuple(
+            read_ks_transport_diagnostic(self._library, self._batch, index)
+            for index in range(self.system_count)
+        )
 
     def _ensure_open(self) -> None:
         if not self._batch.value:

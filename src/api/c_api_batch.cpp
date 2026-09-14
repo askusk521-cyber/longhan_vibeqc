@@ -84,6 +84,30 @@ vibeqc_status vibeqc_batch_get_ks_diagnostic(const vibeqc_batch* batch, uint32_t
                                          history_capacity);
 }
 
+vibeqc_status vibeqc_batch_get_ks_transport_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                                       vibeqc_ks_transport_diagnostic* out) {
+  if (!batch || index >= batch->plan->size()) return VIBEQC_STATUS_INVALID_ARGUMENT;
+  if (out && !vibeqc::api::valid_descriptor(out)) return VIBEQC_STATUS_ABI_MISMATCH;
+  std::lock_guard<std::recursive_mutex> lock(batch->context->mutex);
+  try {
+    const auto source = batch->plan->ks_transport_diagnostic(index);
+    if (!source) return VIBEQC_STATUS_NOT_IMPLEMENTED;
+    if (out)
+      *out = {sizeof(*out),
+              VIBEQC_ABI_VERSION,
+              source->setup_h2d_bytes,
+              source->density_h2d_bytes,
+              source->scalar_d2h_bytes,
+              source->matrix_d2h_bytes,
+              source->synchronizations,
+              source->iterations,
+              source->occupation_stabilized_proposals};
+    return VIBEQC_STATUS_SUCCESS;
+  } catch (...) {
+    return vibeqc::api::map_exception(&batch->context->last_detail);
+  }
+}
+
 vibeqc_status vibeqc_batch_get_last_shell_class_profile(const vibeqc_batch* batch,
                                                         vibeqc_shell_class_profile_entry* entries,
                                                         uint32_t entry_count) {

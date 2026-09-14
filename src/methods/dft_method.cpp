@@ -159,6 +159,33 @@ std::size_t ks_provider_bytes(const core::System& system, vibeqc_backend backend
   return 0;
 }
 
+#if VIBEQC_HAS_CUDA
+KsTransportDiagnostic adapt_transfers(const dft::CudaKsTransfers& value) {
+  return {value.setup_h2d_bytes,
+          value.density_h2d_bytes,
+          value.scalar_d2h_bytes,
+          value.matrix_d2h_bytes,
+          value.synchronizations,
+          value.iterations,
+          value.occupation_stabilized_proposals};
+}
+
+void add_transfers(dft::CudaKsTransfers& target, const dft::CudaKsTransfers& value) {
+  const auto add = [](std::uint64_t& destination, std::uint64_t increment) {
+    if (increment > std::numeric_limits<std::uint64_t>::max() - destination)
+      throw std::overflow_error("CUDA KS transport counter overflow");
+    destination += increment;
+  };
+  add(target.setup_h2d_bytes, value.setup_h2d_bytes);
+  add(target.density_h2d_bytes, value.density_h2d_bytes);
+  add(target.scalar_d2h_bytes, value.scalar_d2h_bytes);
+  add(target.matrix_d2h_bytes, value.matrix_d2h_bytes);
+  add(target.synchronizations, value.synchronizations);
+  add(target.iterations, value.iterations);
+  add(target.occupation_stabilized_proposals, value.occupation_stabilized_proposals);
+}
+#endif
+
 class KsPreparedCalculation final : public PreparedCalculation {
  public:
   KsPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
@@ -218,6 +245,13 @@ class KsPreparedCalculation final : public PreparedCalculation {
 #if VIBEQC_HAS_CUDA
   dft::CudaKsPlan* cuda_plan() noexcept { return cuda_.get(); }
 #endif
+
+  std::optional<KsTransportDiagnostic> ks_transport_diagnostic() const override {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) return adapt_transfers(cuda_->transfers());
+#endif
+    return std::nullopt;
+  }
 
   Result execute(bool compute_forces) override {
     const char* method_name =
@@ -369,6 +403,10 @@ class KsPreparedBatch final : public PreparedBatch {
           // Preserve the last GOOD seed before freeing its device owner. This
           // explicit rebuild download is never part of routine SCF iterations.
           materialize_warm(i);
+#if VIBEQC_HAS_CUDA
+          if (auto* cuda = item.plan ? item.plan->cuda_plan() : nullptr)
+            add_transfers(item.retired_transfers, cuda->transfers());
+#endif
           item.plan.reset();
           item.resident_warm = false;
           item.plan = make_plan(target);
@@ -520,6 +558,18 @@ class KsPreparedBatch final : public PreparedBatch {
 
   void set_warm_start_updates(bool enabled) override { warm_updates_ = enabled; }
 
+  std::optional<KsTransportDiagnostic> ks_transport_diagnostic(std::size_t index) const override {
+    const auto& item = items_.at(index);
+#if VIBEQC_HAS_CUDA
+    if (auto* cuda = item.plan ? item.plan->cuda_plan() : nullptr) {
+      auto cumulative = item.retired_transfers;
+      add_transfers(cumulative, cuda->transfers());
+      return adapt_transfers(cumulative);
+    }
+#endif
+    return std::nullopt;
+  }
+
   // These profiles describe HF graph/provider layouts, not this method's
   // ordinary-stream schedule. Absence is explicit at the common interface.
   std::optional<std::vector<DirectShellClassProfileEntry>> last_direct_shell_class_profile()
@@ -560,6 +610,9 @@ class KsPreparedBatch final : public PreparedBatch {
     // an owner. Empty density with resident_warm=true is a valid lazy snapshot.
     mutable std::optional<scf::HfWarmState> warm;
     bool resident_warm{};
+#if VIBEQC_HAS_CUDA
+    dft::CudaKsTransfers retired_transfers;
+#endif
   };
   std::unique_ptr<KsPreparedCalculation> make_plan(const core::System& system) const {
     return std::make_unique<KsPreparedCalculation>(capabilities_, system, method_, options_,

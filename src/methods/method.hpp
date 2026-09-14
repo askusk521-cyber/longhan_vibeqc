@@ -53,6 +53,17 @@ struct Result {
   std::optional<dft::ScfDiagnostic> ks_diagnostic;
 };
 
+/** Method-neutral copy of the cumulative native CUDA KS movement ledger. */
+struct KsTransportDiagnostic {
+  std::uint64_t setup_h2d_bytes{};
+  std::uint64_t density_h2d_bytes{};
+  std::uint64_t scalar_d2h_bytes{};
+  std::uint64_t matrix_d2h_bytes{};
+  std::uint64_t synchronizations{};
+  std::uint64_t iterations{};
+  std::uint64_t occupation_stabilized_proposals{};
+};
+
 struct BatchItemResult {
   vibeqc_status status{VIBEQC_STATUS_INTERNAL_ERROR};
   Result calculation;
@@ -165,6 +176,9 @@ class PreparedCalculation {
    * diagnostics are always produced; forces are opt-in per execution. */
   virtual Result execute(bool compute_forces) = 0;
   virtual void invalidate_result() {}
+  [[nodiscard]] virtual std::optional<KsTransportDiagnostic> ks_transport_diagnostic() const {
+    return std::nullopt;
+  }
   [[nodiscard]] virtual std::optional<vibeqc_correlation_diagnostic> correlation_diagnostic()
       const {
     return std::nullopt;
@@ -189,6 +203,11 @@ class PreparedBatch {
       std::size_t index) const = 0;
   virtual void restore_warm_states(std::vector<std::optional<scf::HfWarmState>> states) = 0;
   virtual void set_warm_start_updates(bool enabled) = 0;
+  [[nodiscard]] virtual std::optional<KsTransportDiagnostic> ks_transport_diagnostic(
+      std::size_t index) const {
+    (void)index;
+    return std::nullopt;
+  }
   [[nodiscard]] virtual std::optional<std::vector<DirectShellClassProfileEntry>>
   last_direct_shell_class_profile() const = 0;
   [[nodiscard]] virtual std::optional<DirectPppsQueueProfile> last_direct_ppps_queue_profile()

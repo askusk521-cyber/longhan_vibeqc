@@ -7,7 +7,7 @@ from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
-from vibeqc import Atom, Calculator, KsDiagnostic, _native
+from vibeqc import Atom, Calculator, KsDiagnostic, KsTransportDiagnostic, _native
 from vibeqc_compiler.dft.grid import MolecularGrid
 
 H3 = [("H", (0, 0, 0)), ("H", (0.15, 0.13, 1.5)), ("H", (0.6, 0.26, 3.0))]
@@ -219,6 +219,80 @@ def test_hf_has_no_ks_snapshot():
             )
             == _native.STATUS_NOT_IMPLEMENTED
         )
+
+
+def test_cpu_and_old_libraries_report_no_cuda_ks_transport(monkeypatch):
+    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
+    calculator = Calculator(method="lda-rks", device="cpu")
+    assert calculator.singlepoint(atoms).ks_transport_diagnostic is None
+    with calculator.prepare_batch([atoms]) as batch:
+        assert batch.ks_transport_diagnostics == (None,)
+        query = batch._library.vibeqc_batch_get_ks_transport_diagnostic
+        value = _native.KsTransportDiagnosticDescriptor(
+            ctypes.sizeof(_native.KsTransportDiagnosticDescriptor),
+            _native.ABI_VERSION,
+        )
+        value.setup_h2d_bytes = 19
+        assert query(batch._batch, 0, None) == _native.STATUS_NOT_IMPLEMENTED
+        assert (
+            query(batch._batch, 0, ctypes.byref(value))
+            == _native.STATUS_NOT_IMPLEMENTED
+        )
+        assert value.setup_h2d_bytes == 19
+        assert query(batch._batch, 1, None) == _native.STATUS_INVALID_ARGUMENT
+        monkeypatch.setattr(
+            batch._library, "vibeqc_batch_get_ks_transport_diagnostic", None
+        )
+        assert batch.ks_transport_diagnostics == (None,)
+
+
+def test_cuda_ks_transport_covers_setup_replay_and_geometry_rebuild(device):
+    if device != "cuda":
+        pytest.skip("transport ledger is CUDA-only")
+    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
+    changed = np.asarray([[0, 0, -0.7], [0, 0, 0.735]])
+    calculator = Calculator(
+        method="pbe-rks",
+        device="cuda",
+        max_iterations=150,
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+    )
+    with calculator.prepare_batch([atoms]) as batch:
+        setup = batch.ks_transport_diagnostics[0]
+        assert isinstance(setup, KsTransportDiagnostic)
+        assert setup.setup_h2d_bytes > 0
+        assert setup.density_h2d_bytes == setup.scalar_d2h_bytes == 0
+        assert setup.matrix_d2h_bytes == setup.iterations == 0
+
+        cold_result = batch.execute(strict=True).items[0]
+        cold = batch.ks_transport_diagnostics[0]
+        assert cold.setup_h2d_bytes == setup.setup_h2d_bytes
+        assert cold.density_h2d_bytes > 0
+        assert cold.scalar_d2h_bytes > 0
+        assert cold.matrix_d2h_bytes == 0
+        assert cold.iterations == cold_result.iterations
+        assert cold.synchronizations > setup.synchronizations
+
+        warm_result = batch.execute(strict=True).items[0]
+        warm = batch.ks_transport_diagnostics[0]
+        assert warm.setup_h2d_bytes == cold.setup_h2d_bytes
+        assert warm.density_h2d_bytes == cold.density_h2d_bytes
+        assert warm.matrix_d2h_bytes == 0
+        assert warm.iterations == cold.iterations + warm_result.iterations
+        assert warm.scalar_d2h_bytes > cold.scalar_d2h_bytes
+
+        changed_result = batch.execute([changed], strict=True).items[0]
+        rebuilt = batch.ks_transport_diagnostics[0]
+        assert changed_result.warm_start_used
+        assert rebuilt.setup_h2d_bytes > warm.setup_h2d_bytes
+        assert rebuilt.density_h2d_bytes > warm.density_h2d_bytes
+        assert rebuilt.matrix_d2h_bytes > warm.matrix_d2h_bytes
+        assert rebuilt.iterations == warm.iterations + changed_result.iterations
+        assert rebuilt.synchronizations > warm.synchronizations
+        json.dumps(rebuilt.to_payload(), allow_nan=False)
+        with pytest.raises(FrozenInstanceError):
+            rebuilt.iterations = 0
 
 
 def test_cold_retry_replaces_the_failed_warm_attempt_history(device):

@@ -24,7 +24,7 @@ from .elements import checked_integer
 from .profiles import canonical_hash
 
 if TYPE_CHECKING:
-    from .ks_diagnostics import KsDiagnostic
+    from .ks_diagnostics import KsDiagnostic, KsTransportDiagnostic
 
 _METHODS = {
     "rhf": _native.METHOD_RHF,
@@ -130,6 +130,7 @@ class Result:
     correlation: CorrelationResult | None = None
     physical_residual_rms: float | None = None
     ks_diagnostic: KsDiagnostic | None = None
+    ks_transport_diagnostic: KsTransportDiagnostic | None = None
 
 
 @dataclass(frozen=True)
@@ -1333,10 +1334,17 @@ class Calculator:
                 else "cpu_reference"
             )
             ks_diagnostic = None
+            ks_transport_diagnostic = None
             if self._ks_options is not None:
-                from .ks_diagnostics import read_ks_diagnostic
+                from .ks_diagnostics import (
+                    read_ks_diagnostic,
+                    read_ks_transport_diagnostic,
+                )
 
                 ks_diagnostic = read_ks_diagnostic(self._library, calculation)
+                ks_transport_diagnostic = read_ks_transport_diagnostic(
+                    self._library, calculation
+                )
             return Result(
                 energy=result_descriptor.energy,
                 forces=forces,
@@ -1359,6 +1367,7 @@ class Calculator:
                 correlation=correlation,
                 physical_residual_rms=physical_residual_rms,
                 ks_diagnostic=ks_diagnostic,
+                ks_transport_diagnostic=ks_transport_diagnostic,
             )
         finally:
             if calculation.value:
