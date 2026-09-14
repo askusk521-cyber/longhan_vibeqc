@@ -232,7 +232,7 @@ def cuda_df_candidates(
             # One ordinary AO eigensystem serves the bucket serially. The
             # native adapter checks queried device/host workspace against this
             # allowance before allocation; neither uses the opaque allowance.
-            ordinary_eigen_workspace = (64 << 10) + 128 * n * n
+            ordinary_eigen_workspace = (1 << 20) + 128 * n * n
             ordinary_eigen_device = ordinary_eigen_workspace + 8 * (3 * n * n + n) + 5
             persistent_device += ordinary_eigen_device
             persistent_device += (

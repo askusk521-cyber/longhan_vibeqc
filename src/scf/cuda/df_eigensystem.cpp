@@ -107,7 +107,10 @@ vibeqc_status prepare(CudaDensityFittingJkPlan& plan, OrdinaryEigensystem*& stat
   // opaque-library allowance or silently exceed the admitted numeric capacity.
   const auto allowance = df_eigen_workspace_allowance(n);
   if (candidate->workspace_bytes > allowance || candidate->host_workspace_bytes > allowance) {
-    detail = "ordinary CUDA DF eigensolver exceeds its admitted workspace allowance";
+    detail = "ordinary CUDA DF eigensolver exceeds its admitted workspace allowance: device=" +
+             std::to_string(candidate->workspace_bytes) +
+             ", host=" + std::to_string(candidate->host_workspace_bytes) +
+             ", allowance=" + std::to_string(allowance);
     return VIBEQC_STATUS_OUT_OF_MEMORY;
   }
   if (candidate->workspace_bytes) {

@@ -14,15 +14,16 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.parametrize("method", ["rhf", "uhf"])
-@pytest.mark.parametrize("budget", [0, 512 << 10, 8 << 20])
+@pytest.mark.parametrize("budget", [0, 4 << 20, 8 << 20])
 def test_occupied_scf_matches_dense_across_warm_replays(
     method, budget, monkeypatch, tmp_path
 ):
     """Policy changes rebuild captured shapes; imported warm D seeds dense K."""
     assert os.environ.get("SLURM_JOB_ID")
-    # The smaller positive allowance still covers the complete three-item
-    # source/SCF plan. Deliberately partial AO/auxiliary tiles are exercised by
-    # the native fixed-density tests; an infeasible plan cannot test K parity.
+    # The smaller positive allowance covers the complete three-item plan and
+    # the ordinary eigensolver's fixed workspace inside the half-budget value
+    # partition. Native fixed-density tests exercise deliberately partial tiles;
+    # an infeasible plan cannot test K parity.
     systems = [[(1, (0.0, 0.0, -r)), (1, (0.0, 0.0, r))] for r in (0.7, 1.1, 1.5)]
     options = {
         "method": method,

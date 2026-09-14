@@ -5,7 +5,7 @@ from vibeqc import Calculator
 from vibeqc.resources_df import density_fitting_tile_plan
 
 
-@pytest.mark.parametrize("generated,full_bytes", [(False, 120727), (True, 116631)])
+@pytest.mark.parametrize("generated,full_bytes", [(False, 1103767), (True, 1099671)])
 @pytest.mark.parametrize("dense_policy", [None, "dense"])
 def test_exchange_reservation_preserves_original_dense_boundaries(
     monkeypatch, generated, full_bytes, dense_policy
@@ -13,7 +13,7 @@ def test_exchange_reservation_preserves_original_dense_boundaries(
     """Ordinary eigen retention shifts dense/occupied boundaries equally.
 
     The original 8-AO dense bounds were 45394/41298 bytes. This slice adds
-    a serialized 3-matrix AO frame and admitted provider workspace (75333
+    a serialized 3-matrix AO frame and admitted provider workspace (1058373
     bytes), while the occupied-factor differential remains unchanged.
     """
     library = Calculator()._library
@@ -37,9 +37,9 @@ def test_exchange_reservation_preserves_original_dense_boundaries(
     dense = query(full_bytes)
     assert dense.stores_full_three_center
     assert dense.peak_workspace_bytes == full_bytes
-    assert query(100503).peak_workspace_bytes == 100503
+    assert query(1083543).peak_workspace_bytes == 1083543
     with pytest.raises(ValueError, match="cannot hold the metric"):
-        query(100502)
+        query(1083542)
 
     monkeypatch.setenv("VIBEQC_DF_EXCHANGE", "occupied")
     # Two full 8x8 factors, two generation words and an error word per item.
@@ -48,8 +48,8 @@ def test_exchange_reservation_preserves_original_dense_boundaries(
     assert not query(full_bytes).stores_full_three_center
     assert query(full_bytes + reserve).stores_full_three_center
     with pytest.raises(ValueError, match="cannot hold the metric"):
-        query(100503)
-    assert query(100503 + reserve).peak_workspace_bytes == 100503 + reserve
+        query(1083543)
+    assert query(1083543 + reserve).peak_workspace_bytes == 1083543 + reserve
 
 
 def test_df_shape_query_composes_fixed_reservation_and_native_tile_shrinking():

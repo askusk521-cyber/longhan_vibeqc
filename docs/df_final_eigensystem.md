@@ -51,7 +51,7 @@ has its separate explicit reservation below.
 
 The device ledger charges three AO matrices, eigenvalues, info, active mask
 and the actual queried solver workspace. Native and Python shape planners
-reserve 64 KiB + 16 n^2 doubles for that workspace and separately for its host
+reserve 1 MiB + 16 n^2 doubles for that workspace and separately for its host
 workspace. A provider query exceeding either allowance fails as out-of-memory
 before allocating the workspace. Existing serialized host SCF scratch covers
 packing and frame validation; retained host workspace is additionally charged.
@@ -60,6 +60,12 @@ later retry. Teardown releases the frame on its owning device before the
 borrowed stream and handles. Error paths drain submitted work before temporary
 host buffers die. Outputs are cleared on any non-alias failure. There is no
 implicit CPU-reference fallback from this operation.
+
+Real CUDA 12.9.1 workspace queries at 1–1536 AOs include a fixed cost of about
+0.5 MiB at the smallest dimensions. Budgets must include that cost even for
+tiny molecular fixtures; unsupported smaller budgets fail as OOM. Actual
+query sizes are checked on every newly created frame and included in a
+capacity-rejection detail, rather than assumed from the asymptotic formula.
 
 ## Causal measurement
 

@@ -972,12 +972,15 @@ int main() {
           const std::vector<vibeqc::scf::initial_guess::OverlapOrthogonalizer*> overlap_views{
               &overlap_owners[0], &overlap_owners[1]};
           std::vector<double> initial_forces;
-          for (std::size_t budget : {0U, 32768U, 1024U * 1024U, 8U * 1024U * 1024U}) {
+          for (std::size_t budget : {0U, 32768U, 1024U * 1024U, 2U * 1024U * 1024U,
+                                     4U * 1024U * 1024U, 8U * 1024U * 1024U}) {
             bucket_options.density_fitting_memory_budget_bytes = budget;
             const auto replay = run(&cached.plan, bucket_systems, auxiliary, bucket_options,
                                     bucket_initial, 0, nullptr, &prepared_cache, &overlap_views);
-            if (budget == 32768U) {
-              // This sp batch cannot fit its minimal DF/eigen allowance in 32 KiB.
+            if (budget != 0 && budget <= 2U * 1024U * 1024U) {
+              // These budgets cannot fit the fixed ordinary solver allowance
+              // together with this sp batch's source/SCF buffers in the
+              // existing half-budget value-plan partition.
               // A stale default cache used to bypass that active limit.
               require(replay.size() == 2 && replay[0].status == VIBEQC_STATUS_OUT_OF_MEMORY &&
                           replay[1].status == VIBEQC_STATUS_OUT_OF_MEMORY && !cached.plan,
@@ -1005,7 +1008,7 @@ int main() {
           require(vibeqc::scf::factor_density_fitting_metric(integrals.metric, integrals.naux, 0.05)
                           .effective_rank < integrals.naux,
                   "cache cutoff regression must discard a metric direction");
-          for (std::size_t budget : {0U, 1024U * 1024U}) {
+          for (std::size_t budget : {0U, 4U * 1024U * 1024U}) {
             bucket_options.density_fitting_memory_budget_bytes = budget;
             for (double cutoff : {1.0e-10, 0.05, 1.0e-10}) {
               bucket_options.density_fitting_relative_threshold = cutoff;

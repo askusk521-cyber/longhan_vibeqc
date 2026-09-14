@@ -16,6 +16,35 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.parametrize("method", ("rhf", "uhf"))
+@pytest.mark.parametrize("budget", (512 << 10, 1 << 20, 2 << 20))
+def test_tiny_final_provider_budget_rejects_without_reference_retry(
+    method, budget, monkeypatch, tmp_path
+):
+    """The fixed library scratch cannot be hidden behind an old smaller budget."""
+    from vibeqc import _native
+
+    assert os.environ.get("SLURM_JOB_ID")
+    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
+    calc = Calculator(
+        method=method,
+        basis="def2-svp",
+        device="cuda",
+        density_fitting="cuda",
+        density_fitting_memory_budget_bytes=budget,
+    )
+    with calc.prepare_batch([atoms]) as batch:
+        path = tmp_path / "rejected.jsonl"
+        monkeypatch.setenv("VIBEQC_DF_HOST_TRACE", str(path))
+        result = batch.execute(strict=False, properties=("energy",))
+        monkeypatch.delenv("VIBEQC_DF_HOST_TRACE")
+        assert result.items[0].status == _native.STATUS_OUT_OF_MEMORY
+        assert not result.items[0].warm_start_fallback
+        calls = aggregate_host(read_host_trace(path))["eigensolves_by_reason"]
+        assert calls.get("fallback", {}).get("calls", 0) == 0
+        assert calls.get("final_fock", {}).get("calls", 0) == 0
+
+
+@pytest.mark.parametrize("method", ("rhf", "uhf"))
 @pytest.mark.parametrize("representation", ("cartesian", "spherical"))
 @pytest.mark.parametrize("batch_size", (1, 4))
 @pytest.mark.parametrize("budget", (0, 8 << 20))
