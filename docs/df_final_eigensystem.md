@@ -43,6 +43,12 @@ scratch. Calls require a noncapturing stream; the owning plan already serializes
 access. Warm replay does not create handles, query capabilities or allocate
 another device workspace.
 
+The metric setup handle and parameters now survive until plan teardown; their
+former setup-time destruction would leave the ordinary adapter uninitialized.
+Temporary metric solver scratch still expires at setup completion. The retained
+handles use the existing opaque library lifetime allowance; numeric workspace
+has its separate explicit reservation below.
+
 The device ledger charges three AO matrices, eigenvalues, info, active mask
 and the actual queried solver workspace. Native and Python shape planners
 reserve 64 KiB + 16 n^2 doubles for that workspace and separately for its host

@@ -582,10 +582,9 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
                      cuda_failure(cuda_error, "finish CUDA DF plan preparation", detail));
   }
 
-  (void)cusolverDnDestroyParams(candidate->solver_parameters);
-  candidate->solver_parameters = nullptr;
-  (void)cusolverDnDestroy(candidate->solver);
-  candidate->solver = nullptr;
+  // Keep the metric provider's handles for ordinary AO setup/final solves.
+  // SetupBuffers still drops the numeric metric scratch; release() owns the
+  // handle/parameter teardown after the retained ordinary workspace is freed.
   if (candidate->integral_source) {
     candidate->metric_eigenvectors = std::exchange(setup.metrics, nullptr);
     candidate->metric_eigenvalues = std::exchange(setup.eigenvalues, nullptr);
