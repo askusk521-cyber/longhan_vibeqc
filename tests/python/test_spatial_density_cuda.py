@@ -110,7 +110,15 @@ def test_spatial_current_features_match_masked_global_d(
         assert spatial.tile_plan == spatial._cuda.plan
 
 
-@pytest.mark.parametrize("name", ["LDA_XC_PW", "PBE"])
+@pytest.mark.parametrize(
+    "name,ingredients",
+    [
+        ("LDA_XC_PW", ("rho",)),
+        ("PBE", ("rho", "gradient")),
+        ("PBE", ("rho", "gradient", "sigma")),
+    ],
+    ids=("lda", "pbe-minimal", "pbe-sigma"),
+)
 @pytest.mark.parametrize(
     "spin,layout",
     [("polarized", "spin"), ("polarized", "total"), ("unpolarized", "total")],
@@ -120,6 +128,7 @@ def test_spatial_xc_current_routes_and_two_budgets(
     artifact,
     local_case,
     name,
+    ingredients,
     spin,
     layout,
     cap,
@@ -131,7 +140,6 @@ def test_spatial_xc_current_routes_and_two_budgets(
         source = DensitySource(2 * source.density[0], basis_identity=basis.identity)
         source = source.with_orbitals((c, c), (f, f), stamp=source.stamp)
     counts = tuple(map(len, source.occupations))
-    ingredients = ("rho",) if name == "LDA_XC_PW" else ("rho", "gradient", "sigma")
     budget = ResourceBudget(host_bytes=32 << 20, device_bytes=cap)
     with owner(
         basis,
@@ -214,7 +222,12 @@ def test_spatial_native_cuda_rejects_potential_at_vacuum(artifact, local_case):
         endpoint.execute(source, stamp=source.stamp)
 
 
-def test_spatial_native_cuda_requires_complete_canonical_spec(artifact, local_case):
+@pytest.mark.parametrize(
+    "ingredients", [("rho", "gradient"), ("rho", "gradient", "sigma")]
+)
+def test_spatial_native_cuda_requires_complete_canonical_spec(
+    artifact, local_case, ingredients
+):
     basis, grid, _ = local_case
     source = factors(basis, (basis.nao + 3, 5))
     canonical = functional("PBE", spin="polarized")
@@ -230,17 +243,18 @@ def test_spatial_native_cuda_requires_complete_canonical_spec(artifact, local_ca
         compiler=CppCompilerAdapter(Path(shutil.which("c++"))),
         cache=Path(".artifacts/density-xc-cache"),
     )
-    with (
-        owner(
-            basis,
-            grid,
-            artifact,
-            ingredients=("rho", "gradient", "sigma"),
-        ) as spatial,
-        PreparedXCContractions(native, basis, grid, spatial=spatial) as endpoint,
-    ):
-        endpoint.execute(source, stamp=source.stamp)
-        assert endpoint.statistics["xc_backend"] == "native_cpu"
+    with owner(basis, grid, artifact, ingredients=ingredients) as spatial:
+        if "sigma" not in ingredients:
+            # A noncanonical composition still uses CPU contraction and must
+            # fail at preparation before its missing feature can be consumed.
+            with pytest.raises(ValueError, match="ingredients"):
+                PreparedXCContractions(native, basis, grid, spatial=spatial)
+        else:
+            with PreparedXCContractions(
+                native, basis, grid, spatial=spatial
+            ) as endpoint:
+                endpoint.execute(source, stamp=source.stamp)
+                assert endpoint.statistics["xc_backend"] == "native_cpu"
 
 
 def test_spatial_unpolarized_cuda_rejects_unequal_orbital_features(
