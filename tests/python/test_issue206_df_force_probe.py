@@ -122,10 +122,11 @@ def test_changed_binary_never_publishes_a_ledger(protocol, monkeypatch):
     assert not output.exists()
 
 
+@pytest.mark.parametrize("variable", ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE"))
 def test_unrequested_trace_cannot_contaminate_unprofiled_evidence(
-    protocol, monkeypatch
+    protocol, monkeypatch, variable
 ):
-    monkeypatch.setenv("VIBEQC_DF_TRACE", "unexpected.jsonl")
+    monkeypatch.setenv(variable, "unexpected.jsonl")
     with pytest.raises(SystemExit):
         probe.main()
 
@@ -200,6 +201,26 @@ def test_trace_protocol_preserves_raw_evidence_and_requires_force_components(
         Path(os.environ["VIBEQC_DF_TRACE"]).write_text(
             "".join(json.dumps(row) + "\n" for row in rows)
         )
+        host = {
+            "schema": "vibeqc.df_host_trace",
+            "version": 1,
+            "id": 0,
+            "valid": True,
+            "regions": [
+                {
+                    "name": "reference_eigensolve",
+                    "reason": "core_guess",
+                    "parent": -1,
+                    "item": 0,
+                    "nbf": 2,
+                    "wall_ms": 1,
+                    "cpu_ms": 0.5,
+                    "finished": True,
+                    "failed": False,
+                }
+            ],
+        }
+        Path(os.environ["VIBEQC_DF_HOST_TRACE"]).write_text(json.dumps(host) + "\n")
         return dict(force if "forces" in properties else energy)
 
     monkeypatch.setattr(probe, "_sample", sample)
@@ -219,3 +240,4 @@ def test_trace_protocol_preserves_raw_evidence_and_requires_force_components(
         with pytest.raises(FileExistsError):
             probe.main()
     assert "VIBEQC_DF_TRACE" not in os.environ
+    assert "VIBEQC_DF_HOST_TRACE" not in os.environ

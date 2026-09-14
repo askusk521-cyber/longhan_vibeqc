@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #include "integrals/s_integrals.hpp"
@@ -213,6 +214,15 @@ struct DensityFittingTilePlan {
   std::size_t occupied_tile{};
   std::size_t peak_workspace_bytes{};
   bool stores_full_three_center{};
+};
+
+/** A valid DF shape has no tile fitting the requested positive allowance.
+ * Keep the shape-query invalid-argument contract while allowing execution
+ * adapters to report resource exhaustion separately from malformed inputs. */
+class DensityFittingBudgetError : public std::invalid_argument {
+ public:
+  DensityFittingBudgetError()
+      : std::invalid_argument("DF memory budget cannot hold the metric and one contraction tile") {}
 };
 
 /**

@@ -5,12 +5,17 @@ from vibeqc import Calculator
 from vibeqc.resources_df import density_fitting_tile_plan
 
 
-@pytest.mark.parametrize("generated,full_bytes", [(False, 45394), (True, 41298)])
+@pytest.mark.parametrize("generated,full_bytes", [(False, 1103767), (True, 1099671)])
 @pytest.mark.parametrize("dense_policy", [None, "dense"])
 def test_exchange_reservation_preserves_original_dense_boundaries(
     monkeypatch, generated, full_bytes, dense_policy
 ):
-    """Thresholds were checked against the pre-occupied merged native library."""
+    """Ordinary eigen retention shifts dense/occupied boundaries equally.
+
+    The original 8-AO dense bounds were 45394/41298 bytes. This slice adds
+    a serialized 3-matrix AO frame and admitted provider workspace (1058373
+    bytes), while the occupied-factor differential remains unchanged.
+    """
     library = Calculator()._library
     if dense_policy is None:
         monkeypatch.delenv("VIBEQC_DF_EXCHANGE", raising=False)
@@ -32,9 +37,9 @@ def test_exchange_reservation_preserves_original_dense_boundaries(
     dense = query(full_bytes)
     assert dense.stores_full_three_center
     assert dense.peak_workspace_bytes == full_bytes
-    assert query(25170).peak_workspace_bytes == 25170
+    assert query(1083543).peak_workspace_bytes == 1083543
     with pytest.raises(ValueError, match="cannot hold the metric"):
-        query(25169)
+        query(1083542)
 
     monkeypatch.setenv("VIBEQC_DF_EXCHANGE", "occupied")
     # Two full 8x8 factors, two generation words and an error word per item.
@@ -43,8 +48,8 @@ def test_exchange_reservation_preserves_original_dense_boundaries(
     assert not query(full_bytes).stores_full_three_center
     assert query(full_bytes + reserve).stores_full_three_center
     with pytest.raises(ValueError, match="cannot hold the metric"):
-        query(25170)
-    assert query(25170 + reserve).peak_workspace_bytes == 25170 + reserve
+        query(1083543)
+    assert query(1083543 + reserve).peak_workspace_bytes == 1083543 + reserve
 
 
 def test_df_shape_query_composes_fixed_reservation_and_native_tile_shrinking():
@@ -133,3 +138,23 @@ def test_generated_residency_uses_complete_source_specific_budget():
     assert 8 * 192**3 > constrained.budget_bytes
     assert not constrained.stores_full_three_center
     assert constrained.peak_workspace_bytes <= constrained.budget_bytes
+
+
+def test_overlap_storage_is_reserved_in_every_cuda_df_candidate():
+    """Shape-only admission must charge retained S/X/coordinates for each item."""
+    import json
+
+    atoms = [("H", (0, 0, -0.7)), ("H", (0, 0, 0.7))]
+    request = Calculator(device="cuda", density_fitting="cuda")._resource_request(
+        [atoms] * 4
+    )
+    # A CPU-only build deliberately publishes no CUDA candidates. Its pure
+    # common shape planner is already covered by the tests above.
+    if not request.candidates:
+        pytest.skip("requires a CUDA-enabled library, no GPU execution")
+    for candidate in request.candidates:
+        inventory = json.loads(dict(candidate.decisions)["bucket_inventory"])
+        for row in inventory:
+            expected = 8 * row["batch"] * (2 * row["nbf"] ** 2 + row["coordinates"])
+            assert row["overlap_cache_host_bytes"] == expected
+            assert row["resident_host_bytes"] >= expected

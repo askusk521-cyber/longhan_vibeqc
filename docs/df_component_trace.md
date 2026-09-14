@@ -38,6 +38,61 @@ invalid instrumentation. Output paths should be outside the source tree (or
 ignored by Git) so writing evidence does not change the identified checkout.
 Trace files must be fresh; the probe never overwrites earlier captures.
 
+## Host eigensolve ledger for #308
+
+`VIBEQC_DF_HOST_TRACE=/absolute/fresh.jsonl` records host scopes and actual
+CPU-reference eigensolve invocations. The existing force probe's
+`--component-trace-dir` collects this companion file together with the CUDA
+ledger. The two clocks are reported separately. Setting either trace variable
+implicitly on a clean force-probe invocation is rejected.
+
+Each `reference_eigensolve` leaf records its dimension, reason (`overlap`,
+`core_guess`, `final_fock`, `reference_export`, `fallback`, or `unspecified`),
+item, host wall milliseconds, thread CPU milliseconds and exceptional exit.
+Only the actual oracle entry emits this leaf; an intended solve, cache flag or
+graph declaration cannot count as executed work. The Jacobi arithmetic and
+overlap singularity threshold are unchanged. A small observer interface keeps
+the independent reference and initial-guess modules free of runtime/CUDA
+dependencies. The runtime owns timers, bounded records and file output.
+
+`benchmarks/df_component_ledger.py` validates the host JSONL and subtracts
+immediate children within each root to produce exclusive host phases. Root
+and ancestor IDs disambiguate source indices local to different CUDA buckets.
+Thread CPU time is `null` when the platform cannot supply it; process CPU time
+is never substituted. Host wall time includes waiting and descheduling, so
+wall minus CPU time is not automatically all GPU waiting. Concurrent CPU
+worker roots overlap: their wall times must not be summed into endpoint time.
+Host and CUDA-event times must not be added together either.
+
+The existing #206 matrix entry point also supports native protocol controls:
+
+```bash
+srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 --time=00:20:00 \
+  env PYTHONPATH="$PWD/python" /path/to/python benchmarks/issue206_df_matrix.py \
+  --run --host-workloads --case water-tetramer-def2-svp-spherical --batch 1 \
+  --library "$PWD/build/cuda/libvibeqc.so" --memory-budget-bytes 1073741824 \
+  --energy-only --repeats 5 --host-trace-dir /path/to/fresh-host-traces \
+  --output-dir /path/to/host-components
+```
+
+It retains cold creation/solve/destruction, fixed-seed replay, energy-only or
+energy-plus-force, and a changed-geometry item. Every changed sample restores
+the original geometry before starting its timer. Omit `--host-trace-dir` for
+separate clean timing; choose batch 4 or the existing 192/384-AO inputs to
+extend the domain. Identical A/B configurations are an ABBA protocol control,
+not a speedup or an external-engine parity result. Complete traffic/device
+work still comes from the separate CUDA/Nsight ledger; the original matched
+DF-versus-DF matrix remains the owner of parity acceptance.
+
+For the lazy-initial-density slice, add `--eager-core-ablation` to the host
+workload invocation. The baseline selection explicitly requests the old warm
+core frame through `VIBEQC_DF_EAGER_CORE_GUESS=1`; the candidate consumes the
+same frozen density without that unused solve. Cold density, overlap and
+finalization are identical. Actual leaf counts must distinguish the selections
+in a separate traced run. Clean interleaved endpoint timings own any savings
+claim; the runner rejects an ambient eager-guess flag. This private diagnostic
+control is not a different physical initial guess or a fallback policy.
+
 The default `--memory-budget-bytes 0` preserves the original probe's host
 resident compatibility route. A positive value, for example `268435456`,
 selects the existing bounded generated-source execution. Record and compare

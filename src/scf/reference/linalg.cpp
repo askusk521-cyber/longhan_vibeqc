@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "scf/reference/observation.hpp"
+
 namespace vibeqc::scf::reference {
 
 Matrix identity(std::size_t n) {
@@ -44,7 +46,11 @@ Matrix transpose(const Matrix& a, std::size_t n) {
 #if __has_cpp_attribute(gnu::aligned)
 [[gnu::aligned(32)]]
 #endif
-EigenResult symmetric_eigen(Matrix matrix, std::size_t n) {
+#if __has_cpp_attribute(gnu::noinline)
+// Keep the aligned numerical loop separate from the optional trace wrapper.
+[[gnu::noinline]]
+#endif
+static EigenResult symmetric_eigen_impl(Matrix matrix, std::size_t n) {
   Matrix vectors = identity(n);
   const std::size_t max_sweeps = std::max<std::size_t>(50, 20 * n * n);
   for (std::size_t sweep = 0; sweep < max_sweeps; ++sweep) {
@@ -107,7 +113,20 @@ EigenResult symmetric_eigen(Matrix matrix, std::size_t n) {
   return result;
 }
 
+EigenResult symmetric_eigen(Matrix matrix, std::size_t n) {
+  // Instrument the call boundary so the independent aligned Jacobi loop is
+  // unchanged. Only this leaf represents an actual reference diagonalization.
+  scf::reference::observation::Scope trace("reference_eigensolve", n);
+  return symmetric_eigen_impl(std::move(matrix), n);
+}
+
 Matrix symmetric_orthogonalizer(const Matrix& overlap, std::size_t n) {
+  using namespace observation;
+  Reason reason(active_reason == EigenReason::reference_export ||
+                        active_reason == EigenReason::fallback
+                    ? active_reason
+                    : EigenReason::overlap);
+  Scope trace("overlap_orthogonalization", n);
   const EigenResult eigen = symmetric_eigen(overlap, n);
   Matrix scaled = eigen.vectors;
   for (std::size_t column = 0; column < n; ++column) {
@@ -123,6 +142,7 @@ Matrix symmetric_orthogonalizer(const Matrix& overlap, std::size_t n) {
 }
 
 EigenResult generalized_eigen(const Matrix& fock, const Matrix& orthogonalizer, std::size_t n) {
+  scf::reference::observation::Scope trace("generalized_eigensolve", n);
   const Matrix transformed =
       multiply(transpose(orthogonalizer, n), multiply(fock, orthogonalizer, n), n);
   EigenResult result = symmetric_eigen(transformed, n);

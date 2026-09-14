@@ -30,7 +30,6 @@ using reference::generalized_eigen;
 using reference::Matrix;
 using reference::residual_rms;
 using reference::split_spin_matrices;
-using reference::symmetric_orthogonalizer;
 using reference::uhf_electronic_energy;
 
 template <class... Vectors>
@@ -99,16 +98,20 @@ void finalize_uhf(const PreparedFockPlan& plan, const integrals::IntegralData& i
 
 ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& options,
                             const integrals::IntegralData& ints, const PreparedFockPlan& plan,
-                            const std::vector<double>* initial_density) {
+                            const std::vector<double>* initial_density,
+                            initial_guess::OverlapOrthogonalizer* overlap_cache) {
   const std::size_t n = ints.nbf;
   const std::size_t occupied = static_cast<std::size_t>(system.electron_count / 2);
   if (occupied > n) {
     throw std::runtime_error("basis has fewer orbitals than occupied electron pairs");
   }
-  const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
-  EigenResult orbitals;
-  Matrix density =
-      prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density, orbitals);
+  const Matrix orthogonalizer = plan.overlap_orthogonalizer(overlap_cache);
+  std::optional<EigenResult> initial_orbitals;
+  Matrix density = prepare_initial_density(system, ints, orthogonalizer, occupied, initial_density,
+                                           initial_orbitals);
+  // Only a cold seed carries a core frame. Warm consumers solve their first
+  // target Fock before reading orbitals; RKS packs its initial factor cold-only.
+  EigenResult orbitals = std::move(initial_orbitals).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n, {static_cast<unsigned>(system.electron_count)},
                   2.0);
@@ -177,18 +180,20 @@ ScfResult run_rhf_host_plan(const core::System& system, const ScfOptions& option
 
 ScfResult run_uhf_host_plan(const core::System& system, const ScfOptions& options,
                             const integrals::IntegralData& ints, const PreparedFockPlan& plan,
-                            const std::vector<double>* initial_density) {
+                            const std::vector<double>* initial_density,
+                            initial_guess::OverlapOrthogonalizer* overlap_cache) {
   const std::size_t n = ints.nbf;
   const auto [alpha_occupied, beta_occupied] = spin_occupations(system);
   if (alpha_occupied > n || beta_occupied > n) {
     throw std::runtime_error("basis has fewer orbitals than required UHF spin occupations");
   }
-  const Matrix orthogonalizer = symmetric_orthogonalizer(ints.overlap, n);
-  EigenResult alpha_orbitals;
-  EigenResult beta_orbitals;
+  const Matrix orthogonalizer = plan.overlap_orthogonalizer(overlap_cache);
+  std::optional<EigenResult> initial_alpha, initial_beta;
   auto [alpha_density, beta_density] =
       prepare_initial_uhf_density(ints, orthogonalizer, alpha_occupied, beta_occupied,
-                                  initial_density, alpha_orbitals, beta_orbitals);
+                                  initial_density, initial_alpha, initial_beta);
+  EigenResult alpha_orbitals = std::move(initial_alpha).value_or(EigenResult{});
+  EigenResult beta_orbitals = std::move(initial_beta).value_or(EigenResult{});
   if (options.strict_initial_density && initial_density) {
     validate_seed(ints.overlap, *initial_density, n,
                   {static_cast<unsigned>(alpha_occupied), static_cast<unsigned>(beta_occupied)},

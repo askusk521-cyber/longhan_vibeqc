@@ -11,6 +11,50 @@ import pytest
 from benchmarks import issue206_df_matrix as matrix
 
 
+@pytest.mark.parametrize("reference", (False, True))
+@pytest.mark.parametrize("method", ("rhf", "uhf"))
+def test_final_provider_ablation_rejects_missing_or_unexpected_solves(
+    reference, method
+):
+    """A disabled trace hook or silent oracle fallback cannot pass promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_final_eigen_counts
+
+    count = 4 * (2 if method == "uhf" else 1)
+    record = {
+        "eigensolves_by_reason": {"final_fock": {"calls": count if reference else 0}},
+        "device_eigensolves_by_reason": {
+            "final_fock": {"calls": 0 if reference else count}
+        },
+    }
+    validate_final_eigen_counts(
+        record, batch_size=4, method=method, reference=reference
+    )
+    for group, name in (
+        ("eigensolves_by_reason", "final_fock"),
+        ("eigensolves_by_reason", "fallback"),
+        ("device_eigensolves_by_reason", "final_fock"),
+    ):
+        changed = copy.deepcopy(record)
+        changed[group].setdefault(name, {"calls": 0})["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared provider"):
+            validate_final_eigen_counts(
+                changed, batch_size=4, method=method, reference=reference
+            )
+    missing = copy.deepcopy(record)
+    group, name = (
+        ("eigensolves_by_reason", "final_fock")
+        if reference
+        else ("device_eigensolves_by_reason", "final_fock")
+    )
+    missing[group][name]["calls"] = 0
+    with pytest.raises(RuntimeError, match="declared provider"):
+        validate_final_eigen_counts(
+            missing, batch_size=4, method=method, reference=reference
+        )
+
+
 @pytest.mark.parametrize("failure", ["exit", "launch", "missing_result", "gate"])
 @pytest.mark.parametrize("energy_only", [False, True])
 def test_matrix_retains_failures_and_finishes_remaining_cases(
@@ -119,3 +163,117 @@ def test_published_archive_uses_verified_repository_format():
     from tools.unpack_evidence import unpack
 
     assert unpack(matrix.ROOT / "benchmarks/results/issue206-df-a") == 9
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("iterations", 3), ("warm_start_used", False), ("warm_start_fallback", True)],
+)
+def test_eager_lazy_timing_rejects_iteration_or_retry_changes(field, value):
+    """Equal endpoints cannot hide a different amount of SCF work."""
+    from benchmarks.df_host_workloads import validate_ablation_branches
+
+    converged = {"iterations": 2, "warm_start_used": True, "warm_start_fallback": False}
+    rows = [
+        {
+            "workload": "unchanged-geometry",
+            "selection": side,
+            "diagnostics": {"convergence": [dict(converged)]},
+        }
+        for side in ("baseline", "candidate")
+    ]
+    validate_ablation_branches(rows)
+    rows[1]["diagnostics"]["convergence"][0][field] = value
+    with pytest.raises(ValueError, match="matching SCF"):
+        validate_ablation_branches(rows)
+
+
+@pytest.mark.parametrize("ablation", ("lazy-core", "overlap-cache", "combined"))
+@pytest.mark.parametrize(
+    "workload", ("cold-start", "unchanged-geometry", "changed-geometry")
+)
+@pytest.mark.parametrize("selection", ("baseline", "candidate"))
+def test_preparation_ablation_rejects_wrong_actual_counts(
+    ablation, workload, selection
+):
+    """Reinstated solves or stale changed-item cache hits must fail promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import (
+        preparation_policies,
+        validate_preparation_counts,
+    )
+
+    eager, rebuild = preparation_policies(ablation)[selection]
+    overlap = (
+        4
+        if rebuild or workload == "cold-start"
+        else int(workload == "changed-geometry")
+    )
+    core = 4 if eager or workload == "cold-start" else 0
+    misses = 0 if rebuild else overlap
+    hits = 0 if rebuild else 4 - misses
+    components = {
+        "eigensolves_by_reason": {
+            "core_guess": {"calls": core},
+            "overlap": {"calls": overlap},
+        },
+        "exclusive_phases": {
+            "initial_density": {"calls": 4},
+            "overlap_cache_miss": {"calls": misses},
+            "overlap_cache_hit": {"calls": hits},
+        },
+    }
+
+    def validate(value):
+        validate_preparation_counts(
+            value, batch_size=4, workload=workload, eager=eager, rebuild=rebuild
+        )
+
+    validate(components)
+    for group, name in (
+        ("eigensolves_by_reason", "core_guess"),
+        ("eigensolves_by_reason", "overlap"),
+        ("exclusive_phases", "initial_density"),
+        ("exclusive_phases", "overlap_cache_hit"),
+        ("exclusive_phases", "overlap_cache_miss"),
+    ):
+        broken = copy.deepcopy(components)
+        broken[group][name]["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared solve/cache policy"):
+            validate(broken)
+
+
+@pytest.mark.parametrize("reference", (False, True))
+@pytest.mark.parametrize(
+    "workload,overlap,core",
+    (("cold-start", 4, 4), ("energy-only", 0, 0), ("changed-geometry", 1, 0)),
+)
+def test_setup_provider_counts_reject_wrong_provider(
+    reference, workload, overlap, core
+):
+    """Missing or unexpectedly substituted leaves cannot pass setup promotion."""
+    import copy
+
+    from benchmarks.df_host_workloads import validate_setup_eigen_counts
+
+    record = {
+        key: {
+            "overlap": {"calls": overlap if selected else 0},
+            "core_guess": {"calls": core if selected else 0},
+        }
+        for key, selected in (
+            ("eigensolves_by_reason", reference),
+            ("device_eigensolves_by_reason", not reference),
+        )
+    }
+    validate_setup_eigen_counts(
+        record, batch_size=4, workload=workload, reference=reference
+    )
+    for key in record:
+        changed = copy.deepcopy(record)
+        changed[key]["overlap"]["calls"] += 1
+        with pytest.raises(RuntimeError, match="declared provider"):
+            validate_setup_eigen_counts(
+                changed, batch_size=4, workload=workload, reference=reference
+            )

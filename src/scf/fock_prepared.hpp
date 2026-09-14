@@ -6,6 +6,9 @@
 #include "scf/cuda_fock_provider.hpp"
 
 namespace vibeqc::scf {
+namespace initial_guess {
+class OverlapOrthogonalizer;
+}
 
 /** Backend variants frozen into the prepared source; mathematical identity
  * remains in ResolvedFockBuild::spec. These switches never authorize DF. */
@@ -51,6 +54,12 @@ class PreparedFockPlan {
   const ResolvedFockBuild& strategy() const noexcept;
   const core::System& system() const noexcept;
   const integrals::IntegralData& one_electron() const noexcept;
+  /** CUDA fitted SCF retains validated X on this immutable source. A containing
+   * calculation may supply its own cache to survive value/force source replans;
+   * its ordered basis and device must remain fixed. CPU/exact plans preserve
+   * the reference solve and do not acquire persistent overlap storage. */
+  std::vector<double> overlap_orthogonalizer(
+      initial_guess::OverlapOrthogonalizer* external_cache = nullptr) const;
   /** CPU accounting borrows the actual DF owner, including its AO data. */
   const DensityFittingScfData* cpu_fitted_data() const noexcept;
   /** Host numerical bytes counted by the CPU SCF observer. Shared AO data is
