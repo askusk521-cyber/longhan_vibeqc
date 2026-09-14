@@ -2,8 +2,9 @@
 
 Baseline: live `origin/master` at `15d6936390723edf9e9eb0c91fecde4390490573`.
 The only open implementation PRs at the start were #306/#307, both for DFT.
-This work implements #308 through #309/#310/#311 and reuses #206's existing
-measurement/acceptance workflow. It does not replace #5 or Direct-vs-Direct
+This increment implements #308 instrumentation and prepares the subsequent
+#309/#310/#311 ablations using #206's existing measurement/acceptance workflow.
+It does not replace #5 or Direct-vs-Direct
 gates. No performance gain has been measured in this initial instrumentation
 increment.
 
