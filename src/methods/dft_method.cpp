@@ -1,25 +1,27 @@
 #include "methods/dft_method.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <limits>
-#include <map>
 #include <memory>
-#include <new>
-#include <optional>
-#include <tuple>
 #include <utility>
-#include <vector>
 
 #include "dft/ao_grid.hpp"
-#include "dft/cuda_xc.hpp"
 #include "dft/grid.hpp"
 #include "molecule/basis.hpp"
+#include "runtime/resource_usage.hpp"
 #include "scf/fock_prepared.hpp"
+#include "scf/initial_guess/density.hpp"
 #include "scf/mean_field.hpp"
 #include "scf/types.hpp"
 #include "vibeqc/vibeqc.hpp"
+
+#if VIBEQC_HAS_CUDA
+#include "dft/cuda_ks.hpp"
+#include "scf/cuda_direct_jk.hpp"
+#endif
 
 namespace vibeqc::methods::detail {
 namespace {
@@ -37,46 +39,7 @@ bool field_present(const vibeqc_method_descriptor& descriptor, std::size_t offse
   return descriptor.struct_size >= offset && descriptor.struct_size - offset >= width;
 }
 
-bool valid_coordinates(const std::vector<double>& coordinates, std::size_t atom_count) {
-  return coordinates.size() == 3 * atom_count &&
-         std::all_of(coordinates.begin(), coordinates.end(),
-                     [](double value) { return std::isfinite(value); });
-}
-
-std::vector<double> coordinates_of(const core::System& system) {
-  std::vector<double> result;
-  result.reserve(3 * system.atoms.size());
-  for (const auto& atom : system.atoms)
-    result.insert(result.end(), atom.position.begin(), atom.position.end());
-  return result;
-}
-
-void apply_coordinates(core::System& system, const std::vector<double>& coordinates) {
-  for (std::size_t atom = 0; atom < system.atoms.size(); ++atom)
-    std::copy_n(coordinates.begin() + static_cast<std::ptrdiff_t>(3 * atom), 3,
-                system.atoms[atom].position.begin());
-}
-
-vibeqc_status exception_status() {
-  try {
-    throw;
-  } catch (const MethodError& error) {
-    return error.status();
-  } catch (const vibeqc::Error& error) {
-    return error.status();
-  } catch (const std::bad_alloc&) {
-    return VIBEQC_STATUS_OUT_OF_MEMORY;
-  } catch (const std::invalid_argument&) {
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
-  } catch (const std::exception&) {
-    return VIBEQC_STATUS_NUMERICAL_FAILURE;
-  } catch (...) {
-    return VIBEQC_STATUS_INTERNAL_ERROR;
-  }
-}
-
-scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor,
-                            vibeqc_backend requested_backend) {
+scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor, vibeqc_backend backend) {
   if (!std::isfinite(descriptor.energy_tolerance) || !std::isfinite(descriptor.density_tolerance) ||
       !std::isfinite(descriptor.screening_tolerance))
     throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "DFT tolerances must be finite");
@@ -96,33 +59,72 @@ scf::ScfOptions dft_options(const vibeqc_method_descriptor& descriptor,
         mode != VIBEQC_DENSITY_FITTING_CUDA && mode != VIBEQC_DENSITY_FITTING_AUTO)
       throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown density-fitting execution mode");
     if (mode != VIBEQC_DENSITY_FITTING_NONE)
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        "DFT energy methods support conventional Coulomb only");
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT supports conventional Coulomb only");
   }
   if (field_present(descriptor, offsetof(vibeqc_method_descriptor, density_fitting_auxiliary_basis),
                     sizeof(descriptor.density_fitting_auxiliary_basis)) &&
       descriptor.density_fitting_auxiliary_basis != nullptr)
     throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT,
-                      "DFT energy methods do not accept an unused auxiliary basis");
+                      "DFT does not accept an unused auxiliary basis");
   if (field_present(descriptor, offsetof(vibeqc_method_descriptor, precision_mode),
                     sizeof(descriptor.precision_mode))) {
     if (descriptor.precision_mode != VIBEQC_PRECISION_FP64 &&
         descriptor.precision_mode != VIBEQC_PRECISION_AUTO)
       throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown floating-point precision mode");
     if (descriptor.precision_mode == VIBEQC_PRECISION_AUTO)
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        "DFT energy methods support explicit FP64 precision only");
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT supports explicit FP64 precision only");
   }
 
   scf::FockBuildSpec fock;
-  fock.spin = is_uks(descriptor.method) ? scf::FockSpin::Unrestricted : scf::FockSpin::Restricted;
+  fock.spin =
+      (descriptor.method == VIBEQC_METHOD_LDA_UKS || descriptor.method == VIBEQC_METHOD_PBE_UKS)
+          ? scf::FockSpin::Unrestricted
+          : scf::FockSpin::Restricted;
   fock.derivative_order = 0;
   fock.exchange.present = false;
-  const auto backend =
-      requested_backend == VIBEQC_BACKEND_CUDA ? scf::FockBackend::Cuda : scf::FockBackend::Cpu;
-  options.resolved_fock_build = scf::resolve_fock_build(fock, backend, options.screening_tolerance);
+  options.resolved_fock_build = scf::resolve_fock_build(
+      fock, backend == VIBEQC_BACKEND_CUDA ? scf::FockBackend::Cuda : scf::FockBackend::Cpu,
+      options.screening_tolerance);
   options.compute_forces = false;
   return options;
+}
+
+/** Copy every pointee before constructing scientific owners. Legacy method
+ * descriptors retain the original unit-radius GridSpec and 256-point tiles. */
+dft::GridSpec ks_grid_options(const vibeqc_method_descriptor& descriptor,
+                              scf::ScfOptions& options) {
+  dft::GridSpec grid;
+  if (!field_present(descriptor, offsetof(vibeqc_method_descriptor, ks_options),
+                     sizeof(descriptor.ks_options)) ||
+      !descriptor.ks_options)
+    return grid;
+  const auto& input = *descriptor.ks_options;
+  if (input.struct_size < sizeof(vibeqc_ks_options) || input.abi_version != VIBEQC_ABI_VERSION)
+    throw MethodError(VIBEQC_STATUS_ABI_MISMATCH, "KS options ABI mismatch");
+  if (input.scf_domain_version != 1)
+    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "unsupported KS tail/spin domain policy");
+  if (!input.tile_points || input.tile_points > static_cast<std::uint64_t>(INT_MAX))
+    throw std::invalid_argument("invalid KS XC tile points");
+  options.xc_tile_points = input.tile_points;
+  grid.version = input.grid_version;
+  grid.radial_points = input.radial_points;
+  grid.angular_polar = input.angular_polar;
+  grid.angular_azimuth = input.angular_azimuth;
+  grid.partition_iterations = input.partition_iterations;
+  grid.coincident_tolerance = input.coincident_tolerance;
+  if ((input.element_radii == nullptr) != (input.element_radius_count == 0) ||
+      (input.element_radii && input.element_radius_count != grid.element_radii.size()))
+    throw std::invalid_argument("KS element radii require 119 entries or NULL/zero");
+  if (input.element_radii) {
+    for (std::size_t z = 1; z < grid.element_radii.size(); ++z) {
+      const double radius = input.element_radii[z];
+      if (!std::isfinite(radius) || radius <= 0.0)
+        throw std::invalid_argument("KS element radii must be positive finite");
+      grid.element_radii[z] = radius == 1.0 ? 0.0 : radius;
+    }
+  }
+  dft::validate_grid_spec(grid);
+  return grid;
 }
 
 Result adapt_result(scf::ScfResult native, vibeqc_backend backend) {
@@ -135,61 +137,129 @@ Result adapt_result(scf::ScfResult native, vibeqc_backend backend) {
   result.convergence.converged = native.converged;
   result.executed_backend = backend;
   result.fock_builds = native.fock_builds;
+  native.dft_diagnostic.fock_builds = native.fock_builds;
+  native.dft_diagnostic.initial_density_used = native.initial_density_used;
+  // Move the snapshot instead of retaining another max-iteration history.
+  result.ks_diagnostic = std::move(native.dft_diagnostic);
   return result;
 }
 
-class DftPreparedCalculation final : public PreparedCalculation {
+/** The method's global ledger supplies the budget. Size the common direct
+ * source explicitly so its standalone default cap is not a second KS limit. */
+std::size_t ks_provider_bytes(const core::System& system, vibeqc_backend backend) {
+#if VIBEQC_HAS_CUDA
+  if (backend == VIBEQC_BACKEND_CUDA) {
+    std::size_t primitives = 0;
+    for (const auto& shell : system.shells)
+      primitives = runtime::add_capacity(primitives, shell.primitives.size());
+    return scf::cuda_direct_jk_device_bytes(1, molecule::ao_count(system), system.atoms.size(),
+                                            system.shells.size(), primitives, 0);
+  }
+#endif
+  return 0;
+}
+
+class KsPreparedCalculation final : public PreparedCalculation {
  public:
-  DftPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
-                         scf::ScfOptions options, const core::ContextState& context)
+  KsPreparedCalculation(Capabilities capabilities, core::System system, vibeqc_method method,
+                        scf::ScfOptions options, dft::GridSpec grid, vibeqc_backend backend,
+                        int device)
       : capabilities_(capabilities),
         system_(std::move(system)),
         method_(method),
         options_(std::move(options)),
-        backend_(context.requested_backend),
-        fock_(system_, nullptr, *options_.resolved_fock_build, context.device_id,
-              options_.density_fitting_memory_budget_bytes),
+        backend_(backend),
+        fock_(system_, nullptr, *options_.resolved_fock_build, device,
+              ks_provider_bytes(system_, backend)),
         basis_(system_),
-        grid_(system_),
-        cuda_xc_(backend_ == VIBEQC_BACKEND_CUDA
-                     ? std::make_unique<dft::PreparedCudaXcPlan>(
-                           basis_, context.device_id, context.compute_capability_major,
-                           context.compute_capability_minor,
-                           method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS)
-                     : nullptr) {}
+        grid_(system_, grid) {
+#if VIBEQC_HAS_CUDA
+    if (backend_ == VIBEQC_BACKEND_CUDA)
+      cuda_ = std::make_unique<dft::CudaKsPlan>(
+          fock_, basis_, grid_, options_,
+          method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS,
+          options_.xc_tile_points);
+#endif
+    runtime::sample_cpu_capacity(host_numeric_capacity());
+  }
 
   std::size_t atom_count() const noexcept override { return system_.atoms.size(); }
   const Capabilities& capabilities() const noexcept override { return capabilities_; }
+  const core::System& system() const noexcept { return system_; }
 
-  scf::ScfResult solve(bool compute_forces, const std::vector<double>* initial_density = nullptr) {
-    const bool pbe = method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS;
-    const bool uks = is_uks(method_);
-    const char* method_name = pbe ? "PBE" : "LDA";
-    if (compute_forces) {
-      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
-                        std::string(method_name) + (uks ? " UKS" : " RKS") +
-                            " nuclear gradients are tracked separately in issue #163");
-    }
-    if (backend_ == VIBEQC_BACKEND_CUDA) {
-      if (method_ == VIBEQC_METHOD_PBE_RKS)
-        return scf::run_pbe_rks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
-      if (method_ == VIBEQC_METHOD_LDA_UKS)
-        return scf::run_lda_uks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
-      if (method_ == VIBEQC_METHOD_PBE_UKS)
-        return scf::run_pbe_uks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
-      return scf::run_lda_rks_cuda(fock_, basis_, grid_, *cuda_xc_, options_, initial_density);
-    }
-    if (method_ == VIBEQC_METHOD_PBE_RKS)
-      return scf::run_pbe_rks(fock_, basis_, grid_, options_, initial_density);
-    if (method_ == VIBEQC_METHOD_LDA_UKS)
-      return scf::run_lda_uks(fock_, basis_, grid_, options_, initial_density);
-    if (method_ == VIBEQC_METHOD_PBE_UKS)
-      return scf::run_pbe_uks(fock_, basis_, grid_, options_, initial_density);
-    return scf::run_lda_rks(fock_, basis_, grid_, options_, initial_density);
+  /** Explicit retained vectors; object metadata and transient setup are not
+   * inferred from this lower-bound observation. Grid/basis buffers are owned. */
+  std::size_t host_numeric_capacity() const noexcept {
+    auto bytes =
+        runtime::add_capacity(fock_.cpu_observation_capacity(),
+                              runtime::vector_capacities(basis_.packed, grid_.points(),
+                                                         grid_.weights(), grid_.owners(), warm_));
+#if VIBEQC_HAS_CUDA
+    if (cuda_) bytes = runtime::add_capacity(bytes, cuda_->resources().retained_host_numeric_bytes);
+#endif
+    return bytes;
   }
 
+  /** Explicit output/rebuild export. Ordinary CUDA replays keep this on device. */
+  std::vector<double> warm_density() {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) return cuda_->warm_density();
+#endif
+    return warm_;
+  }
+
+  void clear_warm_start() noexcept {
+    warm_.clear();
+#if VIBEQC_HAS_CUDA
+    if (cuda_) cuda_->clear_warm_start();
+#endif
+  }
+
+#if VIBEQC_HAS_CUDA
+  dft::CudaKsPlan* cuda_plan() noexcept { return cuda_.get(); }
+#endif
+
   Result execute(bool compute_forces) override {
-    return adapt_result(solve(compute_forces), backend_);
+    const char* method_name =
+        (method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS) ? "PBE" : "LDA";
+    if (compute_forces) {
+      throw MethodError(
+          VIBEQC_STATUS_NOT_IMPLEMENTED,
+          std::string(method_name) + " KS nuclear gradients are tracked separately in issue #163");
+    }
+    return adapt_result(run(nullptr, true, true), backend_);
+  }
+
+  /** Single-system and native batch paths share the same scientific owner. */
+  scf::ScfResult run(const std::vector<double>* initial_density, bool reuse_warm,
+                     bool update_warm) {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) {
+      // Native iterations read only scalar diagnostics. The public energy
+      // result does not require a final AO matrix download; warm D stays resident.
+      cuda_->set_warm_start_updates(update_warm);
+      auto native = cuda_->run(initial_density, reuse_warm, false);
+      if (cuda_->failed())
+        throw MethodError(VIBEQC_STATUS_NUMERICAL_FAILURE, "CUDA KS physical evaluation failed");
+      return native;
+    }
+#endif
+    const auto* seed =
+        initial_density ? initial_density : (reuse_warm && !warm_.empty() ? &warm_ : nullptr);
+    // The CPU driver already samples its provider/grid. Add only the retained
+    // last-good density, which coexists with its current/proposed densities.
+    runtime::CpuRetainedCapacity retained_warm(runtime::vector_bytes(warm_));
+    scf::ScfResult native;
+    if (method_ == VIBEQC_METHOD_LDA_UKS || method_ == VIBEQC_METHOD_PBE_UKS)
+      native = scf::run_uks(fock_, basis_, grid_, options_, method_ == VIBEQC_METHOD_PBE_UKS, seed);
+    else if (method_ == VIBEQC_METHOD_PBE_RKS)
+      native = scf::run_pbe_rks(fock_, basis_, grid_, options_, seed);
+    else
+      native = scf::run_lda_rks(fock_, basis_, grid_, options_, seed);
+    // This owner has immutable model/geometry/spin identity. Only successful
+    // executions may replace its compatible last-good density; DIIS is fresh.
+    if (native.converged && update_warm) warm_ = std::move(native.density);
+    return native;
   }
 
  private:
@@ -197,157 +267,261 @@ class DftPreparedCalculation final : public PreparedCalculation {
   core::System system_;
   vibeqc_method method_{};
   scf::ScfOptions options_;
-  vibeqc_backend backend_{VIBEQC_BACKEND_CPU_REFERENCE};
+  vibeqc_backend backend_;
   scf::PreparedFockPlan fock_;
   dft::AoBasis basis_;
   dft::MolecularGrid grid_;
-  std::unique_ptr<dft::PreparedCudaXcPlan> cuda_xc_;
+  std::vector<double> warm_;
+#if VIBEQC_HAS_CUDA
+  std::unique_ptr<dft::CudaKsPlan> cuda_;
+#endif
 };
 
-class DftPreparedBatch final : public PreparedBatch {
+std::vector<double> positions(const core::System& system) {
+  std::vector<double> out;
+  out.reserve(3 * system.atoms.size());
+  for (const auto& atom : system.atoms)
+    out.insert(out.end(), atom.position.begin(), atom.position.end());
+  return out;
+}
+
+bool valid_positions(const std::vector<double>& coordinates, const core::System& system) {
+  return coordinates.size() == 3 * system.atoms.size() &&
+         std::all_of(coordinates.begin(), coordinates.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
+void set_positions(core::System& system, const std::vector<double>& coordinates) {
+  for (std::size_t i = 0; i < system.atoms.size(); ++i)
+    std::copy_n(coordinates.begin() + 3 * i, 3, system.atoms[i].position.begin());
+}
+
+vibeqc_status item_exception_status() {
+  try {
+    throw;
+  } catch (const MethodError& error) {
+    return error.status();
+  } catch (const vibeqc::Error& error) {
+    return error.status();
+  } catch (const std::bad_alloc&) {
+    return VIBEQC_STATUS_OUT_OF_MEMORY;
+  } catch (const std::invalid_argument&) {
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  } catch (const std::exception&) {
+    return VIBEQC_STATUS_NUMERICAL_FAILURE;
+  } catch (...) {
+    return VIBEQC_STATUS_INTERNAL_ERROR;
+  }
+}
+
+/** Independent native KS owners, with ordinary-stream round-robin CUDA work.
+ * Geometry is rebuilt per item, while model/basis/charge/spin remain immutable.
+ * No HF graph or Python calculation loop participates in this schedule. */
+class KsPreparedBatch final : public PreparedBatch {
  public:
-  DftPreparedBatch(Capabilities capabilities, core::ContextState& context,
-                   std::vector<core::System> systems, vibeqc_method method, scf::ScfOptions options,
-                   vibeqc_batch_flags flags)
+  KsPreparedBatch(Capabilities capabilities, std::vector<core::System> systems,
+                  vibeqc_method method, scf::ScfOptions options, dft::GridSpec grid,
+                  vibeqc_backend backend, int device, bool warm_enabled)
       : capabilities_(capabilities),
-        context_(&context),
+        systems_(std::move(systems)),
         method_(method),
         options_(std::move(options)),
-        warm_starts_enabled_((flags & VIBEQC_BATCH_ENABLE_WARM_STARTS) != 0) {
-    constexpr vibeqc_batch_flags supported = VIBEQC_BATCH_ENABLE_WARM_STARTS;
-    if ((flags & ~supported) != 0)
-      throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unsupported DFT batch flag");
-    items_.reserve(systems.size());
-    std::map<std::tuple<std::size_t, int, unsigned, std::size_t>, std::size_t> buckets;
-    for (auto& system : systems) {
-      std::size_t primitives = 0;
-      for (const auto& shell : system.shells) primitives += shell.primitives.size();
-      const auto key = std::tuple{molecule::ao_count(system), system.electron_count,
-                                  system.multiplicity, primitives};
-      const auto [entry, inserted] = buckets.emplace(key, buckets.size());
-      (void)inserted;
-      Item item;
-      item.system = std::move(system);
-      item.bucket_id = entry->second;
-      items_.push_back(std::move(item));
+        grid_spec_(std::move(grid)),
+        backend_(backend),
+        device_(device),
+        warm_enabled_(warm_enabled),
+        items_(systems_.size()) {
+    for (std::size_t i = 0; i < size(); ++i) {
+      runtime::CpuRetainedCapacity neighbors(host_numeric_capacity());
+      items_[i].plan = make_plan(systems_[i]);
     }
   }
 
-  std::size_t size() const noexcept override { return items_.size(); }
+  std::size_t size() const noexcept override { return systems_.size(); }
 
   std::vector<BatchItemResult> execute(const Coordinates& coordinates,
-                                       bool compute_forces = true) override {
-    if (!coordinates.empty() && coordinates.size() != items_.size())
-      throw std::invalid_argument("DFT batch coordinate list does not match system count");
-    std::vector<BatchItemResult> results(items_.size());
-    for (std::size_t index = 0; index < items_.size(); ++index) {
-      auto& item = items_[index];
-      auto& output = results[index];
-      output.bucket_id = item.bucket_id;
-      output.calculation.executed_backend = context_->requested_backend;
-      if (compute_forces) {
-        output.status = VIBEQC_STATUS_NOT_IMPLEMENTED;
-        continue;
-      }
-      core::System execution_system = item.system;
-      if (!coordinates.empty() && coordinates[index]) {
-        if (!valid_coordinates(*coordinates[index], execution_system.atoms.size())) {
-          output.status = VIBEQC_STATUS_INVALID_ARGUMENT;
-          continue;
-        }
-        apply_coordinates(execution_system, *coordinates[index]);
-      }
-      const auto current_coordinates = coordinates_of(execution_system);
-      if (item.warm && item.warm->coordinates != current_coordinates) item.warm.reset();
-      const bool use_warm = warm_starts_enabled_ && item.warm.has_value();
-      output.warm_start_used = use_warm;
+                                       bool compute_forces) override {
+    if (compute_forces)
+      throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
+                        "KS nuclear gradients are tracked separately in issue #163");
+    if (!coordinates.empty() && coordinates.size() != size())
+      throw std::invalid_argument("KS batch coordinates do not match system count");
+    std::vector<BatchItemResult> results(size());
+    std::vector<bool> ready(size(), false);
+    // Allocate source-geometry metadata before launching any item. The success
+    // path can then publish its last-good identity without a coordinate copy.
+    std::vector<scf::HfWarmState> candidates(size());
+    for (std::size_t i = 0; i < size(); ++i) {
+      auto& result = results[i];
+      result.bucket_id = i;  // One ordinary stream/owner per stable input slot.
+      result.calculation.executed_backend = backend_;
+      result.calculation.energy = std::numeric_limits<double>::quiet_NaN();
       try {
-        if (!item.calculation || item.prepared_coordinates != current_coordinates) {
-          item.calculation = std::make_unique<DftPreparedCalculation>(
-              capabilities_, execution_system, method_, options_, *context_);
-          item.prepared_coordinates = current_coordinates;
+        auto target = systems_[i];
+        if (!coordinates.empty() && coordinates[i]) {
+          if (!valid_positions(*coordinates[i], target))
+            throw std::invalid_argument("invalid KS batch item coordinates");
+          set_positions(target, *coordinates[i]);
         }
-        const auto evaluate = [&](const std::vector<double>* seed) {
-          return item.calculation->solve(false, seed);
-        };
-        scf::ScfResult native = evaluate(use_warm ? &item.warm->density : nullptr);
-        if (use_warm && !native.converged) {
-          output.warm_start_fallback = true;
-          native = evaluate(nullptr);
+        auto& item = items_[i];
+        candidates[i].coordinates = positions(target);
+        if (!item.plan || positions(item.plan->system()) != candidates[i].coordinates) {
+          // Preserve the last GOOD seed before freeing its device owner. This
+          // explicit rebuild download is never part of routine SCF iterations.
+          materialize_warm(i);
+          item.plan.reset();
+          item.resident_warm = false;
+          item.plan = make_plan(target);
         }
-        output.status = native.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
-        if (output.status == VIBEQC_STATUS_SUCCESS && warm_starts_enabled_ &&
-            warm_start_updates_enabled_)
-          retain(item, current_coordinates, native);
-        output.calculation = adapt_result(std::move(native), context_->requested_backend);
+        result.warm_start_used = warm_enabled_ && item.warm.has_value();
+        ready[i] = true;
       } catch (...) {
-        const vibeqc_status first_status = exception_status();
-        // A throwing replacement constructor can leave the old owner alive.
-        // Retry a seed-related failure at most once, on the current geometry.
-        // Resource/driver failures do not authorize another expensive solve.
-        const bool seed_failure = first_status == VIBEQC_STATUS_NUMERICAL_FAILURE ||
-                                  first_status == VIBEQC_STATUS_INVALID_ARGUMENT;
-        if (use_warm && !output.warm_start_fallback && seed_failure && item.calculation &&
-            item.prepared_coordinates == current_coordinates) {
-          try {
-            output.warm_start_fallback = true;
-            auto native = item.calculation->solve(false, nullptr);
-            output.status = native.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
-            if (output.status == VIBEQC_STATUS_SUCCESS && warm_starts_enabled_ &&
-                warm_start_updates_enabled_)
-              retain(item, current_coordinates, native);
-            output.calculation = adapt_result(std::move(native), context_->requested_backend);
-            continue;
-          } catch (...) {
-            output.status = exception_status();
-          }
-        } else {
-          output.status = first_status;
-        }
+        result.status = item_exception_status();
       }
     }
+
+    const auto finish = [&](std::size_t i, scf::ScfResult native) {
+      auto& result = results[i];
+      result.calculation = adapt_result(std::move(native), backend_);
+      const auto& calculation = result.calculation;
+      result.status =
+          calculation.convergence.converged ? VIBEQC_STATUS_SUCCESS : VIBEQC_STATUS_NOT_CONVERGED;
+      if (calculation.convergence.converged && warm_enabled_ && warm_updates_) {
+        auto& state = candidates[i];
+        state.energy = calculation.energy;
+        state.energy_change = calculation.convergence.energy_change;
+        state.density_rms = calculation.convergence.residual_rms;
+        state.iterations = calculation.convergence.iterations;
+        items_[i].warm = std::move(state);
+        items_[i].resident_warm = true;
+      }
+    };
+
+    // A rejected/nonconverged warm solve gets one cold retry. CUDA retries
+    // retain the same per-item scheduler; a failed neighbor never halts it.
+    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+      std::vector<bool> running(size(), false);
+      for (std::size_t i = 0; i < size(); ++i) {
+        auto& result = results[i];
+        // Retry only seed-related failures. Resource/driver failures preserve
+        // their first status and leave the last-good seed for explicit replay.
+        const bool seed_failure = result.status == VIBEQC_STATUS_NOT_CONVERGED ||
+                                  result.status == VIBEQC_STATUS_NUMERICAL_FAILURE ||
+                                  result.status == VIBEQC_STATUS_INVALID_ARGUMENT;
+        if (!ready[i] || (attempt && (!result.warm_start_used || !seed_failure))) continue;
+        if (attempt) {
+          result.warm_start_fallback = true;
+          // Release the failed attempt's exported history before starting another
+          // solve, preserving the two-history resource bound.
+          result.calculation.ks_diagnostic.reset();
+        }
+        auto& item = items_[i];
+        const bool reuse = !attempt && result.warm_start_used;
+        const auto* seed = reuse && !item.resident_warm ? &item.warm->density : nullptr;
+        try {
+#if VIBEQC_HAS_CUDA
+          if (auto* cuda = item.plan->cuda_plan()) {
+            cuda->set_warm_start_updates(warm_enabled_ && warm_updates_);
+            cuda->begin(seed, reuse && item.resident_warm);
+            running[i] = true;
+            continue;
+          }
+#endif
+          runtime::CpuRetainedCapacity neighbors(host_numeric_capacity(i));
+          finish(i,
+                 item.plan->run(seed, reuse && item.resident_warm, warm_enabled_ && warm_updates_));
+        } catch (...) {
+          result.status = item_exception_status();
+        }
+      }
+#if VIBEQC_HAS_CUDA
+      while (std::any_of(running.begin(), running.end(), [](bool value) { return value; })) {
+        // Submit ALL active streams before synchronizing any scalar record.
+        for (std::size_t i = 0; i < size(); ++i) {
+          if (!running[i]) continue;
+          try {
+            items_[i].plan->cuda_plan()->enqueue_iteration();
+          } catch (...) {
+            results[i].status = item_exception_status();
+            running[i] = false;
+          }
+        }
+        for (std::size_t i = 0; i < size(); ++i) {
+          if (!running[i]) continue;
+          try {
+            auto* cuda = items_[i].plan->cuda_plan();
+            if (cuda->finish_iteration()) continue;
+            running[i] = false;
+            if (cuda->failed())
+              throw MethodError(VIBEQC_STATUS_NUMERICAL_FAILURE,
+                                "CUDA KS physical evaluation failed");
+            finish(i, cuda->result(false));
+          } catch (...) {
+            results[i].status = item_exception_status();
+            running[i] = false;
+          }
+        }
+      }
+#endif
+    }
+    runtime::sample_cpu_capacity(host_numeric_capacity());
     return results;
   }
 
   void clear_warm_starts() override {
-    for (auto& item : items_) item.warm.reset();
+    for (auto& item : items_) {
+      item.warm.reset();
+      item.resident_warm = false;
+      if (item.plan) item.plan->clear_warm_start();
+    }
   }
 
   std::size_t warm_density_size(std::size_t index) const override {
-    const auto& system = items_.at(index).system;
-    const auto n = molecule::ao_count(system);
+    const auto n = molecule::ao_count(systems_.at(index));
     const std::size_t spins = is_uks(method_) ? 2 : 1;
-    if (!n || n > std::numeric_limits<std::size_t>::max() / n / spins)
-      throw std::invalid_argument("DFT warm density dimensions overflow");
+    if (!n || n > std::numeric_limits<std::size_t>::max() / n / spins / sizeof(double))
+      throw std::invalid_argument("KS warm density dimensions overflow");
     return spins * n * n;
   }
 
   const std::optional<scf::HfWarmState>& warm_state(std::size_t index) const override {
+    materialize_warm(index);
     return items_.at(index).warm;
   }
 
   void restore_warm_states(std::vector<std::optional<scf::HfWarmState>> states) override {
-    if (!warm_starts_enabled_ || states.size() != items_.size())
-      throw std::invalid_argument("checkpoint restore requires a matching warm-enabled DFT batch");
-    for (std::size_t index = 0; index < states.size(); ++index) {
-      if (!states[index]) continue;
-      const auto& state = *states[index];
-      if (state.density.size() != warm_density_size(index) ||
-          !valid_coordinates(state.coordinates, items_[index].system.atoms.size()) ||
-          state.iterations < 0 || !std::isfinite(state.energy) ||
-          !std::isfinite(state.energy_change) || !std::isfinite(state.density_rms) ||
-          state.density_rms < 0.0)
-        throw std::invalid_argument("invalid DFT checkpoint state dimensions or diagnostics");
-      auto source = items_[index].system;
-      apply_coordinates(source, state.coordinates);
-      scf::validate_hf_warm_density(source, method_, state.density);
+    if (!warm_enabled_ || states.size() != size())
+      throw std::invalid_argument("KS seed restore requires a matching warm-enabled batch");
+    for (std::size_t i = 0; i < size(); ++i) {
+      if (!states[i]) continue;
+      const auto& state = *states[i];
+      if (state.density.size() != warm_density_size(i) ||
+          !valid_positions(state.coordinates, systems_[i]) || state.iterations < 0 ||
+          !std::isfinite(state.energy) || !std::isfinite(state.energy_change) ||
+          !std::isfinite(state.density_rms) || state.density_rms < 0)
+        throw std::invalid_argument("invalid KS seed dimensions or diagnostics");
+      auto source = systems_[i];
+      set_positions(source, state.coordinates);
+      // This common validation reads only source S and checks the shared
+      // spin-density convention. It performs no HF Fock/energy evaluation.
+      scf::validate_hf_warm_density(source, is_uks(method_) ? VIBEQC_METHOD_UHF : VIBEQC_METHOD_RHF,
+                                    state.density);
     }
-    for (std::size_t index = 0; index < states.size(); ++index)
-      if (states[index]) items_[index].warm.swap(states[index]);
+    // All source-metric validation precedes the no-throw commit. Missing
+    // entries preserve neighbors, including their resident density ownership.
+    for (std::size_t i = 0; i < size(); ++i) {
+      if (!states[i]) continue;
+      auto& item = items_[i];
+      item.warm.swap(states[i]);
+      item.resident_warm = false;
+      if (item.plan) item.plan->clear_warm_start();
+    }
   }
 
-  void set_warm_start_updates(bool enabled) override { warm_start_updates_enabled_ = enabled; }
+  void set_warm_start_updates(bool enabled) override { warm_updates_ = enabled; }
 
+  // These profiles describe HF graph/provider layouts, not this method's
+  // ordinary-stream schedule. Absence is explicit at the common interface.
   std::optional<std::vector<DirectShellClassProfileEntry>> last_direct_shell_class_profile()
       const override {
     return std::nullopt;
@@ -365,32 +539,46 @@ class DftPreparedBatch final : public PreparedBatch {
   }
 
  private:
-  struct Item {
-    core::System system;
-    std::size_t bucket_id{};
-    std::vector<double> prepared_coordinates;
-    std::unique_ptr<DftPreparedCalculation> calculation;
-    std::optional<scf::HfWarmState> warm;
-  };
+  /** All other owners remain alive while one CPU item executes. The selected
+   * item's externally materialized seed is also distinct from its plan. */
+  std::size_t host_numeric_capacity(std::size_t exclude_plan = SIZE_MAX) const noexcept {
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+      const auto& item = items_[i];
+      if (item.plan && i != exclude_plan)
+        bytes = runtime::add_capacity(bytes, item.plan->host_numeric_capacity());
+      if (item.warm)
+        bytes = runtime::add_capacity(
+            bytes, runtime::vector_capacities(item.warm->density, item.warm->coordinates));
+    }
+    return bytes;
+  }
 
-  static void retain(Item& item, const std::vector<double>& coordinates,
-                     const scf::ScfResult& result) {
-    scf::HfWarmState state;
-    state.density = result.density;
-    state.coordinates = coordinates;
-    state.energy = result.energy;
-    state.energy_change = result.energy_change;
-    state.density_rms = result.density_rms;
-    state.iterations = static_cast<int>(result.iterations);
-    item.warm = std::move(state);
+  struct Item {
+    std::unique_ptr<KsPreparedCalculation> plan;
+    // Density is materialized only for explicit output, import, or rebuilding
+    // an owner. Empty density with resident_warm=true is a valid lazy snapshot.
+    mutable std::optional<scf::HfWarmState> warm;
+    bool resident_warm{};
+  };
+  std::unique_ptr<KsPreparedCalculation> make_plan(const core::System& system) const {
+    return std::make_unique<KsPreparedCalculation>(capabilities_, system, method_, options_,
+                                                   grid_spec_, backend_, device_);
+  }
+  void materialize_warm(std::size_t i) const {
+    const auto& item = items_.at(i);
+    if (item.warm && item.warm->density.empty() && item.resident_warm)
+      item.warm->density = item.plan->warm_density();
   }
 
   Capabilities capabilities_;
-  core::ContextState* context_{};
-  vibeqc_method method_{};
+  std::vector<core::System> systems_;
+  vibeqc_method method_;
   scf::ScfOptions options_;
-  bool warm_starts_enabled_{};
-  bool warm_start_updates_enabled_{true};
+  dft::GridSpec grid_spec_;
+  vibeqc_backend backend_;
+  int device_;
+  bool warm_enabled_, warm_updates_{true};
   std::vector<Item> items_;
 };
 
@@ -424,15 +612,19 @@ vibeqc_status validate_dft_system(vibeqc_method method, const core::System& syst
 std::unique_ptr<PreparedCalculation> prepare_dft_calculation(
     const Capabilities& capabilities, core::ContextState& context, const core::System& system,
     const vibeqc_method_descriptor& descriptor) {
-  if (context.requested_backend != VIBEQC_BACKEND_CPU_REFERENCE &&
-      context.requested_backend != VIBEQC_BACKEND_CUDA)
-    throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown DFT execution backend");
-  if (!is_supported_dft(descriptor.method))
+#if !VIBEQC_HAS_CUDA
+  if (context.requested_backend == VIBEQC_BACKEND_CUDA)
+    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT CUDA backend is not built");
+#endif
+  if (descriptor.method != VIBEQC_METHOD_LDA_RKS && descriptor.method != VIBEQC_METHOD_PBE_RKS &&
+      descriptor.method != VIBEQC_METHOD_LDA_UKS && descriptor.method != VIBEQC_METHOD_PBE_UKS)
     throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
                       "requested DFT method is reserved but not implemented");
-  return std::make_unique<DftPreparedCalculation>(
-      capabilities, system, descriptor.method, dft_options(descriptor, context.requested_backend),
-      context);
+  auto options = dft_options(descriptor, context.requested_backend);
+  auto grid = ks_grid_options(descriptor, options);
+  return std::make_unique<KsPreparedCalculation>(capabilities, system, descriptor.method,
+                                                 std::move(options), std::move(grid),
+                                                 context.requested_backend, context.device_id);
 }
 
 std::unique_ptr<PreparedBatch> prepare_dft_batch(const Capabilities& capabilities,
@@ -440,14 +632,18 @@ std::unique_ptr<PreparedBatch> prepare_dft_batch(const Capabilities& capabilitie
                                                  std::vector<core::System> systems,
                                                  const vibeqc_method_descriptor& descriptor,
                                                  vibeqc_batch_flags flags) {
-  if (systems.empty())
-    throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "DFT batch requires at least one system");
-  if (context.requested_backend != VIBEQC_BACKEND_CPU_REFERENCE &&
-      context.requested_backend != VIBEQC_BACKEND_CUDA)
-    throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "unknown DFT execution backend");
-  return std::make_unique<DftPreparedBatch>(
-      capabilities, context, std::move(systems), descriptor.method,
-      dft_options(descriptor, context.requested_backend), flags);
+  if ((flags & ~VIBEQC_BATCH_ENABLE_WARM_STARTS) != 0)
+    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
+                      "KS batches support warm starts but not HF-specific profiling flags");
+#if !VIBEQC_HAS_CUDA
+  if (context.requested_backend == VIBEQC_BACKEND_CUDA)
+    throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED, "DFT CUDA backend is not built");
+#endif
+  auto options = dft_options(descriptor, context.requested_backend);
+  auto grid = ks_grid_options(descriptor, options);
+  return std::make_unique<KsPreparedBatch>(
+      capabilities, std::move(systems), descriptor.method, std::move(options), std::move(grid),
+      context.requested_backend, context.device_id, (flags & VIBEQC_BATCH_ENABLE_WARM_STARTS) != 0);
 }
 
 }  // namespace vibeqc::methods::detail

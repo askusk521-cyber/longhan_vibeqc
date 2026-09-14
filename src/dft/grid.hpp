@@ -1,6 +1,7 @@
 #ifndef VIBEQC_DFT_GRID_HPP
 #define VIBEQC_DFT_GRID_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -17,8 +18,14 @@ struct GridSpec {
   std::size_t angular_azimuth{32};
   unsigned partition_iterations{3};
   double coincident_tolerance{1.0e-12};
+  /** Zero entries select the default one-Bohr radius; slot zero is unused.
+   * Fixed storage preserves immutable identity without borrowed pointers. */
+  std::array<double, 119> element_radii{};
   bool operator==(const GridSpec&) const = default;
 };
+
+/** Pure prescription validation, shared by preparation and materialization. */
+void validate_grid_spec(const GridSpec& spec);
 
 /** Materialized CPU reference grid in atom-radial-polar-azimuth order. */
 class MolecularGrid {

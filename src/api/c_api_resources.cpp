@@ -2,10 +2,17 @@
 #include <exception>
 #include <stdexcept>
 
+#include "dft/scf_diagnostic.hpp"
 #include "runtime/resource_ledger.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda_batch.hpp"
 #include "scf/density_fitting.hpp"
+
+#if VIBEQC_HAS_CUDA
+#include "dft/cuda_ks.hpp"
+#include "dft/cuda_xc.hpp"
+#include "scf/cuda_direct_jk.hpp"
+#endif
 
 extern "C" {
 
@@ -60,6 +67,38 @@ int vibeqc_resource_ledger_read_v1(void* handle, std::uint64_t* values) {
  * bounds. The current object-capacity allowance is validated on LP64 hosts.
  */
 int vibeqc_cpu_resource_inventory_version_v1() { return sizeof(void*) == 8 ? 1 : 0; }
+
+/** KS v1 host bounds use LP64 metadata and a 128-byte iteration-record
+ * allowance. Keep this separate from HF's derivative-inclusive inventory. */
+int vibeqc_ks_resource_inventory_version_v1() {
+  return sizeof(void*) == 8 && sizeof(vibeqc::dft::ScfIteration) <= 128 ? 1 : 0;
+}
+
+/** Pure shape bridge to allocator-owned KS/XC and common #202 direct-J
+ * layouts. It never constructs a grid, density, integral or CUDA context. */
+int vibeqc_resource_ks_cuda_v1(std::size_t nao, std::size_t atoms, std::size_t shells,
+                               std::size_t primitives, std::size_t points, std::size_t diis_history,
+                               std::size_t spins, std::size_t pbe, std::size_t tile_points,
+                               std::uint64_t* output, std::size_t count) {
+  if (!output || count != 3 || diis_history > 64 || (spins != 1 && spins != 2) || pbe > 1) return 1;
+#if VIBEQC_HAS_CUDA
+  try {
+    const auto state = vibeqc::dft::cuda_ks_state_bytes(nao, spins, diis_history);
+    const auto xc = vibeqc::dft::cuda_xc_layout_shape(atoms, primitives, nao, points, pbe != 0,
+                                                      spins == 2, tile_points);
+    const auto direct =
+        vibeqc::scf::cuda_direct_jk_device_bytes(1, nao, atoms, shells, primitives, 0);
+    output[0] = state;
+    output[1] = xc.device_bytes;
+    output[2] = direct;
+    return 0;
+  } catch (...) {
+    return 1;
+  }
+#else
+  return 2;
+#endif
+}
 
 /** Private execution-scope bridge. The selected CPU plan can explicitly cap
  * fleet concurrency as well as collect samples. No device query/allocation.

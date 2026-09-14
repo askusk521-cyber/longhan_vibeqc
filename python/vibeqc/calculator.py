@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from functools import cache, lru_cache
 from importlib import resources
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -21,6 +22,9 @@ from .basis_capabilities import require_basis, resolved_basis_metadata
 from .elements import atomic_number as element_number
 from .elements import checked_integer
 from .profiles import canonical_hash
+
+if TYPE_CHECKING:
+    from .ks_diagnostics import KsDiagnostic
 
 _METHODS = {
     "rhf": _native.METHOD_RHF,
@@ -125,6 +129,7 @@ class Result:
     precision: dict | None = None
     correlation: CorrelationResult | None = None
     physical_residual_rms: float | None = None
+    ks_diagnostic: KsDiagnostic | None = None
 
 
 @dataclass(frozen=True)
@@ -295,7 +300,7 @@ class Calculator:
     """Prepare and execute a native single-system electronic-structure calculation.
 
     Coordinates are in Bohr. The current implementation accepts RHF, UHF, or
-    CPU energy-only LDA/PBE RKS/UKS and
+    energy-only LDA/PBE RKS/UKS on CPU/CUDA and
     a bundled STO-3G/def2-SVP/def2-TZVP basis for H-Ar, local canonical JSON,
     immutable `BasisSet` records, or explicit `Shell` objects. Element symbols
     cover H-Og; execution depends on every actual shell and Hamiltonian. Both the CPU reference and CUDA backend support Cartesian
@@ -324,6 +329,7 @@ class Calculator:
         precision: str = "fp64",
         target_accuracy: TargetAccuracy | None = None,
         resource_budget=None,
+        ks_options=None,
     ) -> None:
         """Create a calculator, optionally selecting CPU or CUDA DF.
 
@@ -336,6 +342,9 @@ class Calculator:
         iteration convergence. Until an explicit audit/estimator is attached,
         successful results report ``unverified`` and numerical defaults remain
         unchanged. It never certifies an error from ``energy_tolerance``.
+
+        ``ks_options`` snapshots an explicit semilocal composition, GridSpec
+        and XC tile schedule for LDA/PBE RKS/UKS. Other methods reject it.
         """
         if target_accuracy is not None and not isinstance(
             target_accuracy, TargetAccuracy
@@ -402,6 +411,13 @@ class Calculator:
             raise ValueError("density_fitting_memory_budget_bytes must be non-negative")
         self._method_name = method.lower()
         self._method = _METHODS[self._method_name]
+        self._ks_options = None
+        if self._method_name in ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks"):
+            from .ks import resolve_ks_options
+
+            self._ks_options = resolve_ks_options(self._method_name, ks_options)
+        elif ks_options is not None:
+            raise ValueError("ks_options requires an LDA/PBE RKS/UKS method")
         if self._method == _native.METHOD_MP2:
             if target_accuracy is not None:
                 raise NotImplementedError(
@@ -471,6 +487,19 @@ class Calculator:
         ):
             raise ValueError("canonical MP2 requires precision='fp64'")
         self._library = _native.load_library(device=device, device_id=self._device_id)
+        self._ks_options_version = 0
+        if self._ks_options is not None:
+            query = getattr(self._library, "vibeqc_ks_options_version", None)
+            if query is not None:
+                query.argtypes, query.restype = [], ctypes.c_uint32
+                self._ks_options_version = query()
+            if self._ks_options_version != 1:
+                from .ks import resolve_ks_options
+
+                if self._ks_options != resolve_ks_options(self._method_name):
+                    raise NotImplementedError(
+                        "native library does not support KS model options v1"
+                    )
 
         available = ctypes.c_int32()
         _native.check(
@@ -486,25 +515,20 @@ class Calculator:
         self._capabilities = method_capabilities(self._method_name)
         if self._capabilities.family == "density_functional":
             if self._precision_mode != _native.PRECISION_FP64:
-                raise NotImplementedError(
-                    "the current DFT energy slice supports explicit FP64 precision only"
-                )
+                raise NotImplementedError("DFT supports explicit FP64 precision only")
             if density_fitting_mode != _native.DENSITY_FITTING_NONE:
-                raise NotImplementedError(
-                    "the current DFT energy slice supports conventional Coulomb only"
-                )
+                raise NotImplementedError("DFT supports conventional Coulomb only")
             if auxiliary_basis is not None:
-                raise ValueError(
-                    "DFT energy methods do not accept an unused auxiliary basis"
-                )
+                raise ValueError("DFT does not accept an unused auxiliary basis")
             if target_accuracy is not None:
                 raise NotImplementedError(
                     "DFT accuracy-model identities are not implemented yet"
                 )
-            if resource_budget is not None:
-                raise NotImplementedError(
-                    "DFT resource planning is not implemented yet"
-                )
+
+    @property
+    def ks_options(self):
+        """Resolved immutable KS model, or None for another method family."""
+        return self._ks_options
 
     @property
     def profile_diagnostics(self) -> dict:
@@ -536,7 +560,7 @@ class Calculator:
         self, auxiliary_basis: ctypes.c_void_p | None = None, *, resource_plan=None
     ) -> _native.MethodDescriptor:
         df_budget = self._density_fitting_memory_budget_bytes
-        if resource_plan is not None:
+        if resource_plan is not None and self._method in _HF_METHODS:
             request = next(r for r in resource_plan.requests if r.name == "hf")
             chosen = dict(resource_plan.selections)["hf"]
             candidate = next(c for c in request.candidates if c.name == chosen)
@@ -545,7 +569,7 @@ class Calculator:
                     "density_fitting_memory_budget_bytes", df_budget
                 )
             )
-        return _native.MethodDescriptor(
+        descriptor = _native.MethodDescriptor(
             ctypes.sizeof(_native.MethodDescriptor),
             _native.ABI_VERSION,
             self._method,
@@ -562,6 +586,11 @@ class Calculator:
             self._correlation_memory_budget_bytes,
             self._mp2_denominator_threshold,
         )
+        if self._ks_options is not None and self._ks_options_version == 1:
+            from .ks import native_ks_options
+
+            descriptor.ks_options = ctypes.pointer(native_ks_options(self._ks_options))
+        return descriptor
 
     def _precision_provenance(
         self, calculation: ctypes.c_void_p, index: int | None = None
@@ -669,6 +698,11 @@ class Calculator:
                 "auxiliary": identity(self._auxiliary_basis),
                 "representation": self._basis_representation,
                 "method": self._method,
+                **(
+                    {"ks_options": self._ks_options.to_payload()}
+                    if self._ks_options
+                    else {}
+                ),
                 **(
                     {
                         "correlation_memory_budget_bytes": self._correlation_memory_budget_bytes,
@@ -803,7 +837,7 @@ class Calculator:
         )
 
     def _preflight_hf_basis(self, atoms, *, compute_forces=True):
-        """Check only the operators needed by the selected HF outputs.
+        """Check operators and AO jets needed by the selected mean-field outputs.
 
         Runtime shape/resource and occupation checks remain native. This data
         preflight never turns an ECP or an unsupported auxiliary shell into an
@@ -826,7 +860,13 @@ class Calculator:
             if basis is None:
                 continue
             for operator in operators:
-                for order in derivative_orders:
+                # GGA energies consume first AO jets even when nuclear forces
+                # are unavailable. LDA requires only AO values; integral
+                # derivatives remain controlled by the requested observable.
+                orders = derivative_orders
+                if operator == "ao":
+                    orders = (self._ks_options.ao_order,)
+                for order in orders:
                     require_basis(
                         basis,
                         atoms,
@@ -945,7 +985,27 @@ class Calculator:
         return system
 
     def _resource_request(self, systems, *, charges=None, multiplicities=None):
-        """Resolve this calculator's exact active HF controls without executing."""
+        """Resolve this calculator's active scientific controls without executing."""
+        if self._capabilities.family == "density_functional":
+            from .resources_ks import ks_resource_request
+
+            return ks_resource_request(
+                systems,
+                charges=charges,
+                multiplicities=multiplicities,
+                method=self._method_name,
+                basis=self._basis,
+                backend=self._device_name,
+                basis_representation=self._representation_name,
+                diis_history=self._diis_history,
+                max_iterations=self._max_iterations,
+                energy_tolerance=self._energy_tolerance,
+                density_tolerance=self._density_tolerance,
+                screening_tolerance=self._screening_tolerance,
+                ks_options=self._ks_options,
+                device_id=self._device_id,
+                library=self._library,
+            )
         if self._method == _native.METHOD_MP2:
             raise NotImplementedError(
                 "resource planning is not implemented for canonical MP2"
@@ -1135,6 +1195,7 @@ class Calculator:
         auxiliary_system = ctypes.c_void_p()
         calculation = ctypes.c_void_p()
         ledger = None
+        resource_diagnostics = None
         try:
             if (
                 resource_plan is not None
@@ -1142,7 +1203,9 @@ class Calculator:
             ):
                 from .resources_native import NativeDeviceLedger
 
-                ledger = NativeDeviceLedger(self._library, resource_plan)
+                ledger = NativeDeviceLedger(
+                    self._library, resource_plan, owner=resource_plan.requests[0].name
+                )
             system = self._create_native_system(
                 context, native_atoms, charge, multiplicity
             )
@@ -1158,16 +1221,30 @@ class Calculator:
                 auxiliary_system if auxiliary_system.value else None,
                 resource_plan=resource_plan,
             )
-            _native.check(
-                self._library,
-                self._library.vibeqc_calculation_prepare(
+
+            def prepare():
+                return self._library.vibeqc_calculation_prepare(
                     context,
                     system,
                     ctypes.byref(method_descriptor),
                     ctypes.byref(calculation),
-                ),
-                context=context,
-            )
+                )
+
+            if resource_plan is None:
+                _native.check(self._library, prepare(), context=context)
+            else:
+                from .resources_native import check_resource_status, observe_method_call
+
+                status, resource_diagnostics = observe_method_call(
+                    self._library,
+                    resource_plan,
+                    ledger,
+                    prepare,
+                    owner=resource_plan.requests[0].name,
+                    phase="preparation",
+                )
+                if status != _native.STATUS_SUCCESS:
+                    check_resource_status(self._library, status, resource_diagnostics)
             force_storage = (
                 (ctypes.c_double * (3 * len(native_atoms)))()
                 if compute_forces
@@ -1185,25 +1262,21 @@ class Calculator:
                 0,
                 _native.BACKEND_CPU_REFERENCE,
             )
-            resource_diagnostics = None
             if resource_plan is None:
                 status = self._library.vibeqc_calculation_execute(
                     calculation, ctypes.byref(result_descriptor)
                 )
             else:
-                from .resources import CpuResourceObservation
-
-                with CpuResourceObservation(
-                    self._library, cpu_workers=1, ledger=ledger
-                ) as observed:
-                    status = self._library.vibeqc_calculation_execute(
+                status, resource_diagnostics = observe_method_call(
+                    self._library,
+                    resource_plan,
+                    ledger,
+                    lambda: self._library.vibeqc_calculation_execute(
                         calculation, ctypes.byref(result_descriptor)
-                    )
-                resource_diagnostics = {
-                    "plan": resource_plan.to_dict(),
-                    "observation": observed.to_dict(),
-                }
-                observed.verify(resource_plan)
+                    ),
+                    owner=resource_plan.requests[0].name,
+                    previous=resource_diagnostics,
+                )
             try:
                 if resource_diagnostics is None:
                     _native.check(self._library, status, context=context)
@@ -1259,6 +1332,11 @@ class Calculator:
                 if result_descriptor.executed_backend == _native.BACKEND_CUDA
                 else "cpu_reference"
             )
+            ks_diagnostic = None
+            if self._ks_options is not None:
+                from .ks_diagnostics import read_ks_diagnostic
+
+                ks_diagnostic = read_ks_diagnostic(self._library, calculation)
             return Result(
                 energy=result_descriptor.energy,
                 forces=forces,
@@ -1280,6 +1358,7 @@ class Calculator:
                 ),
                 correlation=correlation,
                 physical_residual_rms=physical_residual_rms,
+                ks_diagnostic=ks_diagnostic,
             )
         finally:
             if calculation.value:

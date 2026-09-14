@@ -4,6 +4,20 @@ The scripts check declared allocation bounds against actual owned capacities
 and verify energies/forces. They do not benchmark performance or treat process
 RSS / free GPU memory as provider ownership.
 
+Pass `--include-ks` to the CPU inventory script to retain the five HF cases
+and add LDA/PBE RKS/UKS ragged batches plus water/PBE/def2-SVP. KS uses the
+native method adapter for preparation, cold solve, unchanged replay, changed
+geometry and restored geometry. Its measured interval includes all C++ heap
+allocations and destruction, independently of partial iteration samples.
+The initial KS audit on 2026-09-14 passed all ten cases. Predicted/observed
+host peaks were 6,661,216/6,295,236 bytes for ragged PBE RKS,
+1,991,696/1,829,276 for ragged PBE UKS, and 56,032,032/15,688,056 for
+water/PBE/def2-SVP. All measured storage was released.
+
+`tests/python/test_ks_resources.py` checks public KS dry runs, preparation,
+replay/rebuild budgets, singlepoints, failure evidence and ledger release.
+Its CUDA cases require `VIBEQC_RESOURCE_CUDA_TEST=1` inside a Slurm allocation.
+
 Build a CPU Release library with `VIBEQC_ENABLE_CUDA=OFF`, then run:
 
 ```bash

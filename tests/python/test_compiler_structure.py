@@ -27,8 +27,12 @@ def test_grid_native_generator_matches_jit_policy(tmp_path):
         check=True,
         cwd=tmp_path,
     )
+    native = emit_grid_source(native_ks=True)[0]
+    assert output.read_text() == native
+    # Resident KS adds only a consumer of the shared AO/ingredient policy.
+    # Keep the independently compiled JIT owner's ABI free of that extension.
     source, _, headers = emit_grid_source()
-    assert output.read_text() == source
+    assert native == source + '#include "cuda_xc_kernels.cuh"\n'
     assert headers[-1] == ROOT / "include/vibeqc/vibeqc.h"
 
 

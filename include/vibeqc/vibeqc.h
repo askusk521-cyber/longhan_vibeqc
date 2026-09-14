@@ -371,6 +371,30 @@ typedef struct vibeqc_system_descriptor {
   vibeqc_basis_representation basis_representation;
 } vibeqc_system_descriptor;
 
+/** Native semilocal KS model snapshot, copied during preparation. The method
+ * identifier fixes unit LDA_X+LDA_C_PW or GGA_X_PBE+GGA_C_PBE composition.
+ * No exact exchange, pruning or implicit functional alias is supported. */
+typedef struct vibeqc_ks_options {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  /** Version 1: semilocal-scaled-v1/pbe-spin-c2-1e-18. */
+  uint32_t scf_domain_version;
+  uint32_t grid_version;
+  uint32_t radial_points;
+  uint32_t angular_polar;
+  uint32_t angular_azimuth;
+  uint32_t partition_iterations;
+  double coincident_tolerance;
+  uint64_t tile_points;
+  /** Optional positive finite radii [0..118] in Bohr, indexed by atomic
+   * number; slot zero is unused. NULL/zero means unit radii for all elements. */
+  const double* element_radii;
+  uint32_t element_radius_count;
+} vibeqc_ks_options;
+
+/** Pure capability query. Version 1 accepts the complete options above. */
+VIBEQC_API uint32_t vibeqc_ks_options_version(void);
+
 typedef struct vibeqc_method_descriptor {
   uint32_t struct_size;
   uint32_t abi_version;
@@ -398,6 +422,9 @@ typedef struct vibeqc_method_descriptor {
   uint64_t correlation_memory_budget_bytes;
   /** Positive MP2 absolute denominator threshold in Hartree; zero uses 1e-10. */
   double mp2_denominator_threshold;
+  /** Optional KS snapshot. NULL/absent preserves the original default model.
+   * The descriptor and pointees need only outlive the prepare call. */
+  const vibeqc_ks_options* ks_options;
 } vibeqc_method_descriptor;
 
 /**
@@ -489,6 +516,49 @@ typedef struct vibeqc_scf_diagnostic {
    * UKS combines the alpha/beta matrix entries in one RMS. */
   double physical_residual_rms;
 } vibeqc_scf_diagnostic;
+
+/** A physical KS iteration before any optional final RKS validation rebuild.
+ * The first energy_change is +infinity because no preceding energy exists.
+ * Density change and residual are maxima of the spin RMS values (RKS has one
+ * total-density matrix), distinct from the joined-spin legacy result RMS. */
+typedef struct vibeqc_ks_iteration {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t iteration;
+  int32_t occupation_stabilized;
+  double nuclear_energy;
+  double one_electron_energy;
+  double hartree_energy;
+  double xc_energy;
+  double energy_change;
+  double density_change_max;
+  double physical_residual_max;
+  double electrons[2];
+} vibeqc_ks_iteration;
+
+/** Completed KS state, copied without extending legacy result-array strides.
+ * Electron counts are Tr(D_s S), not integrated grid densities. Final terms
+ * refer to the returned physical state; CPU RKS's post-loop validation can
+ * make them differ from the last iteration. All energies are in Hartree. */
+typedef struct vibeqc_ks_diagnostic {
+  uint32_t struct_size;
+  uint32_t abi_version;
+  uint32_t scf_domain_version;
+  uint32_t required_ao_order;
+  uint32_t history_count;
+  int32_t initial_density_used;
+  uint64_t occupations[2];
+  uint64_t grid_points;
+  uint64_t tile_points;
+  uint64_t fock_builds;
+  double electrons[2];
+  double nuclear_energy;
+  double one_electron_energy;
+  double hartree_energy;
+  double xc_energy;
+  double density_change_max;
+  double physical_residual_max;
+} vibeqc_ks_diagnostic;
 
 /** Optional per-system coordinates for a prepared ragged batch execution. */
 typedef struct vibeqc_batch_input_descriptor {
@@ -693,6 +763,18 @@ VIBEQC_API vibeqc_status vibeqc_calculation_execute(vibeqc_calculation* calculat
 VIBEQC_API vibeqc_status vibeqc_calculation_get_scf_diagnostic(
     const vibeqc_calculation* calculation, vibeqc_scf_diagnostic* out);
 
+/** Query completed KS state and optionally copy its entire iteration history.
+ * NULL history/zero capacity queries summary or availability only. To copy
+ * history, allocate at least out->history_count initialized descriptors and
+ * query again. Every supplied descriptor must have its current size/ABI.
+ * Validation failures leave all outputs untouched. NOT_IMPLEMENTED means no
+ * completed KS record: unsupported method, not executed, or failed evaluation.
+ * Caller serializes all execution/query calls on the prepared owner. */
+VIBEQC_API vibeqc_status vibeqc_calculation_get_ks_diagnostic(const vibeqc_calculation* calculation,
+                                                              vibeqc_ks_diagnostic* out,
+                                                              vibeqc_ks_iteration* history,
+                                                              uint32_t history_capacity);
+
 /**
  * Read the precision policy that resolved for a prepared run. Both the
  * availability query (a NULL \p out) and the copy-out are gated on whether a
@@ -825,6 +907,23 @@ VIBEQC_API vibeqc_status vibeqc_batch_restore_hf_warm_states(vibeqc_batch* batch
 
 /** Discard all retained per-system converged-density warm starts. */
 VIBEQC_API vibeqc_status vibeqc_batch_clear_warm_starts(vibeqc_batch* batch);
+
+/** Input-ordered SCF diagnostics for the latest completed item evaluation.
+ * Returns NOT_IMPLEMENTED before execution, after a rejected/failed item, or
+ * when the method does not report a physical residual. A null out queries
+ * availability. Every replay invalidates all prior records before validation.
+ * This additive query preserves the legacy batch result array's exact stride.
+ */
+VIBEQC_API vibeqc_status vibeqc_batch_get_scf_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                                         vibeqc_scf_diagnostic* out);
+
+/** Input-ordered counterpart of vibeqc_calculation_get_ks_diagnostic. Invalid
+ * or numerically failed items have no record; valid nonconverged items retain
+ * their actual history. Every replay invalidates records from its predecessor. */
+VIBEQC_API vibeqc_status vibeqc_batch_get_ks_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                                        vibeqc_ks_diagnostic* out,
+                                                        vibeqc_ks_iteration* history,
+                                                        uint32_t history_capacity);
 
 /**
  * Enable or disable replacement of retained warm-start densities.

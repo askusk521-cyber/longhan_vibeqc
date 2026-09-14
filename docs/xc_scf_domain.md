@@ -8,13 +8,12 @@ Libxc 7.0.0 sources in `external/libxc-7.0.0` and
 `python/vibeqc_compiler/xc/expressions.py`. There is no exact exchange or
 density fitting in these method compositions.
 
-The CPU UKS PBE integrator uses this point contract instead of its
-provisional PBE-to-LDA tail fallback. The LDA UKS sixth-root evaluator and
-both RKS integration paths keep their existing policies in this PR. The
-independent `interior-v1` Python reference consumer and its #214 fixtures
-also keep their original domains and identities. The historical name
-`integrate_pbe_uks_with_tail` does not authorize reusing results from an
-older spin-tail identity.
+This replaces the provisional SCF PBE-to-LDA tail fallback. The independent
+`interior-v1` Python reference consumer and its #214 fixtures keep their
+original domain and identities. The native `integrate_pbe_rks` diagnostic
+entry also retains its interior-domain guard; `integrate_pbe_rks_with_tail`
+now evaluates the versioned domain below. Its old function name does not
+authorize reuse of results produced with the old tail identity.
 
 ## Density and variational convention
 
@@ -144,18 +143,15 @@ finite gradients up to `1e308`, cancellation of huge opposite spin gradients,
 and underflowing gradient squares; a loose absolute energy-only gate cannot
 pass these tests.
 
-`vibeqc_dft_tests` retains the #214 identical-grid oracle, per-spin
-finite-difference checks, equal-spin reduction and active-spin response at
-complete polarization. It additionally checks energy and majority-spin
-potential continuity from an empty spin through both sides of the former
-`1e-10` minority-fraction dispatch. `vibeqc_uks_state_tests` rebuilds energy
-and the physical commutator from the returned density, for both a converged
-run and an exhausted iteration budget. A converged UKS run returns the
-state that passed all three gates, without subsequent untested density
-updates. Full prepared CUDA, resource and replay evidence remains part of
-the complete #162 milestone, independently of this CPU correction.
+`vibeqc_dft_tests` retains the #214 identical-grid oracle and adds unequal
+spin directional tests, isolated symmetric off-diagonal perturbations,
+spin swaps, and deliberate half/double-factor failures. These tests precede
+SCF acceptance. The CPU slice's empty/near-empty-spin continuity and
+returned-state regressions remain enabled. Native single-system CUDA SCF and
+replay tests are documented separately in `xc_native_cuda.md`; prepared ragged
+batching and full resource evidence remain part of the complete #162 milestone.
 
-If UKS energy and the unshifted physical commutator pass their gates while
+If CPU UKS energy and the unshifted physical commutator pass their gates while
 the proposed density still changes, subsequent orbital updates use a
 `0.1 Eh` virtual-space level shift. For each unit-occupation spin density,
 the proposal operator gains `0.1 (S-SDS)`. This stabilizes the alternating

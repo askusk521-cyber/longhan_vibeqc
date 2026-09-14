@@ -6,6 +6,7 @@
 
 #include "api/error.hpp"
 #include "api/handles.hpp"
+#include "api/ks_diagnostic.hpp"
 #include "api/precision.hpp"
 #include "methods/method.hpp"
 #include "runtime/host_component_trace.hpp"
@@ -43,6 +44,8 @@ vibeqc_status vibeqc_batch_prepare(vibeqc_context* context, const vibeqc_system*
     candidate->atom_counts = std::move(atom_counts);
     candidate->last_fock_builds.resize(system_count);
     candidate->precision.resize(system_count);
+    candidate->scf_diagnostics.resize(system_count);
+    candidate->ks_diagnostics.resize(system_count);
     candidate->plan = vibeqc::methods::prepare_batch(context->state, std::move(native_systems),
                                                      *descriptor, flags);
     *batch = candidate.release();
@@ -59,6 +62,26 @@ void vibeqc_batch_destroy(vibeqc_batch* batch) {
 
 uint32_t vibeqc_batch_get_system_count(const vibeqc_batch* batch) {
   return batch == nullptr ? 0 : static_cast<std::uint32_t>(batch->plan->size());
+}
+
+vibeqc_status vibeqc_batch_get_scf_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                              vibeqc_scf_diagnostic* out) {
+  if (!batch || index >= batch->plan->size()) return VIBEQC_STATUS_INVALID_ARGUMENT;
+  if (out && !vibeqc::api::valid_descriptor(out)) return VIBEQC_STATUS_ABI_MISMATCH;
+  std::lock_guard<std::recursive_mutex> lock(batch->context->mutex);
+  if (!batch->scf_diagnostics[index]) return VIBEQC_STATUS_NOT_IMPLEMENTED;
+  if (out) *out = *batch->scf_diagnostics[index];
+  return VIBEQC_STATUS_SUCCESS;
+}
+
+vibeqc_status vibeqc_batch_get_ks_diagnostic(const vibeqc_batch* batch, uint32_t index,
+                                             vibeqc_ks_diagnostic* out,
+                                             vibeqc_ks_iteration* history,
+                                             uint32_t history_capacity) {
+  if (!batch || index >= batch->plan->size()) return VIBEQC_STATUS_INVALID_ARGUMENT;
+  std::lock_guard<std::recursive_mutex> lock(batch->context->mutex);
+  return vibeqc::api::copy_ks_diagnostic(batch->ks_diagnostics[index], out, history,
+                                         history_capacity);
 }
 
 vibeqc_status vibeqc_batch_get_last_shell_class_profile(const vibeqc_batch* batch,
@@ -299,6 +322,7 @@ vibeqc_status vibeqc_batch_get_hf_warm_state(const vibeqc_batch* batch, uint32_t
                                              vibeqc_hf_warm_state* state) {
   if (!batch || !state || index >= batch->plan->size()) return VIBEQC_STATUS_INVALID_ARGUMENT;
   if (!vibeqc::api::valid_descriptor(state)) return VIBEQC_STATUS_ABI_MISMATCH;
+  std::lock_guard<std::recursive_mutex> lock(batch->context->mutex);
   try {
     const auto& source = batch->plan->warm_state(index);
     if (!source) {
@@ -332,6 +356,7 @@ vibeqc_status vibeqc_batch_restore_hf_warm_states(vibeqc_batch* batch,
                                                   const vibeqc_hf_warm_state* states,
                                                   uint32_t count) {
   if (!batch || !states || count != batch->plan->size()) return VIBEQC_STATUS_INVALID_ARGUMENT;
+  std::lock_guard<std::recursive_mutex> lock(batch->context->mutex);
   try {
     // Validate dimensions against the trusted prepared topology before any
     // caller-controlled allocation or pointer arithmetic.
@@ -379,6 +404,8 @@ vibeqc_status vibeqc_batch_execute(vibeqc_batch* batch, const vibeqc_batch_input
   // Invalidate before validation/execution so rejected or throwing replays
   // cannot expose a record from the previous run.
   std::fill(batch->precision.begin(), batch->precision.end(), std::nullopt);
+  std::fill(batch->scf_diagnostics.begin(), batch->scf_diagnostics.end(), std::nullopt);
+  std::fill(batch->ks_diagnostics.begin(), batch->ks_diagnostics.end(), std::nullopt);
   const std::uint32_t system_count = vibeqc_batch_get_system_count(batch);
   if (result_count != system_count || ((inputs == nullptr) != (input_count == 0)) ||
       (inputs != nullptr && input_count != system_count)) {
@@ -429,9 +456,14 @@ vibeqc_status vibeqc_batch_execute(vibeqc_batch* batch, const vibeqc_batch_input
     }
     for (std::uint32_t i = 0; i < system_count; ++i) {
       vibeqc_batch_item_result_descriptor& output = results[i];
-      const vibeqc::methods::BatchItemResult& item = native[i];
+      vibeqc::methods::BatchItemResult& item = native[i];
       if (item.status == VIBEQC_STATUS_SUCCESS || item.status == VIBEQC_STATUS_NOT_CONVERGED) {
+        batch->ks_diagnostics[i] = std::move(item.calculation.ks_diagnostic);
         batch->precision[i] = item.calculation.precision;
+        if (item.calculation.physical_residual_rms)
+          batch->scf_diagnostics[i] = vibeqc_scf_diagnostic{
+              sizeof(vibeqc_scf_diagnostic), VIBEQC_ABI_VERSION,
+              item.calculation.convergence.residual_rms, *item.calculation.physical_residual_rms};
       }
       // A retry may have spent additional builds before throwing, and CUDA
       // does not yet export this counter. Never report a partial count as total.

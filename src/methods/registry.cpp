@@ -103,6 +103,15 @@ void validate_system(const MethodDefinition& definition, const core::System& sys
   }
 }
 
+void validate_option_family(const MethodDefinition& definition,
+                            const vibeqc_method_descriptor& descriptor) {
+  if (descriptor.struct_size >=
+          offsetof(vibeqc_method_descriptor, ks_options) + sizeof(descriptor.ks_options) &&
+      descriptor.ks_options &&
+      definition.capabilities.family != VIBEQC_METHOD_FAMILY_DENSITY_FUNCTIONAL)
+    throw MethodError(VIBEQC_STATUS_INVALID_ARGUMENT, "KS options require the DFT method family");
+}
+
 }  // namespace
 
 const Capabilities* find_capabilities(vibeqc_method method) noexcept {
@@ -114,6 +123,7 @@ std::unique_ptr<PreparedCalculation> prepare_calculation(
     core::ContextState& context, const core::System& system,
     const vibeqc_method_descriptor& descriptor) {
   const MethodDefinition& definition = require_available(descriptor.method);
+  validate_option_family(definition, descriptor);
   validate_system(definition, system);
   return definition.prepare_calculation(definition.capabilities, context, system, descriptor);
 }
@@ -123,6 +133,7 @@ std::unique_ptr<PreparedBatch> prepare_batch(core::ContextState& context,
                                              const vibeqc_method_descriptor& descriptor,
                                              vibeqc_batch_flags flags) {
   const MethodDefinition& definition = require_available(descriptor.method);
+  validate_option_family(definition, descriptor);
   if (!definition.capabilities.supports_batch || definition.prepare_batch == nullptr) {
     throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
                       "requested method does not support prepared batches");

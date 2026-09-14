@@ -28,7 +28,6 @@ class PreparedFockPlan;
 namespace vibeqc::dft {
 class AoBasis;
 class MolecularGrid;
-class PreparedCudaXcPlan;
 }  // namespace vibeqc::dft
 
 namespace vibeqc::scf {
@@ -46,7 +45,7 @@ ScfResult run_lda_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density = nullptr);
 
-/** CPU energy-only PBE RKS using the versioned production tail-v2 policy. */
+/** CPU energy-only PBE RKS using the versioned scaled-v1 domain policy. */
 ScfResult run_pbe_rks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density = nullptr);
@@ -63,27 +62,12 @@ ScfResult run_pbe_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
                       const dft::MolecularGrid& grid, const ScfOptions& options,
                       const std::vector<double>* initial_density = nullptr);
 
-/** CUDA Coulomb/XC consumers with host SCF control. These are prepared,
- * energy-only correctness
- * paths and make no device-residency or performance
- * claim for DIIS, eigensolves or the returned
- * matrices. */
-ScfResult run_lda_rks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
-                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
-                           const ScfOptions& options,
-                           const std::vector<double>* initial_density = nullptr);
-ScfResult run_pbe_rks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
-                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
-                           const ScfOptions& options,
-                           const std::vector<double>* initial_density = nullptr);
-ScfResult run_lda_uks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
-                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
-                           const ScfOptions& options,
-                           const std::vector<double>* initial_density = nullptr);
-ScfResult run_pbe_uks_cuda(const PreparedFockPlan& plan, const dft::AoBasis& basis,
-                           const dft::MolecularGrid& grid, dft::PreparedCudaXcPlan& xc,
-                           const ScfOptions& options,
-                           const std::vector<double>* initial_density = nullptr);
+/** Independent unit-occupation spins, Coulomb of total D, and semilocal XC.
+ * initial_density is alpha followed by beta; warm normalization preserves
+ * each requested population. DIIS and all physical states belong to this run. */
+ScfResult run_uks(const PreparedFockPlan& plan, const dft::AoBasis& basis,
+                  const dft::MolecularGrid& grid, const ScfOptions& options, bool pbe,
+                  const std::vector<double>* initial_density = nullptr);
 
 /** Reuse independent CUDA sources when immutable inputs match. Build a new
  * candidate completely before replacing cached sources; fused standard HF

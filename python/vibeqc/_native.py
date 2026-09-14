@@ -17,6 +17,7 @@ STATUS_ABI_MISMATCH = 2
 STATUS_NOT_IMPLEMENTED = 3
 STATUS_NOT_CONVERGED = 4
 STATUS_SCF_NOT_CONVERGED = 4
+STATUS_NUMERICAL_FAILURE = 5
 STATUS_OUT_OF_MEMORY = 7
 STATUS_INTERNAL_ERROR = 8
 STATUS_PRECISION_UNAVAILABLE = 9
@@ -178,6 +179,25 @@ class SystemDescriptor(ctypes.Structure):
     ]
 
 
+class KsOptionsDescriptor(ctypes.Structure):
+    """Borrowed model snapshot; native preparation copies every pointee."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("scf_domain_version", ctypes.c_uint32),
+        ("grid_version", ctypes.c_uint32),
+        ("radial_points", ctypes.c_uint32),
+        ("angular_polar", ctypes.c_uint32),
+        ("angular_azimuth", ctypes.c_uint32),
+        ("partition_iterations", ctypes.c_uint32),
+        ("coincident_tolerance", ctypes.c_double),
+        ("tile_points", ctypes.c_uint64),
+        ("element_radii", ctypes.POINTER(ctypes.c_double)),
+        ("element_radius_count", ctypes.c_uint32),
+    ]
+
+
 class MethodDescriptor(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -195,6 +215,7 @@ class MethodDescriptor(ctypes.Structure):
         ("precision_mode", ctypes.c_int32),
         ("correlation_memory_budget_bytes", ctypes.c_uint64),
         ("mp2_denominator_threshold", ctypes.c_double),
+        ("ks_options", ctypes.POINTER(KsOptionsDescriptor)),
     ]
 
 
@@ -256,6 +277,49 @@ class ScfDiagnostic(ctypes.Structure):
         ("abi_version", ctypes.c_uint32),
         ("density_rms", ctypes.c_double),
         ("physical_residual_rms", ctypes.c_double),
+    ]
+
+
+class KsIterationDescriptor(ctypes.Structure):
+    """One physical iteration; energy_change has no finite value on step one."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("iteration", ctypes.c_uint32),
+        ("occupation_stabilized", ctypes.c_int32),
+        ("nuclear_energy", ctypes.c_double),
+        ("one_electron_energy", ctypes.c_double),
+        ("hartree_energy", ctypes.c_double),
+        ("xc_energy", ctypes.c_double),
+        ("energy_change", ctypes.c_double),
+        ("density_change_max", ctypes.c_double),
+        ("physical_residual_max", ctypes.c_double),
+        ("electrons", ctypes.c_double * 2),
+    ]
+
+
+class KsDiagnosticDescriptor(ctypes.Structure):
+    """Additive KS summary; legacy result arrays retain their exact stride."""
+
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("scf_domain_version", ctypes.c_uint32),
+        ("required_ao_order", ctypes.c_uint32),
+        ("history_count", ctypes.c_uint32),
+        ("initial_density_used", ctypes.c_int32),
+        ("occupations", ctypes.c_uint64 * 2),
+        ("grid_points", ctypes.c_uint64),
+        ("tile_points", ctypes.c_uint64),
+        ("fock_builds", ctypes.c_uint64),
+        ("electrons", ctypes.c_double * 2),
+        ("nuclear_energy", ctypes.c_double),
+        ("one_electron_energy", ctypes.c_double),
+        ("hartree_energy", ctypes.c_double),
+        ("xc_energy", ctypes.c_double),
+        ("density_change_max", ctypes.c_double),
+        ("physical_residual_max", ctypes.c_double),
     ]
 
 
@@ -553,6 +617,14 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
     if scf_diagnostic is not None:
         scf_diagnostic.argtypes = [ctypes.c_void_p, ctypes.POINTER(ScfDiagnostic)]
         scf_diagnostic.restype = ctypes.c_int
+    batch_scf_diagnostic = getattr(library, "vibeqc_batch_get_scf_diagnostic", None)
+    if batch_scf_diagnostic is not None:
+        batch_scf_diagnostic.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ScfDiagnostic),
+        ]
+        batch_scf_diagnostic.restype = ctypes.c_int
     library.vibeqc_batch_prepare.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_void_p),
@@ -576,6 +648,20 @@ def load_library(*, device: str | None = None, device_id: int = 0) -> ctypes.CDL
         ctypes.POINTER(PppsQueueProfile),
     ]
     library.vibeqc_batch_get_last_ppps_queue_profile.restype = ctypes.c_int
+    for name, prefix in (
+        ("vibeqc_calculation_get_ks_diagnostic", [ctypes.c_void_p]),
+        ("vibeqc_batch_get_ks_diagnostic", [ctypes.c_void_p, ctypes.c_uint32]),
+    ):
+        ks_query = getattr(library, name, None)
+        if ks_query is not None:
+            ks_query.argtypes = [
+                *prefix,
+                ctypes.POINTER(KsDiagnosticDescriptor),
+                ctypes.POINTER(KsIterationDescriptor),
+                ctypes.c_uint32,
+            ]
+            ks_query.restype = ctypes.c_int
+
     library.vibeqc_batch_get_last_eigensolver_diagnostics.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(EigensolverDiagnostic),

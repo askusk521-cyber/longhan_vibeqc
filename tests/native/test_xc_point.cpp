@@ -48,28 +48,6 @@ int main() {
     if (count != 97) throw std::runtime_error("incomplete SCF domain fixture");
     {
       double rho[2]{0.5, 0.5}, gradient[2][3]{};
-      const auto interior = vibeqc::dft::point::evaluate_rks(true, rho, gradient);
-      const auto pbe = vibeqc::dft::point::evaluate(true, rho, gradient);
-      if (!interior.valid || interior.energy != pbe.energy || interior.rho[0] != pbe.rho[0])
-        throw std::runtime_error("RKS PBE interior policy changed the shared point value");
-      rho[0] = rho[1] = 5.0e-14;
-      const auto low_tail = vibeqc::dft::point::evaluate_rks(true, rho, gradient);
-      const auto lda = vibeqc::dft::point::evaluate(false, rho, gradient);
-      if (!low_tail.valid || low_tail.energy != lda.energy || low_tail.rho[0] != lda.rho[0])
-        throw std::runtime_error("RKS low-density PBE tail did not use LDA");
-      rho[0] = rho[1] = 0.5;
-      gradient[0][0] = gradient[1][0] = 6.0e5;
-      const auto gradient_tail = vibeqc::dft::point::evaluate_rks(true, rho, gradient);
-      const auto gradient_lda = vibeqc::dft::point::evaluate(false, rho, gradient);
-      if (!gradient_tail.valid || gradient_tail.energy != gradient_lda.energy ||
-          gradient_tail.gradient[0][0] != 0.0)
-        throw std::runtime_error("RKS high-gradient PBE tail did not use zero-response LDA");
-      rho[1] = 0.4;
-      if (vibeqc::dft::point::evaluate_rks(true, rho, gradient).valid)
-        throw std::runtime_error("RKS point policy accepted unequal spin features");
-    }
-    {
-      double rho[2]{0.5, 0.5}, gradient[2][3]{};
       if (!vibeqc::dft::point::evaluate_interior(true, rho, gradient).valid)
         throw std::runtime_error("XC interior policy rejected a valid PBE point");
       rho[0] = rho[1] = 4.0e-13;
@@ -102,6 +80,7 @@ int main() {
         throw std::runtime_error("infinite density was accepted");
     }
     std::cout << count << " independent LDA/PBE SCF-domain E/V points passed\n";
+    return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

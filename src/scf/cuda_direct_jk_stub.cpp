@@ -1,3 +1,5 @@
+#include <stdexcept>
+
 #include "scf/cuda_direct_jk.hpp"
 
 namespace vibeqc::scf {
@@ -7,6 +9,10 @@ vibeqc_status unavailable(std::string& detail) {
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 }
 }  // namespace
+std::size_t cuda_direct_jk_device_bytes(std::size_t, std::size_t, std::size_t, std::size_t,
+                                        std::size_t, unsigned) {
+  throw std::runtime_error("CUDA direct J/K allocation inventory requires a CUDA build");
+}
 vibeqc_status create_cuda_direct_jk_plan(int, const std::vector<core::System>&, unsigned, double,
                                          std::size_t, CudaDirectJkPlan** output,
                                          CudaDirectJkDiagnostic& diagnostic, std::string& detail) {

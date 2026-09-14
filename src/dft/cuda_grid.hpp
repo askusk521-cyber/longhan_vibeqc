@@ -9,10 +9,9 @@ extern "C" {
  * LDA/PBE point algebra. Features and AO jets stay on the grid owner's
  * stream; only weights are uploaded and the three scalar integrals are
  * returned. The local spin potentials remain in the borrowed task buffer and
- * are consumed by grid_cuda_scatter_v1.
+ * are consumed by grid_cuda_scatter_v1. The interior flag must be 1: this
+ * private compiler consumer does not implement the resident KS tail policy.
  */
-int grid_cuda_xc_v1(void* pointer, std::uint64_t generation, int pbe, const double* weights,
-                    std::size_t npoint, double* integrals, char* error, std::size_t size);
 int grid_cuda_xc_v2(void* pointer, std::uint64_t generation, int pbe, int restricted, int interior,
                     const double* weights, std::size_t npoint, double* integrals, char* error,
                     std::size_t size);

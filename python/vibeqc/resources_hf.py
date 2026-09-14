@@ -74,7 +74,17 @@ def _cuda_library_identity(library):
     return {"native_binary_sha256": digest, "profile_identity": profile.get("identity")}
 
 
-def _basis_record(atoms, basis, representation, backend, charge, multiplicity, role):
+def _basis_record(
+    atoms,
+    basis,
+    representation,
+    backend,
+    charge,
+    multiplicity,
+    role,
+    *,
+    derivative_order=1,
+):
     selected = _snapshot_basis(basis, representation)
     mode = (
         selected.representation
@@ -86,7 +96,7 @@ def _basis_record(atoms, basis, representation, backend, charge, multiplicity, r
         atoms,
         backend=backend,
         operator="eri",
-        derivative_order=1,
+        derivative_order=derivative_order,
         representation=mode,
         role=role,
     )

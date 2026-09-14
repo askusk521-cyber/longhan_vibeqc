@@ -295,6 +295,12 @@ std::size_t PreparedFockPlan::cpu_observation_capacity() const noexcept {
 const FockPreparationDiagnostic& PreparedFockPlan::diagnostic() const noexcept {
   return impl_->diagnostic;
 }
+CudaDirectJkPlan* PreparedFockPlan::cuda_direct_source() const noexcept {
+  return impl_->cuda_exact.get();
+}
+bool PreparedFockPlan::matches_system(const core::System& system) const noexcept {
+  return same_system(impl_->orbital, system);
+}
 DirectJkMatrices PreparedFockPlan::build(const std::vector<double>& density,
                                          const std::vector<double>& beta) const {
   return impl_->cpu_view ? impl_->cpu_view->build(density, beta)

@@ -32,6 +32,7 @@ struct vibeqc_calculation {
   bool precision_available{false};
   /** Completed-run SCF measures; cleared before a new backend execution. */
   std::optional<vibeqc_scf_diagnostic> scf_diagnostic;
+  std::optional<vibeqc::dft::ScfDiagnostic> ks_diagnostic;
 };
 
 struct vibeqc_batch {
@@ -41,6 +42,9 @@ struct vibeqc_batch {
   std::vector<std::uint64_t> last_fock_builds;
   /** Input-ordered completed-run records; invalid/throwing items stay unavailable. */
   std::vector<std::optional<vibeqc::scf::PrecisionProvenance>> precision;
+  /** Separate from the fixed-stride legacy batch output array. */
+  std::vector<std::optional<vibeqc_scf_diagnostic>> scf_diagnostics;
+  std::vector<std::optional<vibeqc::dft::ScfDiagnostic>> ks_diagnostics;
 };
 
 #endif

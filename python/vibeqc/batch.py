@@ -14,6 +14,7 @@ import numpy as np
 from . import _native
 from .accuracy import AccuracyAssessment
 from .calculator import Atom, Calculator
+from .ks_diagnostics import KsDiagnostic, read_ks_diagnostic
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,9 @@ class BatchItemResult:
     fock_builds: int | None = None
     # None means this item did not complete a solve, or the library predates the query.
     precision: dict | None = None
+    # Physical commutator at the returned density; absent for unsupported methods.
+    physical_residual_rms: float | None = None
+    ks_diagnostic: KsDiagnostic | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -71,7 +75,7 @@ class BatchResult:
             if not item.succeeded
         ]
         if failures:
-            raise RuntimeError("batched HF item failures: " + "; ".join(failures))
+            raise RuntimeError("batched item failures: " + "; ".join(failures))
 
 
 def _decode_triangular_class(index: int) -> tuple[int, int]:
@@ -372,7 +376,11 @@ class PreparedBatch:
         if len(self._charges) != count or len(self._multiplicities) != count:
             raise ValueError("charges and multiplicities must match the batch size")
         for atoms in self._systems:
-            calculator._preflight_hf_basis(atoms)
+            calculator._preflight_hf_basis(
+                atoms,
+                compute_forces="forces"
+                in calculator._capabilities.supported_properties,
+            )
         self.resource_plan = resource_plan
         self.resource_diagnostics = None
         self._resource_ledger = None
@@ -392,7 +400,7 @@ class PreparedBatch:
                 owned = {r.name: r for r in resource_plan.requests}
                 if owned.get(request.name) != request:
                     raise ValueError(
-                        "prepared HF inputs differ from the global resource plan"
+                        f"prepared {request.name.upper()} inputs differ from the global resource plan"
                     )
                 if (
                     calculator._resource_budget is not None
@@ -406,7 +414,7 @@ class PreparedBatch:
                 from .resources_native import NativeDeviceLedger
 
                 self._resource_ledger = NativeDeviceLedger(
-                    self._library, self.resource_plan
+                    self._library, self.resource_plan, owner=request.name
                 )
             if request.identity.backend == "cuda" and (
                 shell_class_profiling or inactive_eigensolver_profiling
@@ -468,17 +476,31 @@ class PreparedBatch:
                 flags |= _native.BATCH_ENABLE_SHELL_CLASS_PROFILING
             if inactive_eigensolver_profiling:
                 flags |= _native.BATCH_ENABLE_INACTIVE_EIGENSOLVER_PROFILING
-            _native.check(
-                self._library,
-                self._library.vibeqc_batch_prepare(
+
+            def prepare():
+                return self._library.vibeqc_batch_prepare(
                     self._context,
                     handle_array,
                     count,
                     ctypes.byref(method),
                     flags,
                     ctypes.byref(self._batch),
-                ),
-            )
+                )
+
+            if self.resource_plan is None:
+                _native.check(self._library, prepare())
+            else:
+                from .resources_native import check_resource_status, observe_method_call
+
+                status, self.resource_diagnostics = observe_method_call(
+                    self._library,
+                    self.resource_plan,
+                    self._resource_ledger,
+                    prepare,
+                    owner=request.name,
+                    phase="preparation",
+                )
+                check_resource_status(self._library, status, self.resource_diagnostics)
         except Exception:
             self.close()
             raise
@@ -528,9 +550,9 @@ class PreparedBatch:
     ) -> BatchResult:
         """Replay the fleet, optionally omitting analytic forces.
 
-        The default requests every property supported by the prepared method.
-        ``properties=("energy",)`` skips force evaluation and returns
-        ``forces=None`` for each item.
+        The default requests the method's supported properties. Energy-only
+        methods return ``forces=None``; HF can omit forces explicitly with
+        ``properties=("energy",)``.
         Output selection does not change the prepared model or warm snapshot;
         a later force replay rebuilds response caches when necessary. Resource
         plans retain their conservative energy-plus-force capacity allowance.
@@ -554,9 +576,9 @@ class PreparedBatch:
             raise ValueError(f"unsupported properties: {names}")
         unsupported = requested - self._calculator._capabilities.supported_properties
         if unsupported:
-            names = ", ".join(sorted(unsupported))
             raise ValueError(
-                f"method {self._calculator._method_name!r} does not support properties: {names}"
+                f"method {self._calculator._method_name!r} does not support properties: "
+                + ", ".join(sorted(unsupported))
             )
         compute_forces = "forces" in requested
         if self._calculator._model_signature() != self._model_signature:
@@ -633,7 +655,7 @@ class PreparedBatch:
                 count,
             )
         else:
-            from .resources import CpuResourceObservation
+            from .resources_native import observe_method_call
 
             current = self._calculator._resource_request(
                 self._systems,
@@ -644,19 +666,18 @@ class PreparedBatch:
                 r for r in self.resource_plan.requests if r.name == current.name
             ):
                 raise ValueError(
-                    "HF resource inputs or execution schedule changed after preparation"
+                    f"{current.name.upper()} resource inputs or execution schedule changed after preparation"
                 )
-            with CpuResourceObservation(
-                self._library, cpu_workers=1, ledger=self._resource_ledger
-            ) as observed:
-                status = self._library.vibeqc_batch_execute(
+            status, self.resource_diagnostics = observe_method_call(
+                self._library,
+                self.resource_plan,
+                self._resource_ledger,
+                lambda: self._library.vibeqc_batch_execute(
                     self._batch, inputs_pointer, input_count, output_array, count
-                )
-            self.resource_diagnostics = {
-                "plan": self.resource_plan.to_dict(),
-                "observation": observed.to_dict(),
-            }
-            observed.verify(self.resource_plan)
+                ),
+                owner=current.name,
+                previous=self.resource_diagnostics,
+            )
         if self.resource_diagnostics is None:
             _native.check(self._library, status)
         else:
@@ -676,6 +697,16 @@ class PreparedBatch:
             ):
                 _native.check(self._library, count_status)
             succeeded = output.status == _native.STATUS_SUCCESS
+            physical_residual_rms = None
+            scf_getter = getattr(self._library, "vibeqc_batch_get_scf_diagnostic", None)
+            if scf_getter is not None:
+                diagnostic = _native.ScfDiagnostic(
+                    ctypes.sizeof(_native.ScfDiagnostic), _native.ABI_VERSION
+                )
+                status = scf_getter(self._batch, index, ctypes.byref(diagnostic))
+                if status != _native.STATUS_NOT_IMPLEMENTED:
+                    _native.check(self._library, status, context=self._context)
+                    physical_residual_rms = diagnostic.physical_residual_rms
             forces = (
                 np.ctypeslib.as_array(force_storage[index]).copy().reshape(-1, 3)
                 if succeeded and compute_forces
@@ -713,6 +744,10 @@ class PreparedBatch:
                     iterations=output.iterations,
                     energy_change=output.energy_change,
                     density_rms=output.density_rms,
+                    physical_residual_rms=physical_residual_rms,
+                    ks_diagnostic=read_ks_diagnostic(self._library, self._batch, index)
+                    if self._calculator._ks_options is not None
+                    else None,
                     executed_backend={
                         _native.BACKEND_CPU_REFERENCE: "cpu_reference",
                         _native.BACKEND_CUDA: "cuda",

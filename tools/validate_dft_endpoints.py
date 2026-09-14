@@ -27,7 +27,6 @@ from vibeqc.autotune import source_identity
 
 METHODS = ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks")
 UKS_METHODS = frozenset(("lda-uks", "pbe-uks"))
-DEFAULT_GRID_POINTS_PER_ATOM = 48 * 16 * 32
 
 
 def capture(argv: list[str]) -> str:
@@ -72,6 +71,7 @@ def changed_coordinates(systems):
 
 
 def result_record(result, milliseconds: float):
+    """Keep physical convergence and actual prepared grids with every phase."""
     return {
         "milliseconds": milliseconds,
         "energies": result.energies.tolist(),
@@ -80,6 +80,9 @@ def result_record(result, milliseconds: float):
         "warm_start_used": [item.warm_start_used for item in result.items],
         "warm_start_fallback": [item.warm_start_fallback for item in result.items],
         "bucket_ids": [item.bucket_id for item in result.items],
+        "converged": [item.converged for item in result.items],
+        "physical_residuals": [item.physical_residual_rms for item in result.items],
+        "grid_points": [item.ks_diagnostic.grid_points for item in result.items],
     }
 
 
@@ -120,6 +123,10 @@ def validate_phase(record, expected):
         )
     if any(backend != "cuda" for backend in record["executed_backends"]):
         raise RuntimeError("DFT endpoint did not execute on CUDA")
+    if not all(record["converged"]) or not all(
+        residual < 1.0e-9 for residual in record["physical_residuals"]
+    ):
+        raise RuntimeError("DFT endpoint did not pass the physical convergence gate")
 
 
 def run_case(method: str, batch: int):
@@ -167,8 +174,11 @@ def run_case(method: str, batch: int):
             raise RuntimeError("cold DFT batch unexpectedly used a warm density")
         if not all(phases["fixed_geometry"]["warm_start_used"]):
             raise RuntimeError("fixed-geometry DFT replay did not use warm densities")
-        if any(phases["changed_geometry"]["warm_start_used"]):
-            raise RuntimeError("changed geometry reused stale DFT warm densities")
+        # Resident KS rebuilds geometry-bound owners and normalizes the last
+        # good density in the target overlap metric. Independent target energies
+        # and physical residuals above guard against reuse of the old operator.
+        if not all(phases["changed_geometry"]["warm_start_used"]):
+            raise RuntimeError("changed geometry lost compatible DFT warm seeds")
         if not all(phases["changed_geometry_fixed"]["warm_start_used"]):
             raise RuntimeError(
                 "changed-geometry replay did not retain new warm densities"
@@ -178,9 +188,7 @@ def run_case(method: str, batch: int):
     return {
         "method": method,
         "batch": batch,
-        "grid_points": [
-            len(system) * DEFAULT_GRID_POINTS_PER_ATOM for system in systems
-        ],
+        "grid_points": phases["cold"]["grid_points"],
         "setup_milliseconds": prepare_ms,
         "phases": phases,
         "component_costs": {
@@ -217,7 +225,7 @@ def main():
             "properties": ["energy"],
             "coulomb": "conventional exact J",
             "density_fitting": "unsupported",
-            "scf_control": "host DIIS/eigensolve with CUDA J/XC",
+            "scf_control": "host scalar control with resident CUDA J/XC/Fock/DIIS/eigensolve state",
             "performance_claim": False,
         },
         "runs": [],

@@ -10,6 +10,7 @@
 #include "molecule/basis.hpp"
 #include "scf/cuda_density_fitting.hpp"
 #include "scf/cuda_direct_jk.hpp"
+#include "scf/cuda_direct_jk_device.hpp"
 #include "scf/density_fitting.hpp"
 
 namespace {
@@ -38,9 +39,74 @@ struct DeviceMatrix {
         cudaMemcpy(actual.data(), pointer, actual.size() * sizeof(double), cudaMemcpyDeviceToHost));
     for (std::size_t i = 0; i < actual.size(); ++i)
       require(std::isfinite(actual[i]) && std::abs(actual[i] - expected[i]) < 3e-12,
-              "independent device DF matrix differs from CPU");
+              "independent device provider matrix differs from CPU");
   }
 };
+
+/** Exercise the same resident boundary consumed by native KS: enqueue on the
+ * provider stream, then explicitly export only at this reference boundary. */
+void direct_device(CudaDirectJkPlan* plan, FockBuildSpec spec, const std::vector<double>& a,
+                   const std::vector<double>& b, const std::vector<double>& expected_j,
+                   const std::vector<double>& expected_a, const std::vector<double>& expected_b) {
+  spec.derivative_order = 0;
+  const bool unrestricted = spec.spin == FockSpin::Unrestricted;
+  const std::vector<double> sentinel(a.size(), 123.0);
+  DeviceMatrix da(a), db(b), j(sentinel), ka(sentinel), kb(sentinel), error({0.0});
+  std::string detail;
+  require(
+      enqueue_cuda_direct_jk_device(
+          plan, spec, da.pointer, unrestricted ? db.pointer : nullptr, a.size(),
+          spec.coulomb.present ? j.pointer : nullptr, spec.exchange.present ? ka.pointer : nullptr,
+          spec.exchange.present && unrestricted ? kb.pointer : nullptr,
+          reinterpret_cast<int*>(error.pointer), detail) == VIBEQC_STATUS_SUCCESS,
+      detail.c_str());
+  const auto stream = cuda_direct_jk_stream(plan);
+  int failure = -1;
+  check(cudaMemcpyAsync(&failure, error.pointer, sizeof(failure), cudaMemcpyDeviceToHost, stream));
+  check(cudaStreamSynchronize(stream));
+  require(failure == 0, "valid resident J/K data failed numerical validation");
+  j.verify(spec.coulomb.present ? expected_j : sentinel);
+  ka.verify(spec.exchange.present ? expected_a : sentinel);
+  kb.verify(spec.exchange.present && unrestricted ? expected_b : sentinel);
+  da.verify(a);
+  db.verify(b);
+}
+
+void direct_device_failures(CudaDirectJkPlan* plan, const std::vector<double>& a) {
+  DeviceMatrix da(a), j(std::vector<double>(a.size())), error({0.0});
+  auto spec = make_hf_fock_spec(FockSpin::Restricted);
+  spec.derivative_order = 0;
+  spec.exchange.present = false;
+  std::string detail;
+  auto* failure_pointer = reinterpret_cast<int*>(error.pointer);
+  require(enqueue_cuda_direct_jk_device(plan, spec, da.pointer, nullptr, a.size(), da.pointer,
+                                        nullptr, nullptr, failure_pointer,
+                                        detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+          "resident J/K accepted overlapping input/output");
+  require(enqueue_cuda_direct_jk_device(plan, spec, da.pointer, nullptr, a.size() - 1, j.pointer,
+                                        nullptr, nullptr, failure_pointer,
+                                        detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+          "resident J/K accepted incomplete batch dimensions");
+  auto invalid = a;
+  invalid[0] = std::numeric_limits<double>::quiet_NaN();
+  check(cudaMemcpy(da.pointer, invalid.data(), invalid.size() * sizeof(double),
+                   cudaMemcpyHostToDevice));
+  const auto stream = cuda_direct_jk_stream(plan);
+  for (bool recover : {false, true}) {
+    if (recover)
+      check(cudaMemcpy(da.pointer, a.data(), a.size() * sizeof(double), cudaMemcpyHostToDevice));
+    require(
+        enqueue_cuda_direct_jk_device(plan, spec, da.pointer, nullptr, a.size(), j.pointer, nullptr,
+                                      nullptr, failure_pointer, detail) == VIBEQC_STATUS_SUCCESS,
+        detail.c_str());
+    int failure = -1;
+    check(cudaMemcpyAsync(&failure, failure_pointer, sizeof(failure), cudaMemcpyDeviceToHost,
+                          stream));
+    check(cudaStreamSynchronize(stream));
+    require(recover ? failure == 0 : failure != 0,
+            "resident J/K failure state was lost or not reset");
+  }
+}
 
 void device_selection() {
   const std::vector<double> metric{2.0, 0.1, 0.1, 1.3};
@@ -192,6 +258,7 @@ void direct_providers(bool through_f_response) {
             compare(dj, ej);
             compare(dka, eka);
             compare(dkb, ekb);
+            direct_device(plan.get(), spec, packed_a, packed_b, ej, eka, ekb);
             std::vector<double> actual_gradient;
             if (response || !derivatives) {
               const auto status = execute_cuda_direct_energy_derivative(
@@ -223,6 +290,7 @@ void direct_providers(bool through_f_response) {
                   !too_small,
               "nonfinite direct source geometry accepted");
       if (angular == 0 && representation == VIBEQC_BASIS_CARTESIAN) {
+        direct_device_failures(plan.get(), packed_a);
         // Inputs are finite but deliberately outside the stable numerical
         // range. A failed bound must not silently screen the entire source.
         invalid = first;

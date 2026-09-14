@@ -34,6 +34,8 @@ from .calculator import (
 )
 from .elements import ElectronState, electron_state
 from .fock import FockBuildSpec, FockEvaluation, FockPlan, FockScfResult, FockTerm
+from .ks import FunctionalSpec, GridSpec, KsOptions
+from .ks_diagnostics import KsDiagnostic, KsEnergyComponents, KsIteration
 from .mean_field import FixedDensityMeanField, MeanFieldEvaluation
 from .overlap import cross_overlap
 from .progressive import ProgressiveResult, projected_singlepoint
@@ -57,6 +59,7 @@ from .resources import (
     plan_resources,
 )
 from .resources_hf import estimate_hf_resources
+from .resources_ks import estimate_ks_resources
 
 __all__ = [
     "AccuracyAssessment",
@@ -80,7 +83,13 @@ __all__ = [
     "FockPlan",
     "FockScfResult",
     "FockTerm",
+    "FunctionalSpec",
+    "GridSpec",
     "InactiveEigensolverProfileEntry",
+    "KsDiagnostic",
+    "KsEnergyComponents",
+    "KsIteration",
+    "KsOptions",
     "MeanFieldEvaluation",
     "MethodCapabilities",
     "ObservableTarget",
@@ -110,6 +119,7 @@ __all__ = [
     "cross_overlap",
     "electron_state",
     "estimate_hf_resources",
+    "estimate_ks_resources",
     "import_bse",
     "load_basis",
     "method_capabilities",

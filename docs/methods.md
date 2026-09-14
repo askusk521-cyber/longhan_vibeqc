@@ -3,8 +3,8 @@
 VibeQC's long-term mission is to cover **all quantum-chemistry methods** in one
 accelerator-native system. This is a roadmap commitment, not a statement of
 current availability. RHF and UHF provide energies and analytic nuclear forces;
-closed-shell MP2 and CPU/prepared-CUDA LDA/PBE RKS/UKS slices provide
-energy-only execution.
+closed-shell MP2 and CPU/CUDA LDA/PBE RKS/UKS slices provide energy-only
+execution.
 
 ## Current method status
 
@@ -14,10 +14,10 @@ energy-only execution.
 | Hartree-Fock | UHF | Implemented: energy and analytic forces |
 | Hartree-Fock | ROHF, GHF, spinor HF | Planned |
 | Density fitting | Two-/three-center integral oracle, first nuclear derivatives, metric conditioning, memory planner | CPU oracle plus CUDA-native batched integral generation, RI-J/K, raw two-electron force-response contractions, and device-resident SCF integration implemented; streamed host tiles and provider-dependent Graph replay are documented acceptance-boundary modes |
-| Density functional theory | LDA RKS | Energy-only CPU and prepared-CUDA slice: closed shell, conventional exact J; independent matched-grid SCF endpoints cover H2 and He |
-| Density functional theory | PBE RKS | Energy-only CPU and prepared-CUDA slice: closed shell, conventional exact J, exact interior PBE and versioned LDA fallback tail; independent matched-grid SCF endpoints cover H2 |
-| Density functional theory | LDA/PBE UKS | Energy-only CPU and prepared-CUDA slices: independent spin densities, total-density conventional exact J and versioned spin-tail policies; matched-grid H2- doublet and fully polarized H2+ endpoints cover open-shell behavior |
-| Density functional theory | meta-GGA, hybrid, range-separated, nonlocal correlation | Planned |
+| Density functional theory | LDA RKS | CPU/CUDA single-system and native ragged energy only, closed shell, conventional J; independent matched-grid H2, He and water gates |
+| Density functional theory | PBE RKS | CPU/CUDA single-system and native ragged energy only, closed shell, conventional J; scaled PBE tail algebra and independent matched-grid H2, He and water gates |
+| Density functional theory | LDA/PBE UKS | CPU/CUDA single-system and native ragged energy only, independent spins, conventional J; matched-grid H, Li and H2+ gates; explicit PBE spin boundary policy |
+| Density functional theory | Meta-GGA, hybrid, range-separated, nonlocal correlation | Planned |
 | Perturbation theory | Closed-shell MP2 | Conventional and RI energy implemented on CPU/CUDA; analytic forces planned |
 | Perturbation theory | Open-shell, frozen-core, ECP and higher-order variants | Planned |
 | Coupled cluster | CCSD, perturbative triples, higher-rank variants | Planned |
@@ -58,30 +58,37 @@ force-response kernels and broader HF robustness.
 Method capability discovery and prepared execution are now registry-driven:
 the public API is independent of RHF/UHF dispatch, while each method family
 owns its validation, options, retained state, and batch policy.
-The native LDA and PBE RKS/UKS paths compose versioned atom-centered grids,
-generated XC and the common Coulomb provider. CPU and prepared-CUDA execution
-share host-controlled SCF iteration, DIIS and eigensolution. The CUDA path owns
-the conventional exact-J build and bounded tiled XC density/potential work on
-device, but returns matrices and scalar diagnostics to the host; it is not a
-fully GPU-resident SCF loop. Prepared energy-only batches preserve input order,
-isolate item failures, retain compatible fixed-geometry warm densities and
-rebuild plans when geometry changes. Density fitting, forces and gradients are
-not supported for these DFT methods. Their small matched-grid endpoints pass
-the independent PySCF/Libxc CPU gates recorded under the issue-162-a and
-issue-0162-b validation records, with CPU/CUDA endpoint parity checked
-separately. No DFT performance-leadership claim follows from this correctness
-slice; broader representative-system and resource evidence remains future
-work. `tools/validate_dft_endpoints.py` records the method-resolved prepared
-CUDA cold, fixed-geometry, changed-geometry, batch-1 and ragged endpoint gates.
+The native LDA/PBE RKS and UKS paths compose versioned atom-centered grids,
+XC, the common Coulomb provider and CPU/native CUDA SCF. The
+[SCF point-domain contract](xc_scf_domain.md) specifies the exact compositions,
+stable tail algebra and explicit PBE spin endpoint extension. The issue-0162-b
+record retains the independent CPU H2-/H2+/OH UKS endpoints. Additional
+CPU/CUDA matched-grid tests use two PySCF initial guesses; native tests enforce
+physical residuals, spin populations and stale-input rejection. Native prepared
+ragged batches preserve per-item status/order and last-good densities through
+geometry rebuilds, failure, frozen updates and atomic seed import. CUDA batches
+enqueue all active item streams before reading their scalar results. Public
+KS resource plans cover preparation, execution and geometry rebuilds through
+the common ledger; see [resource planning](resource_planning.md). Immutable
+[KS options](ks_options.md) bind the functional, grid/radii and tile schedule
+to native preparation and resource identity. Richer diagnostics and workload
+evidence remain open parts of #162.
+`tools/validate_dft_endpoints.py` records method-resolved cold, warm and changed
+geometry phases against independent CPU energies and physical residual gates.
+The resident owner replaces #307's host-controlled method path; its compiler
+spatial-XC consumer remains available with the separate `interior-v1` contract.
+Nuclear gradients remain #163. No DFT density-fitting or performance-leadership
+claim follows from the tested CPU/CUDA energy endpoints.
 The public `Result.density_rms` retains its density-update convergence meaning.
 The separate `Result.physical_residual_rms` reports the physical commutator
-RMS for these KS methods; UKS combines the alpha/beta matrix entries in one RMS.
-The additive C query `vibeqc_calculation_get_scf_diagnostic` returns both
-measures without changing the existing result descriptor layout. The physical
+RMS; UKS combines the alpha/beta matrix entries in both public RMS measures.
+The additive C queries `vibeqc_calculation_get_scf_diagnostic` and
+`vibeqc_batch_get_scf_diagnostic` return both measures without changing the
+existing result descriptor layouts or batch array stride. The physical
 measure is unavailable (`None` in Python) for methods that do not report it
-and for older native libraries. Both measures participate in KS convergence.
-AO-to-MO transforms and correlated tensor contractions open the post-HF
-families.
+and for older native libraries. KS internally gates each spin separately, so
+an empty spin cannot dilute an unconverged channel.
+AO-to-MO transforms and correlated tensor contractions open the post-HF families.
 The RI-MP2 endpoint uses an RHF reference built with the same thresholded
 density-fitting Hamiltonian as its correlation integrals. The auxiliary Coulomb
 metric uses a square symmetric inverse square root with eigenvalues at or below

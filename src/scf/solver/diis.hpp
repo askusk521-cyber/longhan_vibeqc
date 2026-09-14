@@ -10,7 +10,10 @@ using reference::Matrix;
  */
 class Diis {
  public:
-  explicit Diis(std::size_t capacity);
+  /** KS can normalize the residual Gram block before the pivot test. A common
+   * scale preserves DIIS coefficients while allowing physical residuals well
+   * below 1e-7. The default preserves historical HF iteration behavior. */
+  explicit Diis(std::size_t capacity, bool normalize_metric = false);
   /** Retained numerical capacity, excluding temporary extrapolation storage. */
   std::size_t numeric_capacity() const noexcept;
   void clear();
@@ -18,6 +21,7 @@ class Diis {
 
  private:
   std::size_t capacity_;
+  bool normalize_metric_{};
   std::vector<Matrix> focks_;
   std::vector<Matrix> residuals_;
 };

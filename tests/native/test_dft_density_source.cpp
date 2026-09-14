@@ -240,7 +240,7 @@ void native_scf() {
               "nonconvergence test unexpectedly converged");
       check_current(unfinished);
       check_current(c);  // Later replays must not mutate an earlier snapshot.
-      std::cout << "native RKS " << (run == scf::run_lda_rks ? "LDA" : "PBE-tail-v2")
+      std::cout << "native RKS " << (run == scf::run_lda_rks ? "LDA" : "PBE-scaled-v1")
                 << " nao=" << basis.nao << " iterations D/C=" << d.iterations << '/' << c.iterations
                 << " E error=" << std::abs(c.energy - d.energy)
                 << " C residual=" << c.xc_density_diagnostic.physical_residual << '\n';

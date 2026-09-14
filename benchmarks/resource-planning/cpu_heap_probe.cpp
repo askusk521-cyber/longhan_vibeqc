@@ -13,6 +13,7 @@
 #include <new>
 #include <vector>
 
+#include "methods/method.hpp"
 #include "molecule/basis.hpp"
 #include "scf/fleet.hpp"
 
@@ -71,7 +72,7 @@ void operator delete[](void* p, std::size_t, std::align_val_t) noexcept { releas
 extern "C" int vibeqc_resource_tracking_begin_v1(unsigned);
 extern "C" int vibeqc_resource_tracking_end_v1(std::uint64_t*, std::uint64_t*);
 
-int main() {
+int main(int argc, char** argv) {
   std::size_t count = 0;
   int unrestricted = 0, fitted = 0;
   if (!(std::cin >> count >> unrestricted >> fitted) || count == 0 || count > 64) return 2;
@@ -100,7 +101,21 @@ int main() {
     std::string detail;
     if (vibeqc::molecule::validate_and_normalize(system, detail) != VIBEQC_STATUS_SUCCESS) return 2;
   }
-  const auto method = unrestricted ? VIBEQC_METHOD_UHF : VIBEQC_METHOD_RHF;
+  auto method = unrestricted ? VIBEQC_METHOD_UHF : VIBEQC_METHOD_RHF;
+  const bool ks = argc == 2;
+  if (ks) {
+    const std::string name(argv[1]);
+    if (name == "lda-rks")
+      method = VIBEQC_METHOD_LDA_RKS;
+    else if (name == "pbe-rks")
+      method = VIBEQC_METHOD_PBE_RKS;
+    else if (name == "lda-uks")
+      method = VIBEQC_METHOD_LDA_UKS;
+    else if (name == "pbe-uks")
+      method = VIBEQC_METHOD_PBE_UKS;
+    else
+      return 2;
+  }
   vibeqc::scf::ScfOptions options;
   options.density_fitting_mode =
       fitted ? VIBEQC_DENSITY_FITTING_CPU_REFERENCE : VIBEQC_DENSITY_FITTING_NONE;
@@ -109,7 +124,37 @@ int main() {
   bool success = true;
   if (vibeqc_resource_tracking_begin_v1(1) != 0) return 2;
   recording = true;
-  {
+  if (ks) {
+    // Exercise the public method-family owner, including retained quadrature
+    // and changed-geometry rebuilds. No HF fleet can stand in for these bytes.
+    vibeqc::core::ContextState context;
+    vibeqc_method_descriptor descriptor{};
+    descriptor.struct_size = sizeof(descriptor);
+    descriptor.abi_version = VIBEQC_ABI_VERSION;
+    descriptor.method = method;
+    auto batch = vibeqc::methods::prepare_batch(context, inputs, descriptor,
+                                                VIBEQC_BATCH_ENABLE_WARM_STARTS);
+    for (unsigned replay = 0; replay < 4; ++replay) {
+      vibeqc::methods::Coordinates coordinates;
+      if (replay == 2) {
+        coordinates.resize(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          coordinates[i].emplace();
+          for (const auto& atom : inputs[i].atoms)
+            coordinates[i]->insert(coordinates[i]->end(), atom.position.begin(),
+                                   atom.position.end());
+          // A non-rigid change exercises preparation and source-metric seeds.
+          (*coordinates[i])[2] += 0.01;
+        }
+      }
+      const auto results = batch->execute(coordinates, false);
+      for (std::size_t i = 0; i < count; ++i) {
+        success = success && results[i].status == VIBEQC_STATUS_SUCCESS;
+        energies[i] = results[i].calculation.energy;
+        iterations[i] = results[i].calculation.convergence.iterations;
+      }
+    }
+  } else {
     // Pass by value so the prepared fleet owns a measured copy of caller
     // topology. The input parser and caller-retained inputs are outside scope.
     vibeqc::scf::FleetPlan fleet(inputs, method, options, true, false, false, false, 0);
