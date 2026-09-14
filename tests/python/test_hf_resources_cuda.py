@@ -135,7 +135,7 @@ def test_cuda_df_budget_freezes_exchange_policy(monkeypatch, initial, changed):
 def test_cuda_df_common_ledger_preserves_factor_differential(
     monkeypatch, mode, old_peak
 ):
-    """Charge ordinary eigen retention equally to both exchange policies."""
+    """Charge ordinary eigen and final snapshots to both exchange policies."""
     from vibeqc.resources import ResourcePlan, plan_resources
 
     calculator = Calculator(device="cuda", density_fitting="cuda")
@@ -146,9 +146,10 @@ def test_cuda_df_common_ledger_preserves_factor_differential(
         ResourceBudget(), (dense,), (("hf", candidate.name),), "feasible"
     )
     # H2 adds 1,049,205 bytes for the serialized AO frame/solver allowance,
-    # plus the same amount in the existing independently reserved cold retry.
+    # plus 120 bytes for both spin C/epsilon and generation/info snapshots.
+    # The independently reserved cold retry owns both allowances again.
     # The occupied-factor differential keeps its pre-provider value below.
-    peak = old_peak + 2 * 1049205
+    peak = old_peak + 2 * (1049205 + 120)
     assert selected.peak_bytes["device"] == peak
     # The source route needs a host cap to force its selection over resident.
     budget = ResourceBudget(host_bytes=selected.peak_bytes["host"], device_bytes=peak)

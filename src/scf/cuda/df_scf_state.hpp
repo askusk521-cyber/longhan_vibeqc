@@ -67,6 +67,21 @@ struct PersistentScfState {
   double energy_tolerance{};
   double density_tolerance{};
 
+  // Active-masked full frames are separate from eigensolver/graph scratch.
+  // Host eligibility is published only after successful density readback;
+  // each new attempted solve clears it, including rejected input requests.
+  bool final_frames_available{};
+  std::vector<std::int32_t> final_alpha_occupied, final_beta_occupied;
+  std::vector<std::uint32_t> final_iterations;
+  double* d_final_alpha_coefficients{};
+  double* d_final_beta_coefficients{};
+  double* d_final_alpha_values{};
+  double* d_final_beta_values{};
+  std::uint64_t* d_final_alpha_generation{};
+  std::uint64_t* d_final_beta_generation{};
+  int* d_final_alpha_info{};
+  int* d_final_beta_info{};
+
   // A solve always seeds from its arbitrary input D with dense K. Only the
   // coefficients that constructed the next canonical density are retained.
   // Inactive items keep both D and factors. Occupation changes rebuild this

@@ -235,6 +235,10 @@ def cuda_df_candidates(
             ordinary_eigen_workspace = (1 << 20) + 128 * n * n
             ordinary_eigen_device = ordinary_eigen_workspace + 8 * (3 * n * n + n) + 5
             persistent_device += ordinary_eigen_device
+            # Both full spin frames survive inactive launches; the independent
+            # single-item retry below receives its own complete snapshot share.
+            final_snapshot_device = b * (16 * (n * n + n) + 24)
+            persistent_device += final_snapshot_device
             persistent_device += (
                 (
                     tensor + 3 * tile_bytes
@@ -267,7 +271,7 @@ def cuda_df_candidates(
             # value-plan rebuilds. Device SCF already reserves d_orthogonalizer;
             # these are additional host copies only, retained through teardown.
             overlap_cache_host = 2 * matrix + 8 * b * d
-            persistent_host += overlap_cache_host + ordinary_eigen_workspace
+            persistent_host += overlap_cache_host + ordinary_eigen_workspace + 64 * b
             one_electron = 8 * b * ((d + 1) * 2 * n * n + d)
             raw = 8 * b * (aux * aux + n * n * aux)
             if not source:
@@ -323,6 +327,7 @@ def cuda_df_candidates(
                     "resident_host_bytes": persistent_host,
                     "overlap_cache_host_bytes": overlap_cache_host,
                     "ordinary_eigen_device_bytes": ordinary_eigen_device,
+                    "final_snapshot_device_bytes": final_snapshot_device,
                     "ordinary_eigen_host_workspace_bytes": ordinary_eigen_workspace,
                     "resident_device_bytes": persistent_device,
                 }
