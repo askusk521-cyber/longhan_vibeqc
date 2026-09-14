@@ -234,6 +234,7 @@ void physical_reference_export() {
   require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS, detail);
   ScfOptions options;
   options.export_physical_reference = true;
+  options.screening_tolerance = 0;  // Physical-reference export requires an unscreened model.
   options.energy_tolerance = 1e-12;
   options.density_tolerance = 1e-10;
   options.reference_memory_budget_bytes = 256ULL << 20;
