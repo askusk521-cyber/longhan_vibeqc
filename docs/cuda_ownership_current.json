@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10741,
+  "all_handwritten_scientific_lines": 10838,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -20,30 +20,39 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 28826,
+      "bytes": 35277,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 447,
-        "scientific": 89
+        "runtime": 501,
+        "scientific": 162
       },
       "path": "src/dft/cuda_grid.cu",
-      "physical_lines": 578,
+      "physical_lines": 717,
       "reason": "Native plan/arena ownership around the bounded AO/feature kernels.",
       "regions": [
         {
           "code_lines": 89,
-          "first_line": 54,
-          "last_line": 148,
+          "first_line": 55,
+          "last_line": 149,
           "reason": "Normalized primitive traversal and D/C feature layout/reduction adapters remain counted conservatively as scientific glue. Axis derivative polynomials and the bilinear ingredient/sigma arithmetic shared by both routes are compiler-owned.",
           "role": "scientific",
           "start": "__global__ void ao_kernel",
           "stop": "// Gather every local matrix element"
+        },
+        {
+          "code_lines": 73,
+          "first_line": 186,
+          "last_line": 267,
+          "reason": "Native CUDA LDA/PBE point dispatch, deterministic energy/electron integration and spin-potential matrix contraction. Scalar XC algebra is shared with the CPU implementation, but this endpoint-specific device contraction remains maintained scientific glue.",
+          "role": "scientific",
+          "start": "__device__ vibeqc::dft::point::Value evaluate_xc_point",
+          "stop": "extern \"C\" {"
         }
       ],
       "role": "runtime",
-      "sha256": "c33943bbfef00fdceac88c5338ef2333c3d00fb8c5022638ea0d40904763f31f",
+      "sha256": "d35c04be29881c5277d1767991a2a32e82e925a3dd1d60c39ee02577774de54f",
       "subsystem": "ao_grid"
     },
     {
@@ -135,7 +144,7 @@
       "subsystem": "xc"
     },
     {
-      "bytes": 1093,
+      "bytes": 1192,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
@@ -144,28 +153,28 @@
         "scientific": 0
       },
       "path": "src/dft/grid_task_view.cuh",
-      "physical_lines": 30,
+      "physical_lines": 31,
       "reason": "Versioned borrowed device buffer, stream and generation ABI; no scientific arithmetic.",
       "regions": [],
       "role": "runtime",
-      "sha256": "6b2c2d0439697d50e13799f8e9145b2f47e2ffa6b47b6a31ba1490b9e68a80ba",
+      "sha256": "f8ff83ddfabd2cd1ee7fdd595d55e60a15c08d882da3f89506a6e1fb7a8a1fc5",
       "subsystem": "ao_grid"
     },
     {
-      "bytes": 12241,
+      "bytes": 13435,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 222
+        "scientific": 246
       },
       "path": "src/dft/xc_point.hpp",
-      "physical_lines": 279,
+      "physical_lines": 312,
       "reason": "Shared CPU/CUDA semilocal point algebra and forward first derivatives for the explicit scaled-density/spin-boundary domain. Counted as maintained scientific code; this is not a generated-code retirement claim.",
       "regions": [],
       "role": "scientific",
-      "sha256": "025b3e7c5274a9b5cd0614572754bd846181cce37f27c53764c274887324ecdd",
+      "sha256": "9a44c3a2ddf1f48b82f380e814e55e0bd54a22f4e5b895f4e881c5669941a629",
       "subsystem": "xc"
     },
     {
@@ -3293,8 +3302,8 @@
     "fallback": 0,
     "oracle": 0,
     "performance_exception": 156,
-    "runtime": 9076,
-    "scientific": 10585
+    "runtime": 9130,
+    "scientific": 10682
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3428,18 +3437,24 @@
       "status": "native_baseline"
     },
     "xc": {
-      "current_default": "Generated interior scalar expressions and compact CPU contractions; native SCF uses a shared scaled-domain point evaluator with explicit spin boundary identity.",
+      "current_default": "Generated interior scalar expressions and compact CPU contractions; compiler spatial CUDA potentials enforce interior-v1. Resident native KS uses the shared scaled-domain point evaluator and ordinary-stream SCF.",
       "evidence": [
         "docs/xc_expressions.md",
         "docs/xc_contractions.md",
         "benchmarks/results/xc-contractions/README.md",
-        "docs/xc_scf_domain.md"
+        "docs/xc_scf_domain.md",
+        "tests/python/test_spatial_density_cuda.py",
+        "tests/python/test_dft_cuda.py",
+        "tools/validate_dft_endpoints.py",
+        "docs/xc_native_cuda.md",
+        "tests/python/test_ks_resources.py",
+        "tests/native/test_dft_api.cpp"
       ],
-      "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials",
-      "missing_capability": "Full native device-buffer XC integration and prepared GPU SCF/resource/replay acceptance remain #162; stationary forces and performance promotion remain #163/#168.",
+      "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials; compiler-owned AO/feature policies feed canonical prepared CUDA LDA/PBE contractions",
+      "missing_capability": "Resident CPU/CUDA energy-only RKS/UKS, prepared replay, model options and resource planning are implemented. Complete timing/transport and source-bound workload evidence remain #162; stationary forces, generated device contraction replacement and performance promotion remain #163/#168.",
       "owner": "xc",
-      "retirement_condition": "duplicated CPU coefficient/response formulas retired after independent E/V and derivative gates; retain external/formula oracles; GPU promotion requires its own complete endpoint evidence",
-      "status": "partial"
+      "retirement_condition": "Retain external/formula oracles. The compiler spatial contraction owns sparse local AO maps and interior-v1 validation; the resident KS contraction owns dense borrowed buffers and the SCF tail/spin domain. They share point algebra and AO/ingredient policies. Retire native contraction glue after an equivalent compiler-owned device consumer passes independent numerical, resource and full endpoint gates. The superseded host-controlled method driver and its RKS LDA-fallback entry point are removed.",
+      "status": "resident_prepared_cuda_energy_only"
     }
   },
   "per_subsystem": {
@@ -3447,8 +3462,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 462,
-      "scientific": 89
+      "runtime": 516,
+      "scientific": 162
     },
     "df_derivatives": {
       "fallback": 0,
@@ -3518,7 +3533,7 @@
       "oracle": 0,
       "performance_exception": 0,
       "runtime": 247,
-      "scientific": 369
+      "scientific": 393
     }
   },
   "schema": "vibeqc.cuda-ownership-report.v1"

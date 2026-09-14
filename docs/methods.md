@@ -73,6 +73,10 @@ the common ledger; see [resource planning](resource_planning.md). Immutable
 [KS options](ks_options.md) bind the functional, grid/radii and tile schedule
 to native preparation and resource identity. Richer diagnostics and workload
 evidence remain open parts of #162.
+`tools/validate_dft_endpoints.py` records method-resolved cold, warm and changed
+geometry phases against independent CPU energies and physical residual gates.
+The resident owner replaces #307's host-controlled method path; its compiler
+spatial-XC consumer remains available with the separate `interior-v1` contract.
 Nuclear gradients remain #163. No DFT density-fitting or performance-leadership
 claim follows from the tested CPU/CUDA energy endpoints.
 The public `Result.density_rms` retains its density-update convergence meaning.

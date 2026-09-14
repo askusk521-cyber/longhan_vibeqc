@@ -4,19 +4,25 @@
 # ruff: noqa: F811
 
 import os
+import shutil
 from dataclasses import replace
+from fractions import Fraction
+from pathlib import Path
 
 import numpy as np
 import pytest
 from test_density_cuda import artifact, check, factors, program  # noqa: F401
 from test_spatial_execution import local_case  # noqa: F401
+from vibeqc_compiler.common.cpp_adapter import CppCompilerAdapter
 from vibeqc_compiler.common.resources import ResourceBudget
 from vibeqc_compiler.dft import DensitySource, density_features
 from vibeqc_compiler.dft.spatial import SpatialPolicy
 from vibeqc_compiler.dft.spatial_prepared import PreparedSpatialGrid
 from vibeqc_compiler.xc import functional
 from vibeqc_compiler.xc.contractions import ContractionProgram
+from vibeqc_compiler.xc.native import NativeContractionProgram
 from vibeqc_compiler.xc.prepared import PreparedXCContractions
+from vibeqc_compiler.xc.spec import UnsupportedXC
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("VIBEQC_GRID_CUDA_TEST") != "1", reason="finite Slurm CUDA gate"
@@ -148,9 +154,10 @@ def test_spatial_xc_current_routes_and_two_budgets(
                     check(actual[key], expected[key])
                 stats = endpoint.statistics
                 assert stats["source"]["source_kind"] == route
-                assert stats["xc_backend"] == "native_cpu"
+                assert stats["xc_backend"] == "native_cuda"
                 assert stats["spatial"]["mask_identity"] == spatial.tasks.identity
-                assert stats["spatial"]["potential_scatter_backend"] == "native_cpu"
+                assert stats["spatial"]["potential_scatter_backend"] == "native_cuda"
+                assert stats["cpu_contraction_seconds"] == 0
                 assert (
                     stats["native_metrics"]["owned_device_bytes"]
                     == spatial.tile_plan.allocation_bytes
@@ -185,6 +192,82 @@ def test_spatial_xc_current_routes_and_two_budgets(
             )
             with pytest.raises(ValueError, match="stale"):
                 endpoint.execute(source, stamp=source.stamp)
+
+
+def test_spatial_native_cuda_rejects_potential_at_vacuum(artifact, local_case):
+    basis, grid, _ = local_case
+    source = DensitySource(
+        np.zeros((2, basis.nao, basis.nao)), basis_identity=basis.identity
+    )
+    with (
+        owner(
+            basis,
+            grid,
+            artifact,
+            ingredients=("rho", "gradient", "sigma"),
+        ) as spatial,
+        PreparedXCContractions(
+            program("PBE", "polarized"), basis, grid, spatial=spatial
+        ) as endpoint,
+        pytest.raises(UnsupportedXC, match="CUDA XC output"),
+    ):
+        endpoint.execute(source, stamp=source.stamp)
+
+
+def test_spatial_native_cuda_requires_complete_canonical_spec(artifact, local_case):
+    basis, grid, _ = local_case
+    source = factors(basis, (basis.nao + 3, 5))
+    canonical = functional("PBE", spin="polarized")
+    scaled = replace(
+        canonical,
+        components=tuple(
+            (name, coefficient * Fraction(1, 2))
+            for name, coefficient in canonical.components
+        ),
+    )
+    native = NativeContractionProgram(
+        scaled,
+        compiler=CppCompilerAdapter(Path(shutil.which("c++"))),
+        cache=Path(".artifacts/density-xc-cache"),
+    )
+    with (
+        owner(
+            basis,
+            grid,
+            artifact,
+            ingredients=("rho", "gradient", "sigma"),
+        ) as spatial,
+        PreparedXCContractions(native, basis, grid, spatial=spatial) as endpoint,
+    ):
+        endpoint.execute(source, stamp=source.stamp)
+        assert endpoint.statistics["xc_backend"] == "native_cpu"
+
+
+def test_spatial_unpolarized_cuda_rejects_unequal_orbital_features(
+    artifact, local_case
+):
+    basis, grid, _ = local_case
+    source = factors(basis, (basis.nao + 3, basis.nao + 3))
+    density = np.stack((source.density[0], source.density[0]))
+    scale = 1.0 + 1.0e-12
+    coefficients = (source.coefficients[0], source.coefficients[0] * scale)
+    occupations = (source.occupations[0], source.occupations[0] / scale**2)
+    source = DensitySource(density, basis_identity=basis.identity)
+    source = source.with_orbitals(coefficients, occupations, stamp=source.stamp)
+    with (
+        owner(
+            basis,
+            grid,
+            artifact,
+            orbital_capacity=tuple(map(len, occupations)),
+            ingredients=("rho", "gradient", "sigma"),
+        ) as spatial,
+        PreparedXCContractions(
+            program("PBE", "unpolarized"), basis, grid, spatial=spatial
+        ) as endpoint,
+        pytest.raises(UnsupportedXC, match="CUDA XC output"),
+    ):
+        endpoint.execute(source, stamp=source.stamp, route="orbitals")
 
 
 def test_spatial_source_lifetime_fallback_and_device_leases(

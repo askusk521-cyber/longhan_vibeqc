@@ -577,7 +577,7 @@ class PreparedBatch:
         unsupported = requested - self._calculator._capabilities.supported_properties
         if unsupported:
             raise ValueError(
-                f"method {self._calculator._method_name!r} does not support properties "
+                f"method {self._calculator._method_name!r} does not support properties: "
                 + ", ".join(sorted(unsupported))
             )
         compute_forces = "forces" in requested

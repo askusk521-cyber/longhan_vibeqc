@@ -8,9 +8,10 @@
 namespace vibeqc::dft {
 /** Borrowed device buffers for one current local-dense task, ABI version 1.
  *
- * Arrays are FP64. ao is [jet,point,active_ao]; features is [13,point]
- * (rho,grad_xyz,tau per spin, then sigma_aa/ab/bb). ao_ids maps local columns
- * into the global density/potential domain. Consumers enqueue on stream,
+ * Arrays are FP64. ao is [jet,point,active_ao]; features has the fixed
+ * [13,point] layout (rho,grad_xyz,tau per spin, then sigma_aa/ab/bb), but only
+ * slots selected by the owner's immutable feature mask are meaningful. ao_ids
+ * maps local columns into the global density/potential domain. Consumers enqueue on stream,
  * write both spin local_potential matrices [2,active_ao,active_ao], then use
  * the owner's scatter call. No feature/jet download is needed.
  *

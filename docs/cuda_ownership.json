@@ -73,6 +73,12 @@
           "role": "scientific",
           "start": "__global__ void ao_kernel",
           "stop": "// Gather every local matrix element"
+        },
+        {
+          "reason": "Native CUDA LDA/PBE point dispatch, deterministic energy/electron integration and spin-potential matrix contraction. Scalar XC algebra is shared with the CPU implementation, but this endpoint-specific device contraction remains maintained scientific glue.",
+          "role": "scientific",
+          "start": "__device__ vibeqc::dft::point::Value evaluate_xc_point",
+          "stop": "extern \"C\" {"
         }
       ],
       "role": "runtime",
@@ -1578,18 +1584,24 @@
       "status": "native_baseline"
     },
     "xc": {
-      "current_default": "Generated interior scalar expressions and compact CPU contractions; native SCF uses a shared scaled-domain point evaluator with explicit spin boundary identity.",
+      "current_default": "Generated interior scalar expressions and compact CPU contractions; compiler spatial CUDA potentials enforce interior-v1. Resident native KS uses the shared scaled-domain point evaluator and ordinary-stream SCF.",
       "evidence": [
         "docs/xc_expressions.md",
         "docs/xc_contractions.md",
         "benchmarks/results/xc-contractions/README.md",
-        "docs/xc_scf_domain.md"
+        "docs/xc_scf_domain.md",
+        "tests/python/test_spatial_density_cuda.py",
+        "tests/python/test_dft_cuda.py",
+        "tools/validate_dft_endpoints.py",
+        "docs/xc_native_cuda.md",
+        "tests/python/test_ks_resources.py",
+        "tests/native/test_dft_api.cpp"
       ],
-      "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials",
-      "missing_capability": "Full native device-buffer XC integration and prepared GPU SCF/resource/replay acceptance remain #162; stationary forces and performance promotion remain #163/#168.",
+      "generated_capability": "audited scalar XC derivatives and compact native CPU LDA/GGA E/V, spin response and fixed-D geometric partials; compiler-owned AO/feature policies feed canonical prepared CUDA LDA/PBE contractions",
+      "missing_capability": "Resident CPU/CUDA energy-only RKS/UKS, prepared replay, model options and resource planning are implemented. Complete timing/transport and source-bound workload evidence remain #162; stationary forces, generated device contraction replacement and performance promotion remain #163/#168.",
       "owner": "xc",
-      "retirement_condition": "duplicated CPU coefficient/response formulas retired after independent E/V and derivative gates; retain external/formula oracles; GPU promotion requires its own complete endpoint evidence",
-      "status": "partial"
+      "retirement_condition": "Retain external/formula oracles. The compiler spatial contraction owns sparse local AO maps and interior-v1 validation; the resident KS contraction owns dense borrowed buffers and the SCF tail/spin domain. They share point algebra and AO/ingredient policies. Retire native contraction glue after an equivalent compiler-owned device consumer passes independent numerical, resource and full endpoint gates. The superseded host-controlled method driver and its RKS LDA-fallback entry point are removed.",
+      "status": "resident_prepared_cuda_energy_only"
     },
     "ecp": {
       "owner": "python/vibeqc_compiler/integral/ecp.py and src/integrals/ecp_cuda.cu",

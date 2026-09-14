@@ -893,3 +893,48 @@ def test_screened_cuda_uhf_direct_force_matches_energy_finite_difference():
     derivative = (plus.energy - minus.energy) / 2.0e-4
     assert center.forces[1, 2] == pytest.approx(-derivative, abs=3.0e-6)
     assert np.max(np.abs(center.forces.sum(axis=0))) < 5.0e-9
+
+
+def test_dft_prepared_batch_preserves_order_isolates_failures_and_rebuilds_geometry():
+    h2 = [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))]
+    calculator = Calculator(method="lda-rks", basis="sto-3g", device="cpu")
+    reference = calculator.singlepoint(h2)
+    with calculator.prepare_batch([h2, h2], warm_start=True) as prepared:
+        cold = prepared.execute(strict=True)
+        warm = prepared.execute(strict=True)
+        changed = prepared.execute(
+            coordinates=[[(0.0, 0.0, -0.8), (0.0, 0.0, 0.8)], [0.0]],
+            strict=False,
+        )
+        changed_warm = prepared.execute(
+            coordinates=[[(0.0, 0.0, -0.8), (0.0, 0.0, 0.8)], None],
+            strict=True,
+        )
+
+    assert cold.items[0].energy == pytest.approx(reference.energy, abs=2.0e-12)
+    assert all(item.warm_start_used for item in warm.items)
+    assert changed.items[0].succeeded
+    assert changed.items[0].warm_start_used
+    moved = [("H", (0.0, 0.0, -0.8)), ("H", (0.0, 0.0, 0.8))]
+    assert changed.items[0].energy == pytest.approx(
+        calculator.singlepoint(moved).energy, abs=2.0e-10
+    )
+    assert changed.items[1].status_message == "invalid argument"
+    assert changed_warm.items[0].warm_start_used
+    # The malformed neighbor never mutates its valid fixed-geometry snapshot.
+    assert changed_warm.items[1].warm_start_used
+
+
+def test_dft_prepared_ragged_batch_matches_independent_endpoints():
+    systems = [
+        [("He", (0.0, 0.0, 0.0))],
+        [("H", (0.0, 0.0, -0.7)), ("H", (0.0, 0.0, 0.7))],
+    ]
+    calculator = Calculator(method="pbe-rks", basis="sto-3g", device="cpu")
+    independent = [calculator.singlepoint(system) for system in systems]
+    batch = calculator.batch_singlepoint(systems, strict=True)
+
+    assert [item.bucket_id for item in batch.items] == [0, 1]
+    assert batch.energies == pytest.approx(
+        [result.energy for result in independent], abs=2.0e-12
+    )

@@ -789,7 +789,8 @@ void validate_hf_warm_density(const core::System& source, vibeqc_method method,
   Matrix overlap(n * n);
   raw.read(posthf::RawSource::Operator::overlap, {0, 0, 0, 0}, {n, n, 1, 1}, overlap.data(),
            overlap.size());
-  if (method == VIBEQC_METHOD_UHF) {
+  if (method == VIBEQC_METHOD_UHF || method == VIBEQC_METHOD_LDA_UKS ||
+      method == VIBEQC_METHOD_PBE_UKS) {
     const auto [alpha, beta] = spin_occupations(source);
     validate_seed(overlap, density, n, {static_cast<unsigned>(alpha), static_cast<unsigned>(beta)},
                   1.0);

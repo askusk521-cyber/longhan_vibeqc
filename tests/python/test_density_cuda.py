@@ -35,7 +35,10 @@ def artifact():
     compiler = find_nvcc()
     assert compiler is not None
     return compile_cuda(
-        CudaCompilerAdapter(compiler, cuda_target_info("sm_120")),
+        CudaCompilerAdapter(
+            compiler,
+            cuda_target_info(os.environ.get("VIBEQC_GRID_CUDA_ARCH", "sm_120")),
+        ),
         Path(".artifacts/density-cuda-cache"),
     )
 

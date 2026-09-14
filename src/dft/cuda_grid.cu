@@ -7,6 +7,7 @@
 
 #include "../tensor/cuda_runtime.cuh"
 #include "grid_task_view.cuh"
+#include "xc_point.hpp"
 
 namespace {
 using namespace vibeqc_tensor;
@@ -181,6 +182,87 @@ __global__ void scatter_matrix(const double* local, const size_t* ids, I nao, I 
     global[destination] = finite(global[destination] + value, error, 2);
   }
 }
+
+__device__ vibeqc::dft::point::Value evaluate_xc_point(bool pbe, bool restricted,
+                                                       const double* features, I npoint, I point) {
+  const double rho[2]{features[point], features[5 * npoint + point]};
+  double gradient[2][3]{};
+  if (pbe)
+    for (int spin = 0; spin < 2; ++spin)
+      for (int axis = 0; axis < 3; ++axis)
+        gradient[spin][axis] = features[(5 * spin + axis + 1) * npoint + point];
+  // This spatial consumer implements the compiler's interior-v1 contract.
+  // Native KS uses its own resident consumer of the same point algebra.
+  if (restricted) {
+    vibeqc::dft::point::Value invalid;
+    if (rho[0] != rho[1]) {
+      invalid.valid = false;
+      return invalid;
+    }
+    for (int axis = 0; axis < 3; ++axis)
+      if (gradient[0][axis] != gradient[1][axis]) {
+        invalid.valid = false;
+        return invalid;
+      }
+  }
+  return vibeqc::dft::point::evaluate_interior(pbe, rho, gradient);
+}
+
+/** Deterministic scalar reduction. This correctness baseline intentionally
+ * uses one device thread; matrix assembly remains parallel and later tuning
+ * may replace only this reduction after endpoint-equivalence evidence.
+ */
+__global__ void xc_integrals_kernel(bool pbe, bool restricted, const double* features,
+                                    const double* weights, I npoint, double* integrals,
+                                    int* error) {
+  if (blockIdx.x || threadIdx.x) return;
+  double energy = 0.0, electrons[2]{};
+  for (I point = 0; point < npoint; ++point) {
+    const auto xc = evaluate_xc_point(pbe, restricted, features, npoint, point);
+    if (!xc.valid) {
+      atomicCAS(error, 0, 3);
+      return;
+    }
+    const double weight = weights[point];
+    energy += weight * xc.energy;
+    electrons[0] += weight * features[point];
+    electrons[1] += weight * features[5 * npoint + point];
+  }
+  integrals[0] = finite(energy, error, 3);
+  integrals[1] = finite(electrons[0], error, 3);
+  integrals[2] = finite(electrons[1], error, 3);
+}
+
+__global__ void xc_local_potential_kernel(bool pbe, bool restricted, const double* features,
+                                          const double* ao, const double* weights, I npoint,
+                                          I active, double* potential, int* error) {
+  for (I index = I(blockIdx.x) * blockDim.x + threadIdx.x; index < 2 * active * active;
+       index += I(blockDim.x) * gridDim.x) {
+    const I spin = index / (active * active), row = index / active % active, col = index % active;
+    double value = 0.0;
+    for (I point = 0; point < npoint; ++point) {
+      const auto xc = evaluate_xc_point(pbe, restricted, features, npoint, point);
+      if (!xc.valid) {
+        atomicCAS(error, 0, 3);
+        return;
+      }
+      const I base = point * active;
+      const double phi_row = ao[base + row], phi_col = ao[base + col];
+      double contribution = xc.rho[spin] * phi_row * phi_col;
+      if (pbe) {
+        const I stride = npoint * active;
+        for (int axis = 0; axis < 3; ++axis) {
+          const double derivative_row = ao[(axis + 1) * stride + base + row];
+          const double derivative_col = ao[(axis + 1) * stride + base + col];
+          contribution +=
+              xc.gradient[spin][axis] * (derivative_row * phi_col + phi_row * derivative_col);
+        }
+      }
+      value += weights[point] * contribution;
+    }
+    potential[index] = finite(value, error, 3);
+  }
+}
 }  // namespace
 
 extern "C" {
@@ -254,7 +336,8 @@ int grid_cuda_create_v3(int device, int major, int minor, const size_t* dimensio
     static_assert(sizeof(size_t) == sizeof(double), "grid map arena requires 64-bit indices");
     const size_t numeric = mul(8, elements), error_offset = mul(add(numeric, 255) / 256, 256);
     const size_t workspace = add(error_offset, 256), bytes = add(workspace, 4U << 20);
-    if (bytes != expected_bytes) throw std::invalid_argument("native/Python grid plan mismatch");
+    if (expected_bytes && bytes != expected_bytes)
+      throw std::invalid_argument("native/Python grid plan mismatch");
     p->context.prepare(device, major, minor, bytes, error_offset, workspace, 4U << 20, 96U << 20,
                        true);
     p->basis = reinterpret_cast<double*>(p->context.arena);
@@ -503,8 +586,6 @@ int grid_cuda_view_v1(void* pointer, vibeqc::dft::GridTaskView* output, char* er
     std::lock_guard<std::mutex> lock(p.context.mutex);
     p.context.check_device();
     if (!p.local || !p.view_ready) throw std::invalid_argument("local grid view is not ready");
-    if (p.features_ready && p.feature_mask != 15)
-      throw std::invalid_argument("grid view ABI v1 requires full features");
     *output = {1,
                p.generation,
                p.last_points,
@@ -519,6 +600,64 @@ int grid_cuda_view_v1(void* pointer, vibeqc::dft::GridTaskView* output, char* er
                p.potential,
                p.context.stream,
                p.context.error};
+  });
+}
+
+int grid_cuda_xc_v2(void* pointer, std::uint64_t generation, int pbe, int restricted, int interior,
+                    const double* weights, size_t npoint, double* integrals, char* error,
+                    size_t size) {
+  return guarded(error, size, [&] {
+    if (!pointer || !integrals || (pbe != 0 && pbe != 1) || (restricted != 0 && restricted != 1) ||
+        interior != 1 || (npoint && !weights))
+      throw std::invalid_argument("invalid CUDA XC task");
+    auto& p = *static_cast<GridPlan*>(pointer);
+    auto& ctx = p.context;
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ctx.check_device();
+    const unsigned required_features = pbe ? 3U : 1U;
+    if (!p.local || !p.view_ready || !p.features_ready || generation != p.generation ||
+        npoint != p.last_points || p.jets < (pbe ? 4U : 1U) ||
+        (p.feature_mask & required_features) != required_features)
+      throw std::invalid_argument("stale or incompatible CUDA XC task");
+    // A local plan has active_capacity>=1, so its eight work panels leave at
+    // least three doubles after the capacity-sized weight upload.
+    double* device_weights = p.work;
+    double* device_integrals = p.work + p.capacity;
+    const size_t matrix_elements = 2 * p.last_active * p.last_active;
+    ctx.section(true, ctx.metrics.input_ms, [&] {
+      for (size_t i = 0; i < npoint; ++i)
+        if (!std::isfinite(weights[i])) throw std::invalid_argument("nonfinite XC weight");
+      cuda_check(cudaMemsetAsync(ctx.error, 0, sizeof(int), ctx.stream));
+      cuda_check(cudaMemsetAsync(device_integrals, 0, 3 * sizeof(double), ctx.stream));
+      if (matrix_elements)
+        cuda_check(
+            cudaMemsetAsync(p.local_potential, 0, matrix_elements * sizeof(double), ctx.stream));
+      if (npoint)
+        cuda_check(cudaMemcpyAsync(device_weights, weights, npoint * sizeof(double),
+                                   cudaMemcpyHostToDevice, ctx.stream));
+    });
+    if (npoint) {
+      ctx.section(true, ctx.metrics.kernel_ms, [&] {
+        xc_integrals_kernel<<<1, 1, 0, ctx.stream>>>(pbe != 0, restricted != 0, p.features,
+                                                     device_weights, npoint, device_integrals,
+                                                     ctx.error);
+        cuda_check(cudaGetLastError());
+        if (matrix_elements) {
+          xc_local_potential_kernel<<<blocks(matrix_elements, 128), 128, 0, ctx.stream>>>(
+              pbe != 0, restricted != 0, p.features, p.ao, device_weights, npoint, p.last_active,
+              p.local_potential, ctx.error);
+          cuda_check(cudaGetLastError());
+        }
+      });
+    }
+    int failure = 0;
+    ctx.section(true, ctx.metrics.output_ms, [&] {
+      cuda_check(cudaMemcpyAsync(integrals, device_integrals, 3 * sizeof(double),
+                                 cudaMemcpyDeviceToHost, ctx.stream));
+      cuda_check(
+          cudaMemcpyAsync(&failure, ctx.error, sizeof(int), cudaMemcpyDeviceToHost, ctx.stream));
+    });
+    if (failure) throw std::runtime_error("invalid or nonfinite CUDA XC output");
   });
 }
 
