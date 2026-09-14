@@ -170,8 +170,10 @@ cudaError_t contract_cuda_df_response_weights(
     // reconstructing raw A from a retained transformed tensor unsafe here.
     auto* charge_values = q < tile ? raw + q * matrix : values;
     read_values(q, charge_values);
+    runtime::cuda_trace::TraceRegion charge_dot("coulomb_response_charge_dot", stream);
     charge_kernel<<<blocks(terms.size()), threads, 0, stream>>>(matrix, a, q, terms.size(),
                                                                 densities, charge_values, charges);
+    runtime::cuda_trace::trace_counter("response_charge_dot_elements", terms.size() * matrix);
   }
   potential_kernel<<<blocks(terms.size() * a), threads, 0, stream>>>(a, terms.size(), inverse,
                                                                      charges, potentials);

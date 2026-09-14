@@ -22,11 +22,18 @@ using DfDerivativeBasisView = runtime::cuda_gaussian_products::BasisView;
  * HF blocks without a full dense A-weight transpose. begin retains row phase
  * when the upload capacity splits a block inside an AO row.
  * This launch allocates nothing and uses the caller's owning stream.
+ * Diagnostic gradient_copies > 1 distributes the unchanged atomic scatter
+ * across caller-owned copies of gradient_stride coordinates. The caller must
+ * initialize and subsequently sum those copies; the default specialization
+ * contains no destination remapping. This measures sink-layout sensitivity,
+ * not isolated arithmetic time or a different scientific derivative.
  */
 cudaError_t launch_df_derivative_tile(DfDerivativeBasisView orbital,
                                       DfDerivativeBasisView auxiliary, const double* positions,
                                       unsigned kind, runtime::StridedRange range, std::size_t count,
                                       const double* weights, unsigned schedule, double* gradient,
-                                      cudaStream_t stream, std::size_t begin = 0);
+                                      cudaStream_t stream, std::size_t begin = 0,
+                                      std::size_t gradient_stride = 0,
+                                      unsigned gradient_copies = 1);
 }  // namespace vibeqc::scf
 #endif

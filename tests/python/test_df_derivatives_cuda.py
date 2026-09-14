@@ -174,7 +174,11 @@ def test_mixed_representations_and_permuted_auxiliary_shells(
 
 @pytest.mark.parametrize("method,charge,multiplicity", [("rhf", 0, 1), ("uhf", 1, 2)])
 @pytest.mark.parametrize("representation", ["cartesian", "spherical"])
-@pytest.mark.parametrize("budget", [0, 1 << 20, 4 << 20])
+# Complete forces split the DF allowance in half. Metric, compact SCF and
+# ordinary AO eigensolvers each reserve a fixed workspace floor on current
+# CUDA providers; the old 1/4-MiB requests fail before derivative execution.
+# Keep two feasible bounded cases and test the smaller rejected budgets below.
+@pytest.mark.parametrize("budget", [0, 8 << 20, 16 << 20])
 def test_complete_hf_replay_two_budgets_and_force_components(
     monkeypatch, method, charge, multiplicity, representation, budget
 ):
@@ -242,6 +246,26 @@ def test_complete_hf_replay_two_budgets_and_force_components(
             assert policy["VIBEQC_DF_DERIVATIVE_MAPPING"] == mapping
 
 
+@pytest.mark.parametrize("budget", [1 << 20, 4 << 20])
+def test_complete_force_rejects_budget_below_provider_workspace_floors(budget):
+    """Retain the former tiny requests as explicit bounded-allocation failures."""
+    assert os.environ.get("SLURM_JOB_ID")
+    calc = Calculator(
+        device="cuda",
+        basis="def2-svp",
+        density_fitting="cuda",
+        density_fitting_memory_budget_bytes=budget,
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+    )
+    atoms = [("H", (0.0, 0.0, -0.7)), ("H", (0.1, 0.2, 0.7))]
+    with (
+        calc.prepare_batch([atoms]) as batch,
+        pytest.raises(RuntimeError, match="out of memory"),
+    ):
+        batch.execute(strict=True, properties=("energy", "forces"))
+
+
 @pytest.mark.parametrize("method,charge,multiplicity", [("rhf", 0, 1), ("uhf", 1, 2)])
 def test_generated_df_hf_matches_pyscf_and_two_energy_difference_steps(
     monkeypatch, method, charge, multiplicity
@@ -274,7 +298,7 @@ def test_generated_df_hf_matches_pyscf_and_two_energy_difference_steps(
         method=method,
         basis="def2-svp",
         density_fitting="cuda",
-        density_fitting_memory_budget_bytes=1 << 20,
+        density_fitting_memory_budget_bytes=8 << 20,
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
         screening_tolerance=1e-14,
@@ -379,7 +403,7 @@ def test_auxiliary_only_atom_hf_energy_derivative(
         basis=shells(oi),
         auxiliary_basis=shells(xi),
         density_fitting="cuda",
-        density_fitting_memory_budget_bytes=4 << 20,
+        density_fitting_memory_budget_bytes=8 << 20,
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
         screening_tolerance=1e-14,
@@ -418,7 +442,8 @@ def test_auxiliary_only_atom_hf_energy_derivative(
 @pytest.mark.parametrize(
     "method,representation", [("rhf", "spherical"), ("uhf", "cartesian")]
 )
-@pytest.mark.parametrize("budget", [0, 4 << 20])
+# This bucket owns three compact SCF workspaces in addition to metric/AO frames.
+@pytest.mark.parametrize("budget", [0, 16 << 20])
 def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
     monkeypatch, method, representation, budget
 ):
@@ -478,7 +503,7 @@ def test_df_generated_sdf_bucket_preserves_all_geometry_phases(
             np.testing.assert_allclose(right.forces, forces, atol=3e-9, rtol=0)
 
 
-@pytest.mark.parametrize("budget", [0, 1 << 20])
+@pytest.mark.parametrize("budget", [0, 16 << 20])
 def test_df_generated_failed_item_preserves_successful_neighbor(monkeypatch, budget):
     assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
     monkeypatch.setenv("VIBEQC_ONE_ELECTRON_DERIVATIVES", "generated")
@@ -499,7 +524,7 @@ def test_df_generated_failed_item_preserves_successful_neighbor(monkeypatch, bud
         )
 
 
-@pytest.mark.parametrize("budget", [0, 1 << 20])
+@pytest.mark.parametrize("budget", [0, 8 << 20])
 def test_df_rank_crossing_is_reported_without_oracle_retry(monkeypatch, budget):
     assert os.environ.get("SLURM_JOB_ID"), "GPU tests require Slurm"
     inputs = {
