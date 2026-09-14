@@ -119,3 +119,26 @@ def test_published_archive_uses_verified_repository_format():
     from tools.unpack_evidence import unpack
 
     assert unpack(matrix.ROOT / "benchmarks/results/issue206-df-a") == 9
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("iterations", 3), ("warm_start_used", False), ("warm_start_fallback", True)],
+)
+def test_eager_lazy_timing_rejects_iteration_or_retry_changes(field, value):
+    """Equal endpoints cannot hide a different amount of SCF work."""
+    from benchmarks.df_host_workloads import validate_ablation_branches
+
+    converged = {"iterations": 2, "warm_start_used": True, "warm_start_fallback": False}
+    rows = [
+        {
+            "workload": "unchanged-geometry",
+            "selection": side,
+            "diagnostics": {"convergence": [dict(converged)]},
+        }
+        for side in ("baseline", "candidate")
+    ]
+    validate_ablation_branches(rows)
+    rows[1]["diagnostics"]["convergence"][0][field] = value
+    with pytest.raises(ValueError, match="matching SCF"):
+        validate_ablation_branches(rows)

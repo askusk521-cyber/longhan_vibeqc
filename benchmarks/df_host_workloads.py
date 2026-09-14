@@ -1,8 +1,10 @@
 """Host-eigensolve diagnostic workloads used by the existing #206 matrix CLI.
 
-The A/B configurations are identical protocol controls. Separate clean and
-profiled invocations retain setup, destruction and each changed-geometry call;
-no relative performance or external-engine parity is inferred from this probe.
+By default A/B configurations are identical protocol controls. The explicit
+eager-core ablation restores discarded warm frames in the baseline selection.
+Separate clean and profiled invocations retain setup, destruction and every
+changed-geometry call. Same-model ablations retain their iteration branches;
+external-engine parity remains with the existing matched #206 matrix.
 """
 
 from __future__ import annotations
@@ -22,8 +24,39 @@ from benchmarks.df_component_ledger import (
 )
 from benchmarks.issue206_df_force_probe import _source_metadata
 from benchmarks.validation_gate import _cuda
-from tools.vibeqc_validation.performance import measure_interleaved
+from tools.vibeqc_validation.performance import assess_comparison, measure_interleaved
 from tools.vibeqc_validation.schema import canonical_hash
+
+
+def validate_ablation_branches(rows):
+    """Reject timing promotion when either selection took different SCF work.
+
+    A frozen seed must give one iteration/retry branch per workload and item.
+    Equal energies alone do not justify an iteration-unmatched speed claim.
+    """
+    for workload in {row["workload"] for row in rows}:
+        branches = {
+            selection: {
+                tuple(
+                    (
+                        item["iterations"],
+                        item["warm_start_used"],
+                        item["warm_start_fallback"],
+                    )
+                    for item in row["diagnostics"]["convergence"]
+                )
+                for row in rows
+                if row["workload"] == workload and row["selection"] == selection
+            }
+            for selection in ("baseline", "candidate")
+        }
+        if (
+            len(branches["baseline"]) != 1
+            or branches["baseline"] != branches["candidate"]
+        ):
+            raise ValueError(
+                "eager/lazy timing requires matching SCF iteration/retry branches"
+            )
 
 
 def host_workloads(
@@ -35,6 +68,7 @@ def host_workloads(
     memory_budget_bytes,
     energy_only,
     trace_directory=None,
+    eager_core_ablation=False,
 ):
     """Measure one source-bound cold/replay/rebuild domain without hiding setup.
 
@@ -52,6 +86,10 @@ def host_workloads(
     if any(os.environ.get(k) for k in ("VIBEQC_DF_TRACE", "VIBEQC_DF_HOST_TRACE")):
         raise ValueError(
             "provide trace_directory explicitly; ambient profiling is not clean timing"
+        )
+    if os.environ.get("VIBEQC_DF_EAGER_CORE_GUESS"):
+        raise ValueError(
+            "use eager_core_ablation explicitly; ambient guess policy is ambiguous"
         )
     library = Path(library).resolve(strict=True)
     source = _source_metadata(library)
@@ -74,6 +112,7 @@ def host_workloads(
         "screening_tolerance": 1e-12,
         "metric_relative_threshold": 1e-10,
         "memory_budget_bytes": memory_budget_bytes,
+        "eager_core_ablation": eager_core_ablation,
     }
     input_hash = canonical_hash(inputs)
     calculator = Calculator(
@@ -102,6 +141,9 @@ def host_workloads(
     def measured(workload, evaluate):
         def sample(_selection):
             nonlocal sequence
+            # Both selections replay the same frozen density on one plan.
+            # This diagnostic request only restores the previously discarded
+            # warm core frame; its executed solves remain visible in the trace.
             path = None
             if trace_directory is not None:
                 path = trace_directory / f"{sequence:04d}-{workload}.jsonl"
@@ -110,13 +152,39 @@ def host_workloads(
                 os.environ["VIBEQC_DF_HOST_TRACE"] = str(path.resolve())
             sequence += 1
             try:
+                if eager_core_ablation and _selection == "baseline":
+                    os.environ["VIBEQC_DF_EAGER_CORE_GUESS"] = "1"
                 result = evaluate()
             finally:
+                if eager_core_ablation:
+                    os.environ.pop("VIBEQC_DF_EAGER_CORE_GUESS", None)
                 if path is not None:
                     os.environ.pop("VIBEQC_DF_HOST_TRACE")
             if path is not None:
+                components = aggregate_host(read_host_trace(path))
+                if eager_core_ablation:
+                    expected = (
+                        batch_size
+                        if _selection == "baseline" or workload == "cold-start"
+                        else 0
+                    )
+                    actual = (
+                        components["eigensolves_by_reason"]
+                        .get("core_guess", {})
+                        .get("calls", 0)
+                    )
+                    if (
+                        actual != expected
+                        or components["exclusive_phases"]
+                        .get("initial_density", {})
+                        .get("calls", 0)
+                        != batch_size
+                    ):
+                        raise RuntimeError(
+                            "eager/lazy ablation did not execute its declared core-guess policy"
+                        )
                 result["host_components"] = {
-                    **aggregate_host(read_host_trace(path)),
+                    **components,
                     "raw_trace": trace_identity(path),
                 }
             return result
@@ -208,6 +276,8 @@ def host_workloads(
         destruction_seconds = time.perf_counter() - start
     if _source_metadata(library) != source:
         raise RuntimeError("source/library changed during workload measurement")
+    if eager_core_ablation:
+        validate_ablation_branches(rows)
     # Same-model cold endpoints check cache/replay integrity. They are not an
     # independent scientific oracle or a substitute for the matched #206 gate.
     for row in rows:
@@ -235,7 +305,12 @@ def host_workloads(
         "samples": rows,
         "prepared_setup_seconds": setup_seconds,
         "prepared_destruction_seconds": destruction_seconds,
-        "comparison": "identical native configurations as an ABBA protocol control; no speedup claim",
+        "comparison": "eager core frame versus lazy warm initialization on one native library"
+        if eager_core_ablation
+        else "identical native configurations as an ABBA protocol control; no speedup claim",
+        "timing_assessment": assess_comparison(rows)
+        if eager_core_ablation and trace_directory is None
+        else None,
         "limitations": [
             "This probe records actual host solves; complete device work/traffic requires the separate CUDA/Nsight ledger.",
             "Reported legacy Fock counts can omit finalizer work; actual reference-eigensolve leaves remain complete within traced scopes.",

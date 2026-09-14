@@ -773,6 +773,11 @@ if(VIBEQC_BUILD_TESTS)
   # The Windows shared-library ABI intentionally exports only the public C
   # surface; this internal contract target requires private C++ symbols.
   if(NOT WIN32)
+    add_executable(vibeqc_initial_density_tests tests/native/test_initial_density.cpp)
+    target_link_libraries(vibeqc_initial_density_tests PRIVATE vibeqc)
+    target_include_directories(vibeqc_initial_density_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME vibeqc_initial_density_tests COMMAND vibeqc_initial_density_tests)
+
     add_executable(vibeqc_mp2_contract_tests tests/native/test_mp2_contract.cpp)
     target_link_libraries(vibeqc_mp2_contract_tests PRIVATE vibeqc)
     target_include_directories(vibeqc_mp2_contract_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

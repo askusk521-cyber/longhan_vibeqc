@@ -275,6 +275,11 @@ def main() -> None:
         help="run the #308 native host-eigensolve protocol control within #206",
     )
     parser.add_argument(
+        "--eager-core-ablation",
+        action="store_true",
+        help="pair restored eager core guesses with lazy warm preparation on one binary",
+    )
+    parser.add_argument(
         "--host-trace-dir",
         type=Path,
         help="diagnostic host traces; requires --host-workloads and a fresh directory",
@@ -305,6 +310,8 @@ def main() -> None:
 
     if args.host_trace_dir and not args.host_workloads:
         parser.error("--host-trace-dir requires --host-workloads")
+    if args.eager_core_ablation and not args.host_workloads:
+        parser.error("--eager-core-ablation requires --host-workloads")
     if args.host_workloads and args.repeats < 5:
         parser.error("host workload controls require at least five paired samples")
     cases = _matrix(args.case)
@@ -335,7 +342,9 @@ def main() -> None:
         payload["execution"]["benchmark"] = "issue206_df_matrix.py --host-workloads"
         payload["execution"]["profiled"] = args.host_trace_dir is not None
         payload["matched_contract"]["comparison"] = (
-            "identical native ABBA protocol control; no external parity or speedup claim"
+            "eager core frame versus lazy warm initialization; no external parity claim"
+            if args.eager_core_ablation
+            else "identical native ABBA protocol control; no external parity or speedup claim"
         )
     _write(manifest_path, payload)
     if args.run and args.host_workloads:
@@ -355,6 +364,7 @@ def main() -> None:
                     repeats=args.repeats,
                     memory_budget_bytes=args.memory_budget_bytes,
                     energy_only=args.energy_only,
+                    eager_core_ablation=args.eager_core_ablation,
                     trace_directory=None
                     if args.host_trace_dir is None
                     else args.host_trace_dir.resolve() / stem,

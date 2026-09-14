@@ -10,9 +10,11 @@ increment.
 
 ## Initial-density caller audit
 
-The shared helpers currently return a core-Hamiltonian orbital frame even
-when a warm density is supplied. Any lazy-guess change must account for the
-following callers, rather than assuming all output orbital objects are unused.
+At the pinned baseline, the shared helpers returned a core-Hamiltonian orbital
+frame even when a warm density was supplied. The lazy-core increment exposes
+an optional frame and validates/normalizes supplied density without a core
+solve. `RequireCoreFrame` is the explicit request for a consumer needing warm
+core orbitals. The following caller contracts have been preserved.
 
 | Caller | Use of initial orbitals | Required preservation |
 | --- | --- | --- |
@@ -23,9 +25,11 @@ following callers, rather than assuming all output orbital objects are unused.
 
 The CPU helper normalizes warm RHF density by symmetry and electron trace,
 and UHF channels independently, clearing a zero-occupation channel. Both
-validate finite values and shape after their current unconditional hcore
-solve. Moving that solve must preserve these density checks and explicitly
-represent any unavailable initial orbitals.
+validate finite values and shape. Failed validation clears optional initial
+frames, so retries cannot inherit a previous call's orbitals. Cold UHF retains
+the historical beta frontier mixing; explicitly requested warm frames remain
+unmixed. The first physical/fallback iteration overwrites iterative orbital
+storage before use, and finalizers/export construct their own physical frames.
 
 ## Existing provider audit
 
@@ -53,11 +57,15 @@ direction. The existing #206 force probe retains both host and CUDA ledgers;
 the existing #206 matrix CLI adds native cold/replay/rebuild protocol controls.
 See [the timing contract](../../../docs/df_component_trace.md).
 
-This increment does not yet remove a solve. Subsequent measured ablations are
-lazy core guesses, retained X, qualified required solves, verified final-state
-reuse and the combined endpoint. Every final correctness and resource gate
-in #308 and its children remains required.
+The P0 increment measured existing solves. The lazy-core increment removes the
+warm initial-guess solve and provides an eager diagnostic control for a causal
+ablation on identical frozen density. Retained X, qualified required solves,
+verified final-state reuse and the combined endpoint remain outstanding.
+Every final correctness and resource gate in #308 and its children still applies.
 
 The [first retained baseline](../../../benchmarks/results/issue308-host-baseline/README.md)
 covers 96-AO RHF batch 1, clean energy/force cold and warm endpoints, changed
 geometry, actual host solves and a separate CUDA graph-node/transfer capture.
+
+The [lazy-core ablation](../../../benchmarks/results/issue309-lazy-core/README.md)
+retains the first clean/traced 96-AO energy/force pairs and caller validation.

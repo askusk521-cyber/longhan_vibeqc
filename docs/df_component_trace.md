@@ -84,6 +84,15 @@ not a speedup or an external-engine parity result. Complete traffic/device
 work still comes from the separate CUDA/Nsight ledger; the original matched
 DF-versus-DF matrix remains the owner of parity acceptance.
 
+For the lazy-initial-density slice, add `--eager-core-ablation` to the host
+workload invocation. The baseline selection explicitly requests the old warm
+core frame through `VIBEQC_DF_EAGER_CORE_GUESS=1`; the candidate consumes the
+same frozen density without that unused solve. Cold density, overlap and
+finalization are identical. Actual leaf counts must distinguish the selections
+in a separate traced run. Clean interleaved endpoint timings own any savings
+claim; the runner rejects an ambient eager-guess flag. This private diagnostic
+control is not a different physical initial guess or a fallback policy.
+
 The default `--memory-budget-bytes 0` preserves the original probe's host
 resident compatibility route. A positive value, for example `268435456`,
 selects the existing bounded generated-source execution. Record and compare
