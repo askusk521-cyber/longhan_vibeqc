@@ -23,6 +23,7 @@ ALLOWED = {
         "scf/proposals.hpp",
         "scf/fock_prepared.hpp",
         "scf/fock_build.hpp",
+        "scf/density_factor.hpp",
         "core/",
         "integrals/",
         "runtime/",
