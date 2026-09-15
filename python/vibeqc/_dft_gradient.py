@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from vibeqc_compiler.common.arrays import immutable
 from vibeqc_compiler.common.provenance import canonical_hash
+from vibeqc_compiler.xc.contractions import ContractionProgram, GeometryPartials
+from vibeqc_compiler.xc.spec import FunctionalSpec
 
 _METHODS = ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks")
 _ARRAY_TOLERANCE = 2e-10
@@ -186,6 +188,170 @@ class StationaryDerivativeContract:
                     "Fock eigen residual exceeds the stationary derivative gate"
                 )
         return state
+
+
+@dataclass(frozen=True, eq=False)
+class StableGridMotion:
+    """Independent source motions on one asserted fixed topology branch."""
+
+    topology_identity: str
+    centers: np.ndarray
+    points: np.ndarray
+    weights: np.ndarray
+    topology_changed: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.topology_identity, str) or not self.topology_identity:
+            raise ValueError("motion requires a topology identity")
+        if type(self.topology_changed) is not bool:
+            raise ValueError("topology change flag must be boolean")
+
+
+@dataclass(frozen=True)
+class XcDirectionalComponents:
+    """Explicit XC directional gradient split by its three source owners."""
+
+    center: float
+    point: float
+    weight: float
+
+    @property
+    def total(self):
+        return self.center + self.point + self.weight
+
+
+@dataclass(frozen=True, eq=False)
+class GeneratedXcGeometry:
+    """Generated fixed-density XC partials bound to one stationary KS state."""
+
+    state_identity: StationaryKsIdentity
+    discrete_contract_identity: str
+    basis_identity: str
+    geometry_identity: str
+    grid_identity: str
+    topology_identity: str
+    functional_identity: str
+    density_generation: int
+    partials: GeometryPartials
+    force_capability: str = field(init=False, default="unsupported")
+
+    def __post_init__(self):
+        if not isinstance(self.state_identity, StationaryKsIdentity):
+            raise TypeError("generated XC geometry requires a stationary identity")
+        expected = {
+            "basis_identity": self.state_identity.basis_identity,
+            "geometry_identity": self.state_identity.geometry_identity,
+            "grid_identity": self.state_identity.grid_identity,
+            "topology_identity": self.state_identity.topology_identity,
+            "functional_identity": self.state_identity.functional_identity,
+            "density_generation": self.state_identity.density_generation,
+        }
+        for name, value in expected.items():
+            if getattr(self, name) != value:
+                raise ValueError(f"generated XC {name.replace('_', ' ')} mismatch")
+        if (
+            not isinstance(self.discrete_contract_identity, str)
+            or not self.discrete_contract_identity
+        ):
+            raise ValueError("generated XC requires a discrete contract identity")
+        if not isinstance(self.partials, GeometryPartials):
+            raise TypeError("generated XC result requires GeometryPartials")
+        centers = immutable(self.partials.centers)
+        points = immutable(self.partials.points)
+        weights = immutable(self.partials.weights)
+        if centers.ndim != 2 or centers.shape[1:] != (3,):
+            raise ValueError("generated XC centers require [atom,xyz]")
+        if points.ndim != 2 or points.shape[1:] != (3,):
+            raise ValueError("generated XC points require [point,xyz]")
+        if weights.shape != (len(points),):
+            raise ValueError("generated XC weights require one value per point")
+        if not all(np.isfinite(value).all() for value in (centers, points, weights)):
+            raise ValueError("generated XC partials must be finite")
+
+    def directional(self, motion):
+        """Contract each generated source exactly once, preserving gradient sign."""
+        if not isinstance(motion, StableGridMotion):
+            raise TypeError("expected stable-grid motion")
+        if motion.topology_identity != self.topology_identity:
+            raise ValueError("motion topology identity mismatch")
+        if motion.topology_changed:
+            raise ValueError("topology change is not differentiable in slice A")
+        values = []
+        for direction, shape, name in (
+            (motion.centers, self.partials.centers.shape, "center direction"),
+            (motion.points, self.partials.points.shape, "point direction"),
+            (motion.weights, self.partials.weights.shape, "weight direction"),
+        ):
+            array = np.asarray(direction)
+            if np.iscomplexobj(array) or array.shape != shape:
+                raise ValueError(f"{name} has incompatible shape")
+            if not np.isfinite(array).all():
+                raise ValueError(f"nonfinite {name}")
+            values.append(array)
+        centers, points, weights = values
+        return XcDirectionalComponents(
+            center=float(np.sum(self.partials.centers * centers)),
+            point=float(np.sum(self.partials.points * points)),
+            weight=float(np.sum(self.partials.weights * weights)),
+        )
+
+
+def bind_generated_xc_geometry(
+    contract,
+    state,
+    functional,
+    jets,
+    weights,
+    *,
+    ao_atoms,
+    natom,
+    basis_identity,
+    geometry_identity,
+    grid_identity,
+    topology_identity,
+):
+    """Evaluate Issue #236 geometry pullbacks and bind them to method state."""
+    if not isinstance(contract, StationaryDerivativeContract):
+        raise TypeError("expected a stationary derivative contract")
+    state = contract.validate(state)
+    if not isinstance(functional, FunctionalSpec):
+        raise TypeError("expected a typed XC functional")
+    if functional.identity != state.identity.functional_identity:
+        raise ValueError("stationary functional identity mismatch")
+    if functional.spin != contract.spin:
+        raise ValueError("stationary spin identity mismatch")
+    family = "lda" if functional.ingredients == ("rho",) else "gga"
+    if family != contract.family:
+        raise ValueError("stationary functional family mismatch")
+    for name, actual in (
+        ("basis_identity", basis_identity),
+        ("geometry_identity", geometry_identity),
+        ("grid_identity", grid_identity),
+        ("topology_identity", topology_identity),
+    ):
+        if actual != getattr(state.identity, name):
+            raise ValueError(f"stationary {name.replace('_', ' ')} mismatch")
+
+    program = ContractionProgram(functional, "geometry")
+    density = state.density[0] if contract.spin == "unpolarized" else state.density
+    partials = program.evaluate(
+        jets,
+        density,
+        weights,
+        ao_atoms=ao_atoms,
+        natom=natom,
+    )["geometry"]
+    return GeneratedXcGeometry(
+        state_identity=state.identity,
+        discrete_contract_identity=program.contract.identity,
+        basis_identity=basis_identity,
+        geometry_identity=geometry_identity,
+        grid_identity=grid_identity,
+        topology_identity=topology_identity,
+        functional_identity=functional.identity,
+        density_generation=state.identity.density_generation,
+        partials=partials,
+    )
 
 
 def _matrix(value, name):
