@@ -47,10 +47,13 @@ __device__ void contract(DfDerivativeBasisView o, DfDerivativeBasisView x, const
     if (lane == 0) products::scatter(factors, result, weight, gradient);
   }
 }
+template <bool DistributedSink>
 __global__ void derivative_tile(DfDerivativeBasisView o, DfDerivativeBasisView x,
                                 const double* positions, unsigned kind, runtime::StridedRange range,
                                 std::size_t count, const double* weights, unsigned schedule,
-                                double* gradient, std::size_t begin) {
+                                double* gradient, std::size_t begin, std::size_t gradient_stride,
+                                unsigned gradient_copies) {
+  if constexpr (DistributedSink) gradient += (blockIdx.x % gradient_copies) * gradient_stride;
   const auto thread = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
   if (schedule) {
     if (thread == 0)
@@ -65,11 +68,13 @@ cudaError_t launch_df_derivative_tile(DfDerivativeBasisView o, DfDerivativeBasis
                                       const double* positions, unsigned kind,
                                       runtime::StridedRange range, std::size_t count,
                                       const double* weights, unsigned schedule, double* gradient,
-                                      cudaStream_t stream, std::size_t begin) {
+                                      cudaStream_t stream, std::size_t begin,
+                                      std::size_t gradient_stride, unsigned gradient_copies) {
   const auto maximum = std::numeric_limits<std::size_t>::max();
   if (!o.nbf || !x.nbf || kind > 1 || schedule > 1 || !positions || !weights || !gradient ||
       !count || o.nbf > maximum / o.nbf || o.nbf * o.nbf > maximum / x.nbf ||
-      x.nbf > maximum / x.nbf)
+      x.nbf > maximum / x.nbf || !gradient_copies ||
+      (gradient_copies > 1 && (!gradient_stride || gradient_stride > maximum / gradient_copies)))
     return cudaErrorInvalidValue;
   const auto elements = kind ? x.nbf * x.nbf : o.nbf * o.nbf * x.nbf;
   if (!range.row_length || !range.row_stride || !range.column_stride || range.offset >= elements ||
@@ -89,8 +94,13 @@ cudaError_t launch_df_derivative_tile(DfDerivativeBasisView o, DfDerivativeBasis
                      !fits((end / range.row_length) * range.row_length - 1)))
     return cudaErrorInvalidValue;
   const auto blocks = schedule ? 1U : static_cast<unsigned>((count - 1) / elements_per_block + 1);
-  derivative_tile<<<blocks, threads, 0, stream>>>(o, x, positions, kind, range, count, weights,
-                                                  schedule, gradient, begin);
+  if (gradient_copies > 1)
+    derivative_tile<true><<<blocks, threads, 0, stream>>>(o, x, positions, kind, range, count,
+                                                          weights, schedule, gradient, begin,
+                                                          gradient_stride, gradient_copies);
+  else
+    derivative_tile<false><<<blocks, threads, 0, stream>>>(
+        o, x, positions, kind, range, count, weights, schedule, gradient, begin, 0, 1);
   return cudaPeekAtLastError();
 }
 }  // namespace vibeqc::scf

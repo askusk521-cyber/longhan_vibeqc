@@ -3,9 +3,11 @@
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 
 #include "molecule/basis.hpp"
 #include "runtime/cuda_component_trace.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "runtime/resource_cuda.cuh"
 #include "scf/cuda/df_derivatives.cuh"
 #include "scf/cuda/df_response_weights.cuh"
@@ -27,6 +29,13 @@ struct DeviceGuard {
   ~DeviceGuard() { (void)cudaSetDevice(previous); }
   DeviceGuard(const DeviceGuard&) = delete;
   DeviceGuard& operator=(const DeviceGuard&) = delete;
+};
+/** Diagnostic staging only; declare before Arena so queued reads drain first. */
+struct PinnedResponseSlice {
+  double* data{};
+  ~PinnedResponseSlice() {
+    if (data) (void)cudaFreeHost(data);
+  }
 };
 /** Compact metadata independent of Direct quartet queues and derivative tensors. */
 struct HostBasis {
@@ -402,6 +411,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
                                               {1, n, a, source != nullptr, true, source_index});
     runtime::cuda_trace::TraceRegion preparation("response_allocation_and_uploads",
                                                  reinterpret_cast<cudaStream_t>(stream_handle));
+    PinnedResponseSlice packed_slice;
     Arena arena(maximum_bytes);
     arena.stream = reinterpret_cast<cudaStream_t>(stream_handle);
     arena.owns_stream = false;
@@ -439,6 +449,46 @@ vibeqc_status execute_cuda_df_hf_gradient(
       runtime::cuda_trace::trace_counter("response_scratch_bytes", arena.stats.device_bytes);
       runtime::cuda_trace::trace_counter("density_upload_bytes",
                                          arena.stats.density_host_to_device_bytes);
+      // Causal attribution controls, not production schedule candidates. Both
+      // drain prior work before a raw read; packed additionally exposes the
+      // CPU gather and a contiguous pinned H2D copy as separate intervals.
+      // Default execution retains the original pageable strided submission.
+      const char* upload_probe = std::getenv("VIBEQC_DF_RESPONSE_UPLOAD_PROBE");
+      const std::string_view probe = upload_probe ? upload_probe : "";
+      if (!probe.empty() && probe != "drain" && probe != "packed")
+        throw std::invalid_argument("unknown DF response upload probe (use drain or packed)");
+      if (!probe.empty() && source)
+        throw std::invalid_argument("DF response upload probe requires resident host raw values");
+      if (probe == "packed") {
+        const auto bytes = n * n * sizeof(double);
+        if (bytes > maximum_bytes - arena.stats.host_bytes) throw std::bad_alloc();
+        check(cudaMallocHost(reinterpret_cast<void**>(&packed_slice.data), bytes));
+        arena.stats.host_bytes += bytes;
+        runtime::cuda_trace::trace_counter("raw_probe_pinned_host_bytes", bytes);
+      }
+      // Keep the original auxiliary tile and response scratch unchanged. This
+      // diagnostic reserves only unused budget headroom; insufficient room is
+      // an error, never a silent tile/traffic change that confounds attribution.
+      const char* sink_policy = std::getenv("VIBEQC_DF_RESPONSE_SCATTER_PROBE");
+      const std::string_view sink = sink_policy ? sink_policy : "";
+      if (!sink.empty() && sink != "sharded")
+        throw std::invalid_argument("unknown DF response scatter probe (use sharded)");
+      const unsigned gradient_copies = sink.empty() ? 1 : 128;
+      auto* derivative_output = output;
+      const double* ones = nullptr;
+      if (gradient_copies > 1) {
+        const auto bytes = result.size() * gradient_copies * sizeof(double);
+        if (gradient_copies * sizeof(double) > maximum_bytes - arena.stats.host_bytes)
+          throw std::bad_alloc();
+        derivative_output = static_cast<double*>(arena.allocate(bytes));
+        ones = arena.upload(std::vector<double>(gradient_copies, 1.0));
+        check(cudaMemsetAsync(derivative_output, 0, bytes, arena.stream));
+        runtime::cuda_trace::trace_counter("derivative_probe_gradient_copies", gradient_copies);
+        runtime::cuda_trace::trace_counter("derivative_probe_scratch_bytes",
+                                           bytes + gradient_copies * sizeof(double));
+      }
+      runtime::cuda_trace::trace_counter("response_probe_total_device_bytes",
+                                         arena.stats.device_bytes);
       preparation.finish();
       runtime::cuda_trace::TraceRegion response_weights("response_weights", arena.stream);
       const char* dot_policy = std::getenv("VIBEQC_DF_SERIAL_RESPONSE_DOT");
@@ -454,12 +504,31 @@ vibeqc_status execute_cuda_df_hf_gradient(
               if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
               arena.stats.recomputed_value_bytes += n * n * sizeof(double);
             } else {
+              if (!probe.empty()) {
+                runtime::cuda_trace::TraceRegion wait("raw_value_prior_stream_wait", arena.stream);
+                check(cudaStreamSynchronize(arena.stream));
+                ++arena.stats.stream_synchronizations;
+                runtime::cuda_trace::trace_counter("raw_probe_prior_stream_drains", 1);
+              }
+              if (packed_slice.data) {
+                runtime::cuda_trace::TraceRegion gather("raw_value_host_gather", arena.stream);
+                runtime::host_trace::Region host_gather("df_raw_value_host_gather", n);
+                for (std::size_t ij = 0; ij < n * n; ++ij)
+                  packed_slice.data[ij] = raw_a[ij * a + p];
+                host_gather.finish();
+                runtime::cuda_trace::trace_counter("raw_probe_gather_elements", n * n);
+              }
               // raw_a is caller-owned [mu*nu,P], live until the bridge drains
               // its stream. Gather a column directly into existing device
               // scratch; no host response matrix or full raw GPU copy is made.
               runtime::cuda_trace::TraceRegion upload("raw_value_slice_upload", arena.stream);
-              check(cudaMemcpy2DAsync(values, sizeof(double), raw_a.data() + p, a * sizeof(double),
-                                      sizeof(double), n * n, cudaMemcpyHostToDevice, arena.stream));
+              if (packed_slice.data)
+                check(cudaMemcpyAsync(values, packed_slice.data, n * n * sizeof(double),
+                                      cudaMemcpyHostToDevice, arena.stream));
+              else
+                check(cudaMemcpy2DAsync(values, sizeof(double), raw_a.data() + p,
+                                        a * sizeof(double), sizeof(double), n * n,
+                                        cudaMemcpyHostToDevice, arena.stream));
               arena.stats.host_to_device_bytes += n * n * sizeof(double);
               arena.stats.tensor_host_to_device_bytes += n * n * sizeof(double);
               ++arena.stats.uploads;
@@ -478,11 +547,24 @@ vibeqc_status execute_cuda_df_hf_gradient(
             runtime::cuda_trace::trace_counter(
                 kind ? "metric_derivative_weight_bytes" : "three_center_derivative_weight_bytes",
                 count * sizeof(double));
-            check(launch_df_derivative_tile(o, x, r, kind, range, count, weights, schedule, output,
-                                            arena.stream));
+            check(launch_df_derivative_tile(o, x, r, kind, range, count, weights, schedule,
+                                            derivative_output, arena.stream, 0, result.size(),
+                                            gradient_copies));
             ++arena.stats.tiles;
             arena.stats.device_response_bytes += count * sizeof(double);
           }));
+      if (gradient_copies > 1) {
+        runtime::cuda_trace::TraceRegion reduction("gradient_probe_shard_reduction", arena.stream);
+        // Each column is already a complete contracted atom gradient, not an
+        // AO-element or nuclear-coordinate derivative tensor. The shared BLAS
+        // provider sums these bounded copies on the same owning stream.
+        const double alpha = 1.0, beta = 0.0;
+        const auto status = cublasDgemv(
+            reinterpret_cast<cublasHandle_t>(blas_handle), CUBLAS_OP_N,
+            static_cast<int>(result.size()), static_cast<int>(gradient_copies), &alpha,
+            derivative_output, static_cast<int>(result.size()), ones, 1, &beta, output, 1);
+        if (status != CUBLAS_STATUS_SUCCESS) throw CudaDfResponseBlasFailure{status};
+      }
     } else {
       const auto weight_tile =
           std::min({std::size_t{65536}, std::max(n * n * a, a * a),
