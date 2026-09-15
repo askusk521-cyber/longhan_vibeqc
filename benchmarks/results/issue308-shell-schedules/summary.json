@@ -1,7 +1,7 @@
 {
   "scope": "Clean complete-force selection, separate intrusive attribution and scoped default promotion",
   "source_identity": "fae89ad116237b6c5539cde327731f38c91797250983ac4a3d914f29f9130820",
-  "status": "Clean v4 selection complete; v5 default qualification and matched matrix in progress",
+  "status": "Scoped promotion and relevant matched rerun complete; full #206/#308 closure remains open",
   "v3_source_identity": "fae89ad116237b6c5539cde327731f38c91797250983ac4a3d914f29f9130820",
   "v3_library_sha256": "2c8f82025c279f1bc99515cdde297c7efb1f4e59ab75619b96c10ccfd7b16e0a",
   "v3_git_head": "6303871473eeed248cf8523d9317f5f9ba8c696f",
@@ -20,7 +20,29 @@
   },
   "v4_gpu_status": "completed and inspected; Slurm 9605 exited zero",
   "files": {
-    "README.md": "89d2c32bced5b65218641d1ae57286709a3adcdaae5a81162cce24e1bd25556e",
+    "README.md": "c2532111ae40a3e2a138e901f4085cfff4cb68f0c26807598105b187103b53a6",
+    "direct-gate/water-octamer-s4-def2-svp-spherical-b1-none.json": "9d17a7f4b014cd3f338630ad02ac57563322799e04ddd071e03325dc3dd07ec7",
+    "direct-gate/water-octamer-s4-def2-svp-spherical-b4-none.json": "9713e767ac9b7c91f7475a9562f3a63b4f20f19e64d2a9ed00e2a5b12409bdbf",
+    "direct-gate/water-tetramer-def2-svp-spherical-b1-none.json": "c02c483214a1b5844ff7ba76cb2d89bb09d503cf740123378da3706e0b702412",
+    "direct-gate/water-tetramer-def2-svp-spherical-b4-none.json": "bccc64e10ae8ca947119afb6a1ab51db1d9f3ef285f131963a7516aeeb3f031b",
+    "matched/192ao-b1-energy-default.json": "c99012c945e83a9b89556ee28867cf5a0fed2b029d385b140c37c8c547f1548a",
+    "matched/192ao-b1-forces-default.json": "cbe6be0e2fc13853678cf8d505f3b34982b7dba85cbcba58d765b7e52e621778",
+    "matched/192ao-b4-energy-default.json": "eccba2b027b06847316706bf23cf92e72bfe4003b1c81810adf66f125f0fdd30",
+    "matched/192ao-b4-forces-default.json": "2f0a772bf14b89cd8baeb1baa8dd2174728e43e77f0f40af6504381ee63203cb",
+    "matched/19ao-b1-energy-default.json": "ef5641e6a204755a7fb8153fe8edd3e79221947f11b74405efad2b781044cba3",
+    "matched/19ao-b1-forces-default.json": "f04a2efad5cc6bf2a813a08861b38a012f29cde9d9e94ba03a3ed7bd340d62e4",
+    "matched/19ao-b4-energy-default.json": "a1d7761924b7bb34b689c47f754fef93cb6882d491bd5d57096fb9bb598caa1c",
+    "matched/19ao-b4-forces-default.json": "a79ed1ee425ba922a40665c6f9138fc64bed119367b4059af5e93e174395d271",
+    "matched/384ao-b1-energy-default.json": "ae13f63e516dd9c9ea5922e96ce1dfc4b0bb02632365c312d1c483ff53957a63",
+    "matched/384ao-b1-forces-default.json": "aa2894ed81f35c3a0c8f92419a620b3102397cfddda3eb22b2c2ed71f6a1b94e",
+    "matched/384ao-b4-energy-default.json": "cf2034a6002ad95d07042d7a5bea02b262d68361c117d336917cb0e99c8de0d3",
+    "matched/384ao-b4-forces-default.json": "b013770c1a4c9e1f5679cb2aa6764750c9595b601a8a9f3851870c82dfa160d4",
+    "matched/96ao-b1-energy-default.json": "eb8fe3c4875e60bd1532184bbac2f862087cce6341216e3e2ef7087a5fd02a63",
+    "matched/96ao-b1-forces-default.json": "1e41ec727b77db91b45eaaebf674910f18f778ca9e8f07649c4152dc045ac25a",
+    "matched/96ao-b4-energy-default.json": "257e4acd42b3d255cc2255e53f2d3d31595a0420b1a9e2e3a9dfec1be5febdfc",
+    "matched/96ao-b4-forces-default.json": "902928a7fb4d3620ea296b55e6d0fed83ac238377f624ed8abc1c816dc74276c",
+    "matched/input-qualification.json": "12c89788a41c3b2a3627a827bbc9340501a97f4a1f085b4884b2d7e125ed7db3",
+    "matched/manifest.json": "3e65224f846a71e58b34ecc805c8d8107e9798b5dd095b655fc6a05a781686d2",
     "measurements/v3-384ao-b1-traced.json": "4b34ecc05e14a45d8f1c33555af09be9a8bf77027f7ba25f3a06d51475be9525",
     "measurements/v3-clean-192ao-b1.json": "31bbb25979c04717731ceb0d14cf63d80fa0bd9dd357a8c22a5ee08c0a1ae195",
     "measurements/v3-clean-192ao-b4.json": "54840cbf3d7cc741a5e385922abcc86d86fe697f6f3e03dd59eb23b9b36cdb18",
@@ -37,6 +59,10 @@
     "measurements/v4-clean-19ao-b4.json": "a8d8909e63b5f4b91f5cd6b9013d399369bd63303549fd615dcd445992d9549a",
     "measurements/v4-clean-384ao-b1.json": "ec07eb0e3d0fbc004c3618bbf4e54a4943aebfa2439f023bfbc5e7d00cfa3785",
     "measurements/v4-clean-384ao-b4.json": "1e3f0b6bceafa5c67ffec2360169093da5c931ed0a4a0dc3deb29d0445cfb273",
+    "measurements/v5-clean-oracle-384ao-b1.json": "4d68e53b03700f388890b3f88d4c1639cfc858e4098c09cc5ce3169e00ea4298",
+    "measurements/v5-default-traced-192ao.json": "779cc360c1b679d9923feabbe7d8f44443b331c7ac405e9cdd7ce54b0b83243e",
+    "measurements/v5-default-traced-19ao.json": "d6c90863646783583e0ddcaa7c76a3b71c6d4aabaac5ad5b12b9156cc07c9953",
+    "measurements/v5-default-traced-384ao.json": "2da86d149d4b366b36cb40886ad735007f20e612996bdeefccd7c587016adf14",
     "ownership-delta.json": "4e657ffa396299540888e0b3adc949d499cada863f42480fd52a47e3dbd4197d",
     "reproduction/v3-clean-sweep.sh": "f7de6c565efffae16c47dd4bac5ab1e5a30b3af26ed6df4aabcf8abeba2db8f7",
     "reproduction/v3-gpu-before.csv": "90b6140047581fe34492e8e4ee76fbc5b26695e69b5b102e5e8137a68c7891cd",
@@ -51,6 +77,7 @@
     "reproduction/v4-provenance.json": "1fb37ce9c3430d04b4b7dcc665e0ee81d73c3ce06b5471f6f2a12dcca5416ed9",
     "reproduction/v4-qualify-and-measure.sh": "eb3d593f44c323872e1257f1079c52f4cea0969d0f5bcee0ef9264224a6fd453",
     "reproduction/v4-source.patch": "ef16961a9d9ac8e6ec4e2e8848e10abd23223016f2313bc3ce0eece65d170060",
+    "reproduction/v5-gpu-after.csv": "566380615f3e1e1b4c7e17afd285aea9b12e764b2565961106ab968cb0889615",
     "reproduction/v5-gpu-before.csv": "c7e06a2fe3dfde3575fed2d5b59ef3bfdbba05cdeb7708eb8d8676ba4be72d7d",
     "reproduction/v5-measured-qualify-defaults.py.txt": "549e0cf3a054fee79b1000ec471f22898f91ce35025f756fdabcf4b966416da7",
     "reproduction/v5-measured-run-matrix.py.txt": "8f83ed8f2141102ec220dcafdf66198bd6999308222abcdd3897ff39cb2ed752",
@@ -1186,6 +1213,702 @@
       384
     ],
     "default_consumer_checks": "passed; complete force parity and zero CPU-reference eigensolves",
-    "matched_matrix": "in progress"
+    "matched_matrix": "completed; all 80 paired numerical comparisons pass",
+    "logs": {
+      "job.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "precommit-publication.log": "7ab6dd449b65ef0c81479e2aa4b881f71ab52b83563bd2e5a08107432447e265",
+      "default-traced.log": "59e0587e7bac306cb1301781c7017db2ae79c0f95b49b5dafa7c0a4f66a01b11",
+      "gpu-tests.log": "57d48c33d6c23f10a7a14e16430dc0c36bdf4b750dfb0bd713c18d7b056c2bc9",
+      "build.log": "fc456523b27678d91cec9e17dce80c33b44fad4d572da393ae885edc55ae424d",
+      "cpu-tests.log": "888880abb417da29eeff2cdfa840145bb53fee737a477a9a11a825df0e4f131d",
+      "matched.log": "31929c697cfc2ba189c28157bbb0ec8537849ffa64e75df64b98a533c7e5bc86",
+      "configure.log": "8d696bd702275c5d525c1ea9e8a27a0d9589e7d9f21b7e668046be1c842ac758",
+      "clean-oracle-384ao-b1.log": "7591f75d71e3b9ca12277985da3d2ff29a23d63b94f2386b11010fb39c8d898a",
+      "precommit.log": "580f94def4962922aa08b51d7c84ed4a6d501e8c42c21c119d98b5982b33cb22",
+      "direct-gate.log": "5bad6860d941fdf485b8f41287e09beb766a162dd23572713f5a68fce8af6632"
+    }
+  },
+  "matched_matrix": {
+    "slurm_job_id": "9606",
+    "cells": 16,
+    "repeats_per_engine": 5,
+    "paired_comparisons": 80,
+    "input_geometries_independently_qualified": 20,
+    "maximum_paired_energy_error_hartree": 4.934008757118136e-11,
+    "maximum_paired_force_error_hartree_per_bohr": 8.256962127917156e-11,
+    "source_identity": "7616b7256832df1cbb6f1a8baa0ba2e20f9d708e56cbfd297f46dbb05ea8cfe3",
+    "library_sha256": "96e5fb31ba68bb9fba79d6b83cf5fc958d954ed236f8a7359aacb89f65b39107",
+    "scientific_equivalent_git_head": "5ab5449b9e45e17440f4f576f994ff024a2f2a7d",
+    "source_provenance": "reproduction/v5-provenance.json and v5-source.patch reconstruct the exact measured snapshot at 92140cb. Individual environment.git values describe the enclosing checkout at measurement time, not a different measured scientific snapshot.",
+    "rows": [
+      {
+        "aos": 192,
+        "batch": 1,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/192ao-b1-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 1.2267604215904262,
+        "vibeqc": {
+          "median_seconds": 0.06523461919277906,
+          "min_seconds": 0.06471959198825061,
+          "max_seconds": 0.06664117495529354,
+          "cold_seconds": 2.6225632959976792,
+          "branches": [
+            [
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.08002724894322455,
+          "min_seconds": 0.07942982413806021,
+          "max_seconds": 0.08027079491876066,
+          "cold_seconds": 1.338777770055458,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 192,
+        "batch": 1,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/192ao-b1-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 1.2951820462978745,
+        "vibeqc": {
+          "median_seconds": 0.2710160769056529,
+          "min_seconds": 0.2700721288565546,
+          "max_seconds": 0.2719413710292429,
+          "cold_seconds": 4.023360326886177,
+          "branches": [
+            [
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.3510151570662856,
+          "min_seconds": 0.34956251201219857,
+          "max_seconds": 0.3512236902024597,
+          "cold_seconds": 1.5495067480951548,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 192,
+        "batch": 4,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/192ao-b4-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 1.3607647721548686,
+        "vibeqc": {
+          "median_seconds": 0.23574564000591636,
+          "min_seconds": 0.23449403303675354,
+          "max_seconds": 0.23751647700555623,
+          "cold_seconds": 9.565647256094962,
+          "branches": [
+            [
+              3,
+              2,
+              2,
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.32079436210915446,
+          "min_seconds": 0.31973091303370893,
+          "max_seconds": 0.3211470958776772,
+          "cold_seconds": 3.3620659080334008,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 192,
+        "batch": 4,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/192ao-b4-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 1.3256817736340025,
+        "vibeqc": {
+          "median_seconds": 1.0561754810623825,
+          "min_seconds": 1.0541839709039778,
+          "max_seconds": 1.0583269950002432,
+          "cold_seconds": 13.78114629490301,
+          "branches": [
+            [
+              3,
+              2,
+              2,
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 1.400152585003525,
+          "min_seconds": 1.3962166369892657,
+          "max_seconds": 1.4031370040029287,
+          "cold_seconds": 4.1935408969875425,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 19,
+        "batch": 1,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/19ao-b1-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 22.14331626081072,
+        "vibeqc": {
+          "median_seconds": 0.0029063390102237463,
+          "min_seconds": 0.002826184965670109,
+          "max_seconds": 0.003035736968740821,
+          "cold_seconds": 0.20420553302392364,
+          "branches": [
+            [
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.06435598386451602,
+          "min_seconds": 0.06423768703825772,
+          "max_seconds": 0.06454729102551937,
+          "cold_seconds": 1.1716561049688607,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 19,
+        "batch": 1,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/19ao-b1-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 33.61628456314382,
+        "vibeqc": {
+          "median_seconds": 0.007235323777422309,
+          "min_seconds": 0.007054626941680908,
+          "max_seconds": 0.007353870896622539,
+          "cold_seconds": 0.24811973399482667,
+          "branches": [
+            [
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.243224703008309,
+          "min_seconds": 0.24303141189739108,
+          "max_seconds": 0.24348354805260897,
+          "cold_seconds": 1.3057994809933007,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 19,
+        "batch": 4,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/19ao-b4-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 50.7615217863575,
+        "vibeqc": {
+          "median_seconds": 0.005033985013142228,
+          "min_seconds": 0.004900680156424642,
+          "max_seconds": 0.005139678018167615,
+          "cold_seconds": 0.2174009601585567,
+          "branches": [
+            [
+              2,
+              2,
+              2,
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.25553273991681635,
+          "min_seconds": 0.25533340708352625,
+          "max_seconds": 0.2556799720041454,
+          "cold_seconds": 2.5981106138788164,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 19,
+        "batch": 4,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/19ao-b4-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 43.5935165840052,
+        "vibeqc": {
+          "median_seconds": 0.022251184098422527,
+          "min_seconds": 0.022050970001146197,
+          "max_seconds": 0.022694884100928903,
+          "cold_seconds": 0.27163381688296795,
+          "branches": [
+            [
+              2,
+              2,
+              2,
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.9700073630083352,
+          "min_seconds": 0.9683510288596153,
+          "max_seconds": 0.9718259789515287,
+          "cold_seconds": 3.11192711093463,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 384,
+        "batch": 1,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/384ao-b1-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 0.288987155325049,
+        "vibeqc": {
+          "median_seconds": 0.476118721999228,
+          "min_seconds": 0.47035643900744617,
+          "max_seconds": 0.4770238110795617,
+          "cold_seconds": 32.842031880049035,
+          "branches": [
+            [
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.1375921950675547,
+          "min_seconds": 0.1366585660725832,
+          "max_seconds": 0.13777422299608588,
+          "cold_seconds": 2.2286406019702554,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 384,
+        "batch": 1,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/384ao-b1-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 0.18760730946953125,
+        "vibeqc": {
+          "median_seconds": 3.277436763048172,
+          "min_seconds": 3.2677040121052414,
+          "max_seconds": 3.284396406961605,
+          "cold_seconds": 41.396652061957866,
+          "branches": [
+            [
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.6148710930719972,
+          "min_seconds": 0.6134418309666216,
+          "max_seconds": 0.6152090288233012,
+          "cold_seconds": 2.6438479530625045,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 384,
+        "batch": 4,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/384ao-b4-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 0.2315321821349227,
+        "vibeqc": {
+          "median_seconds": 2.373977379174903,
+          "min_seconds": 2.3675413811579347,
+          "max_seconds": 2.375596586149186,
+          "cold_seconds": 135.9749892980326,
+          "branches": [
+            [
+              3,
+              3,
+              3,
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.5496521629393101,
+          "min_seconds": 0.5492075809743255,
+          "max_seconds": 0.6111135841347277,
+          "cold_seconds": 6.999808844877407,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              1,
+              3,
+              1
+            ],
+            [
+              2,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 384,
+        "batch": 4,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/384ao-b4-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 0.18269196197176402,
+        "vibeqc": {
+          "median_seconds": 13.503922714153305,
+          "min_seconds": 13.486363532021642,
+          "max_seconds": 13.517860824009404,
+          "cold_seconds": 165.87857130984776,
+          "branches": [
+            [
+              3,
+              3,
+              3,
+              3
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 2.467058134963736,
+          "min_seconds": 2.464118325151503,
+          "max_seconds": 2.5618626459036022,
+          "cold_seconds": 8.59236799995415,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ],
+            [
+              1,
+              4,
+              1,
+              1
+            ],
+            [
+              3,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 96,
+        "batch": 1,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/96ao-b1-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 5.705494244684203,
+        "vibeqc": {
+          "median_seconds": 0.012089983094483614,
+          "min_seconds": 0.011921518947929144,
+          "max_seconds": 0.012170947156846523,
+          "cold_seconds": 0.38866177294403315,
+          "branches": [
+            [
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.06897932896390557,
+          "min_seconds": 0.06870490312576294,
+          "max_seconds": 0.0691430929582566,
+          "cold_seconds": 1.2053234810009599,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 96,
+        "batch": 1,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/96ao-b1-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 2.131270412082486,
+        "vibeqc": {
+          "median_seconds": 0.1235449188388884,
+          "min_seconds": 0.12291846703737974,
+          "max_seconds": 0.12515648687258363,
+          "cold_seconds": 0.761422242037952,
+          "branches": [
+            [
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.263307630084455,
+          "min_seconds": 0.261900964891538,
+          "max_seconds": 0.2640831090975553,
+          "cold_seconds": 1.356667053885758,
+          "branches": [
+            [
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 96,
+        "batch": 4,
+        "properties": [
+          "energy"
+        ],
+        "measurement": "matched/96ao-b4-energy-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 7.876092462920911,
+        "vibeqc": {
+          "median_seconds": 0.03497298900038004,
+          "min_seconds": 0.034679085947573185,
+          "max_seconds": 0.03553100908175111,
+          "cold_seconds": 0.8063174730632454,
+          "branches": [
+            [
+              2,
+              3,
+              2,
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 0.27545049507170916,
+          "min_seconds": 0.2744991700164974,
+          "max_seconds": 0.27562639908865094,
+          "cold_seconds": 2.8116799250710756,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "aos": 96,
+        "batch": 4,
+        "properties": [
+          "energy",
+          "forces"
+        ],
+        "measurement": "matched/96ao-b4-forces-default.json",
+        "iteration_matched": null,
+        "ordinary_speedup_gpu_over_vibeqc": 2.208328017807032,
+        "vibeqc": {
+          "median_seconds": 0.47845281520858407,
+          "min_seconds": 0.4709662920795381,
+          "max_seconds": 0.4793280658777803,
+          "cold_seconds": 1.6289928818587214,
+          "branches": [
+            [
+              2,
+              3,
+              2,
+              2
+            ]
+          ]
+        },
+        "gpu4pyscf": {
+          "median_seconds": 1.0565807570237666,
+          "min_seconds": 1.055256059858948,
+          "max_seconds": 1.0590977089013904,
+          "cold_seconds": 3.3909261219669133,
+          "branches": [
+            [
+              1,
+              1,
+              1,
+              1
+            ]
+          ]
+        }
+      }
+    ],
+    "remaining_acceptance": "External branches differ; no iteration-matched parity claim. 384-AO gap, larger/source-backed/backend promotion, constrained/changed-geometry repeated closure and #309/#310/#311 evidence remain separately open."
+  },
+  "direct_gate_returncode": 2,
+  "direct_audit": {
+    "status": "192-AO gates pass; existing 96-AO strict force-threshold failures reproduced",
+    "rows": [
+      {
+        "measurement": "direct-gate/water-octamer-s4-def2-svp-spherical-b1-none.json",
+        "aos": 192,
+        "batch": 1,
+        "gate": {
+          "failures": [],
+          "passed": true
+        },
+        "prior_gate": {
+          "failures": [],
+          "passed": true
+        },
+        "maximum_native_force_difference_from_prior": 1.058660104025222e-12,
+        "prior_measurement": "benchmarks/results/issue206-metric-gemv/direct-gate/water-octamer-s4-def2-svp-spherical-b1-none.json"
+      },
+      {
+        "measurement": "direct-gate/water-octamer-s4-def2-svp-spherical-b4-none.json",
+        "aos": 192,
+        "batch": 4,
+        "gate": {
+          "failures": [],
+          "passed": true
+        },
+        "prior_gate": {
+          "failures": [],
+          "passed": true
+        },
+        "maximum_native_force_difference_from_prior": 8.985728827681783e-13,
+        "prior_measurement": "benchmarks/results/issue206-metric-gemv/direct-gate/water-octamer-s4-def2-svp-spherical-b4-none.json"
+      },
+      {
+        "measurement": "direct-gate/water-tetramer-def2-svp-spherical-b1-none.json",
+        "aos": 96,
+        "batch": 1,
+        "gate": {
+          "failures": [
+            "maximum force error 5.23353e-11 Eh/bohr exceeds 3e-11 Eh/bohr"
+          ],
+          "passed": false
+        },
+        "prior_gate": {
+          "failures": [
+            "maximum force error 5.22576e-11 Eh/bohr exceeds 3e-11 Eh/bohr"
+          ],
+          "passed": false
+        },
+        "maximum_native_force_difference_from_prior": 2.4797351672045664e-13,
+        "prior_measurement": "benchmarks/results/issue206-metric-gemv/direct-gate/water-tetramer-def2-svp-spherical-b1-none.json"
+      },
+      {
+        "measurement": "direct-gate/water-tetramer-def2-svp-spherical-b4-none.json",
+        "aos": 96,
+        "batch": 4,
+        "gate": {
+          "failures": [
+            "maximum force error 5.49186e-11 Eh/bohr exceeds 3e-11 Eh/bohr"
+          ],
+          "passed": false
+        },
+        "prior_gate": {
+          "failures": [
+            "maximum force error 5.49199e-11 Eh/bohr exceeds 3e-11 Eh/bohr"
+          ],
+          "passed": false
+        },
+        "maximum_native_force_difference_from_prior": 5.398216595953187e-13,
+        "prior_measurement": "benchmarks/results/issue206-metric-gemv/direct-gate/water-tetramer-def2-svp-spherical-b4-none.json"
+      }
+    ],
+    "scope": "DF changes do not modify direct SCF/ERI consumers; unchanged direct gates remain open, without relaxed tolerances."
   }
 }
