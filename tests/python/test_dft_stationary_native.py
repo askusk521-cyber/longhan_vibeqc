@@ -50,7 +50,7 @@ def test_native_snapshot_rejects_relabeling_and_replay(method):
         [ATOMS], charges=[charge], multiplicities=[multiplicity]
     ) as batch:
         with NativeAO(ATOMS, charge=charge, multiplicity=multiplicity) as basis:
-            with pytest.raises(ValueError):
+            with pytest.raises(RuntimeError, match="invalid argument"):
                 StationaryKsState.from_native(batch, basis)
             batch.execute(strict=True)
             state = StationaryKsState.from_native(batch, basis)
