@@ -13,6 +13,23 @@ from collections import defaultdict
 from pathlib import Path
 
 source, destination = map(Path, sys.argv[1:])
+
+# Check the complete input set before publishing any summaries. A failed
+# collection must identify every missing dependency without leaving a partial
+# output bundle that could be mistaken for a qualified profile.
+required = [source / "environment.json"]
+for aos in (384, 768):
+    if (source / f"{aos}-diis.json").is_file():
+        required.extend(
+            source / f"{aos}-diis.0-{policy}.host.jsonl"
+            for policy in ("serial", "auto")
+        )
+        required.append(source / f"{aos}-memory.csv")
+missing = [path for path in required if not path.is_file()]
+if missing:
+    raise FileNotFoundError(
+        "missing required profile artifacts: " + ", ".join(map(str, missing))
+    )
 destination.mkdir(parents=True, exist_ok=True)
 
 

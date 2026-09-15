@@ -22,7 +22,7 @@ for aos in 768 384; do
     /tmp/vibeqc-pr-review-env/bin/python -m benchmarks.df_policy_endpoint --aos "$aos" --energy-only --expected-iterations 3 --control "$control" --policies "${policies[@]}" --repeats 5 --reference "$reference" --cold-control VIBEQC_DF_RESIDENT_EXCHANGE=legacy --cold-control VIBEQC_DF_DIIS_DOTS=serial --warm-checkpoint-out "$out/$aos-$control-energy.checkpoint" --output "$out/$aos-$control-energy.json"
   done
 done
-/tmp/vibeqc-pr-review-env/bin/python -m benchmarks.df_policy_endpoint --aos 384 --control VIBEQC_DF_RESPONSE_STORAGE --policies panel jk-scratch --repeats 5 --components-after --reference benchmarks/results/issue377-379-df/gpu4pyscf/water-hexadecamer-2s4-def2-svp-spherical.json --cold-control VIBEQC_DF_RESIDENT_EXCHANGE=legacy --cold-control VIBEQC_DF_DIIS_DOTS=serial --warm-checkpoint-out "$out/384-storage.checkpoint" --output "$out/384-storage.json"
+/tmp/vibeqc-pr-review-env/bin/python -m benchmarks.df_policy_endpoint --aos 384 --control VIBEQC_DF_RESPONSE_STORAGE --policies panel jk-scratch --repeats 5 --components-after --reference benchmarks/results/issue377-379-df/gpu4pyscf/water-hexadecamer-2s4-def2-svp-spherical.json --cold-control VIBEQC_DF_RESIDENT_EXCHANGE=legacy --cold-control VIBEQC_DF_DIIS_DOTS=serial --warm-checkpoint-out "$out/384-storage.checkpoint" --output "$out/384-VIBEQC_DF_RESPONSE_STORAGE.json"
 
 for aos in 384 768; do
   if [[ "$aos" == 384 ]]; then case_name=water-hexadecamer-2s4-def2-svp-spherical; else case_name=water-32mer-4s4-def2-svp-spherical; fi

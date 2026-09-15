@@ -26,6 +26,9 @@ patch SHA-256 is
 The frozen library, native source identity, runner hash, input/reference hashes,
 Slurm job and controls appear in each measurement. The patch reconstructs
 `src/` and `python/`; this PR also contains benchmark and test changes.
+A subsequent review correction records the already-allocated Jacobi solver
+workspace size for `nbf <= 32`. It changes telemetry only and does not affect
+the 384/768 AO solver paths or the frozen measurements below.
 
 Measurements use RTX 5090, CUDA 12.9.86, driver 580.95.05, GCC 11.4, Release
 sm_120, fast compiler mode off, one host numerical thread, spherical def2-SVP
@@ -250,8 +253,8 @@ cmake --preset cuda-release-sm120 -DVIBEQC_BUILD_TESTS=ON \
 cmake --build --preset cuda-release-sm120 --parallel 4
 mkdir -p .artifacts/issues388-391/final
 cp build/cuda-release-sm120/libvibeqc.so .artifacts/issues388-391/final/
-cp benchmarks/results/issues388-391-df/reproduction/final-source.patch \
-  .artifacts/issues388-391/final/source.patch
+git diff b29649f895ad53a549bef03341c2349cbe131f6c --binary -- src python \
+  > .artifacts/issues388-391/final/source.patch
 srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
   --cpus-per-task=4 --time=00:25:00 bash \
   benchmarks/results/issues388-391-df/reproduction/final-continuation.sh

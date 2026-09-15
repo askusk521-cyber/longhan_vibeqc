@@ -141,5 +141,37 @@
     "cuda_ownership_files": 176,
     "diff_check": "passed excluding preserved reconstruction-patch context lines, as in the repository whitespace hook",
     "evidence_retention": "passed on staged bytes"
+  },
+  "review_corrections": {
+    "scope": "Post-qualification telemetry correction for nbf <= 32 only; frozen 384/768 measurements remain unchanged.",
+    "runtime_patch_from_ff7c9cb_sha256": "33ce6cee33410e77350d328e2018b3d63ea4a2814402aa65835154058d87180d",
+    "jacobi_workspace_check": [
+      {
+        "batch_size": 1,
+        "queried_bytes": [
+          17384
+        ],
+        "retained_bytes": [
+          17384
+        ],
+        "solve_records": 1
+      },
+      {
+        "batch_size": 4,
+        "queried_bytes": [
+          44864
+        ],
+        "retained_bytes": [
+          44864
+        ],
+        "solve_records": 1
+      }
+    ],
+    "gpu_command": "srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 --cpus-per-task=4 --time=00:05:00 bash -lc <review-workspace.py>",
+    "log_sha256": "6efda6cce4923c9a14349ca69c35ef5e0406e586aa34ab671841498848212807",
+    "library_sha256": "3f16d6c1fbbba8d743eeb91d05f32e584289a677c09d87f0f99486d898266964",
+    "profile_preflight": "Reports all six missing DIIS host/memory artifacts before creating outputs; complete synthetic inputs succeed.",
+    "profile_reduction": "All 14 existing reduced profile records exactly match the retained parsed values.",
+    "reproduction_shell_syntax": "bash -n passed"
   }
 }

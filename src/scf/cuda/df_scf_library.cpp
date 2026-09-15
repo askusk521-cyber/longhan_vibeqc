@@ -109,6 +109,8 @@ vibeqc_status setup_device_solver(CudaDensityFittingJkPlan& plan, std::size_t nb
           "size CUDA DF SCF eigensolver", detail);
     }
     const auto bytes = static_cast<std::size_t>(solver.lwork) * sizeof(double);
+    // Retain the byte count for solve-time diagnostics on the Jacobi path too.
+    solver.workspace_bytes = bytes;
     runtime::df_progress::number("compact_solver_workspace_bytes", bytes);
     runtime::df_progress::number("compact_solver_workspace_allowance",
                                  df_scf_workspace_allowance(nbf, batch_size));
