@@ -14,6 +14,8 @@ from vibeqc_compiler.dft.fixtures import basis_arguments
 from vibeqc_compiler.xc import functional
 from vibeqc_compiler.xc.integration_fixtures import load_integration_fixture
 
+from tools.vibeqc_validation.dft_gradient import finite_difference_xc_directional
+
 
 def identity(method="pbe-rks"):
     return StationaryKsIdentity(
@@ -321,3 +323,139 @@ def test_generated_xc_geometry_rejects_stale_invalid_or_changing_motion(
     values.update(change)
     with pytest.raises(ValueError, match=message):
         bound.directional(StableGridMotion(**values))
+
+
+@pytest.mark.parametrize(
+    "method,name,spin",
+    [
+        ("lda-rks", "LDA_XC_PW", "unpolarized"),
+        ("pbe-rks", "PBE", "unpolarized"),
+        ("lda-uks", "LDA_XC_PW", "polarized"),
+        ("pbe-uks", "PBE", "polarized"),
+    ],
+)
+def test_stationary_xc_directions_match_independent_multistep_oracle(
+    method, name, spin
+):
+    spec = functional(name, spin=spin)
+    value = state(
+        method,
+        occupations=([[1.0, 0.0], [0.7, 0.2]] if spin == "polarized" else None),
+    )
+    value = replace(
+        value,
+        identity=replace(value.identity, functional_identity=spec.identity),
+    )
+    meta, _, grid = load_integration_fixture("h2")
+    args = basis_arguments(meta)
+    rng = np.random.default_rng(1634)
+    centers = rng.normal(size=(len(args["atoms"]), 3)) * 0.07
+    points = rng.normal(size=grid.points.shape) * 0.04
+    weights = rng.normal(size=grid.weights.shape) * 0.001
+    density = value.density[0] if spin == "unpolarized" else value.density
+    with NativeAO(**args) as basis:
+        ao_atoms = np.repeat(
+            [shell.atom_index for shell in basis.shells],
+            [
+                (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
+                for shell in basis.shells
+            ],
+        )
+        bound = bind_generated_xc_geometry(
+            StationaryDerivativeContract(value.identity),
+            value,
+            spec,
+            basis.evaluate(grid.points, 2 if name == "PBE" else 1),
+            grid.weights,
+            ao_atoms=ao_atoms,
+            natom=basis.natom,
+            basis_identity=value.identity.basis_identity,
+            geometry_identity=value.identity.geometry_identity,
+            grid_identity=value.identity.grid_identity,
+            topology_identity=value.identity.topology_identity,
+        )
+
+    zero_centers = np.zeros_like(centers)
+    zero_points = np.zeros_like(points)
+    zero_weights = np.zeros_like(weights)
+    motions = (
+        (centers, zero_points, zero_weights),
+        (zero_centers, points, zero_weights),
+        (zero_centers, zero_points, weights),
+        (centers, points, weights),
+    )
+    for dc, dp, dw in motions:
+        motion = StableGridMotion(
+            topology_identity=value.identity.topology_identity,
+            centers=dc,
+            points=dp,
+            weights=dw,
+        )
+        expected = bound.directional(motion).total
+        oracle = finite_difference_xc_directional(
+            spec,
+            args,
+            grid.points,
+            grid.weights,
+            density,
+            motion,
+            steps=(1e-3, 3e-4, 1e-4),
+        )
+        assert oracle.spread < 3e-8
+        np.testing.assert_allclose(oracle.stable_estimate, expected, atol=3e-9)
+
+
+def test_stationary_xc_oracle_detects_omission_and_sign_reversal():
+    spec = functional("PBE", spin="unpolarized")
+    value = state("pbe-rks")
+    value = replace(
+        value,
+        identity=replace(value.identity, functional_identity=spec.identity),
+    )
+    meta, _, grid = load_integration_fixture("h2")
+    args = basis_arguments(meta)
+    rng = np.random.default_rng(1635)
+    motion = StableGridMotion(
+        topology_identity=value.identity.topology_identity,
+        centers=rng.normal(size=(len(args["atoms"]), 3)) * 0.07,
+        points=rng.normal(size=grid.points.shape) * 0.04,
+        weights=rng.normal(size=grid.weights.shape) * 0.001,
+    )
+    with NativeAO(**args) as basis:
+        ao_atoms = np.repeat(
+            [shell.atom_index for shell in basis.shells],
+            [
+                (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
+                for shell in basis.shells
+            ],
+        )
+        bound = bind_generated_xc_geometry(
+            StationaryDerivativeContract(value.identity),
+            value,
+            spec,
+            basis.evaluate(grid.points, 2),
+            grid.weights,
+            ao_atoms=ao_atoms,
+            natom=basis.natom,
+            basis_identity=value.identity.basis_identity,
+            geometry_identity=value.identity.geometry_identity,
+            grid_identity=value.identity.grid_identity,
+            topology_identity=value.identity.topology_identity,
+        )
+    components = bound.directional(motion)
+    oracle = finite_difference_xc_directional(
+        spec,
+        args,
+        grid.points,
+        grid.weights,
+        value.density[0],
+        motion,
+    )
+    assert abs(oracle.stable_estimate - components.total) < 3e-9
+    for omitted in (
+        components.center + components.point,
+        components.center + components.weight,
+        components.point + components.weight,
+    ):
+        assert abs(oracle.stable_estimate - omitted) > 1e-7
+    assert abs(oracle.stable_estimate + components.total) > 1e-7
