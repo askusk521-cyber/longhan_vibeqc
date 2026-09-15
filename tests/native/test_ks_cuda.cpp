@@ -2,13 +2,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
+#include "api/handles.hpp"
 #include "dft/cuda_ks.hpp"
 #include "dft/xc.hpp"
+#include "methods/dft_method.hpp"
 #include "molecule/basis.hpp"
 #include "runtime/resource_ledger.hpp"
 #include "scf/mean_field.hpp"
@@ -17,7 +21,7 @@
 namespace {
 using namespace vibeqc;
 using scf::reference::Matrix;
-void require(bool value, const char* message) {
+void require(bool value, const std::string& message) {
   if (!value) throw std::runtime_error(message);
 }
 core::System hydrogens(unsigned count, bool restricted, double shift = 0.0) {
@@ -32,8 +36,7 @@ core::System hydrogens(unsigned count, bool restricted, double shift = 0.0) {
          {{3.425250914, 0.1543289673}, {0.6239137298, 0.5353281423}, {0.168855404, 0.4446345422}}});
   }
   std::string detail;
-  require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS,
-          detail.c_str());
+  require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS, detail);
   return system;
 }
 scf::ResolvedFockBuild strategy(bool restricted, scf::FockBackend backend) {
@@ -108,8 +111,7 @@ void run_hydroxyl(bool pbe) {
        0,
        {{3.425250914, 0.1543289673}, {0.6239137298, 0.5353281423}, {0.168855404, 0.4446345422}}}};
   std::string detail;
-  require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS,
-          detail.c_str());
+  require(molecule::validate_and_normalize(system, detail) == VIBEQC_STATUS_SUCCESS, detail);
   const dft::AoBasis basis(system);
   const dft::MolecularGrid grid(system);
   const scf::PreparedFockPlan cpu(system, nullptr, strategy(false, scf::FockBackend::Cpu));
@@ -172,6 +174,10 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
   options.density_tolerance = 1e-10;
   options.max_iterations = 150;
   dft::CudaKsPlan plan(gpu, basis, grid, options, pbe, 257);
+  dft::CudaKsFinalStateToken unavailable;
+  std::string snapshot_detail;
+  require(plan.final_state_token(unavailable, snapshot_detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+          "fresh CUDA KS owner published a final-state token");
   plan.begin(nullptr, false);
   while (plan.active()) {
     plan.enqueue_iteration();
@@ -193,6 +199,72 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
   require(reference.converged && std::abs(reference.energy - result.energy) < 1e-10,
           "CPU/CUDA SCF endpoints disagree");
   physical_check(cpu, basis, grid, pbe, result);
+  const auto before_snapshot = plan.transfers();
+  dft::CudaKsFinalStateToken token;
+  require(plan.final_state_token(token, snapshot_detail) == VIBEQC_STATUS_SUCCESS, snapshot_detail);
+  require(plan.transfers().final_state_d2h_bytes == before_snapshot.final_state_d2h_bytes,
+          "CUDA KS token query transferred device state");
+  dft::VerifiedKsFinalState snapshot;
+  require(plan.read_final_state(token, false, snapshot, snapshot_detail) == VIBEQC_STATUS_SUCCESS,
+          snapshot_detail);
+  const auto snapshot_transfer = plan.transfers();
+  const auto spins = restricted ? 1U : 2U;
+  const auto expected_snapshot_bytes =
+      spins * (3 * basis.nao * basis.nao + basis.nao) * sizeof(double) + spins * sizeof(int);
+  require(snapshot.weighted_density.empty() && snapshot.density.size() == spins &&
+              snapshot.fock.size() == spins && snapshot.orbitals.size() == spins &&
+              snapshot.identity.model.grid == grid_spec && snapshot.identity.model.pbe == pbe &&
+              snapshot.identity.model.spins == spins &&
+              snapshot.identity.determinant.model == gpu.strategy() &&
+              snapshot.identity.determinant.factor.orbital_generation ==
+                  snapshot.identity.determinant.factor.density_generation &&
+              std::abs(snapshot.components.total() - result.energy) < 1e-12,
+          "CUDA KS final snapshot lost model, generation or physical state");
+  require(snapshot_transfer.final_state_d2h_bytes - before_snapshot.final_state_d2h_bytes ==
+                  expected_snapshot_bytes &&
+              snapshot_transfer.final_state_reads == before_snapshot.final_state_reads + 1 &&
+              snapshot_transfer.synchronizations == before_snapshot.synchronizations + 1,
+          "CUDA KS final snapshot transfer accounting is incomplete");
+  require(plan.read_final_state(token, true, snapshot, snapshot_detail) == VIBEQC_STATUS_SUCCESS &&
+              snapshot.weighted_density.size() == spins,
+          snapshot_detail);
+  if (!restricted && atoms == 1)
+    require(std::all_of(snapshot.weighted_density[1].begin(), snapshot.weighted_density[1].end(),
+                        [](double value) { return value == 0.0; }),
+            "empty beta occupation produced nonzero W");
+
+  const std::vector<std::function<void(dft::CudaKsFinalStateToken&)>> stale_tokens{
+      [](auto& value) { ++value.version; },
+      [](auto& value) { ++value.identity.determinant.factor.basis; },
+      [](auto& value) { ++value.identity.determinant.factor.reference; },
+      [](auto& value) { ++value.identity.determinant.factor.orbital_generation; },
+      [](auto& value) { ++value.identity.determinant.factor.density_generation; },
+      [](auto& value) { ++value.identity.determinant.solve_epoch; },
+      [](auto& value) { value.identity.determinant.model.screening_tolerance *= 2; },
+      [](auto& value) { value.identity.determinant.occupied[0] = 0; },
+      [](auto& value) { ++value.identity.model.owner; },
+      [](auto& value) { ++value.identity.model.grid.radial_points; },
+      [](auto& value) { value.identity.model.pbe = !value.identity.model.pbe; },
+      [](auto& value) { ++value.identity.model.tile_points; },
+      [](auto& value) { ++value.identity.model.device; },
+      [](auto& value) { ++value.identity.model.scf_domain_version; }};
+  for (const auto& mutate : stale_tokens) {
+    auto stale = token;
+    mutate(stale);
+    dft::VerifiedKsFinalState rejected;
+    const auto before_rejection = plan.transfers();
+    require(plan.read_final_state(stale, false, rejected, snapshot_detail) ==
+                    VIBEQC_STATUS_INVALID_ARGUMENT &&
+                rejected.density.empty() &&
+                plan.transfers().final_state_d2h_bytes == before_rejection.final_state_d2h_bytes,
+            "stale CUDA KS token transferred or published state");
+  }
+  plan.invalidate_final_state();
+  require(plan.final_state_token(unavailable, snapshot_detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+          "explicit result invalidation preserved CUDA KS eligibility");
+  require(plan.run(nullptr, true, false).converged &&
+              plan.final_state_token(token, snapshot_detail) == VIBEQC_STATUS_SUCCESS,
+          "CUDA KS owner did not recover eligibility after explicit invalidation");
   require(result.iterations == result.dft_diagnostic.history.size(),
           "missing CUDA iteration history");
   const auto before = plan.transfers();
@@ -202,6 +274,11 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
               std::abs(warm.energy - result.energy) < 1e-11 &&
               before.density_h2d_bytes == after.density_h2d_bytes,
           "unchanged-geometry replay did not reuse resident warm density");
+  dft::VerifiedKsFinalState stale_snapshot;
+  require(plan.read_final_state(token, false, stale_snapshot, snapshot_detail) ==
+                  VIBEQC_STATUS_INVALID_ARGUMENT &&
+              stale_snapshot.density.empty(),
+          "warm replay accepted the preceding CUDA KS solve epoch");
   const auto energy_only = plan.run(nullptr, true, false);
   require(energy_only.converged && energy_only.density.empty() &&
               plan.transfers().matrix_d2h_bytes == after.matrix_d2h_bytes,
@@ -230,6 +307,8 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
     invalid[atoms * atoms - 1] = 2.0;
     const auto failed = plan.run(&invalid);
     require(plan.failed() && !failed.converged, "invalid grid density did not fail the CUDA item");
+    require(plan.final_state_token(unavailable, snapshot_detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+            "failed CUDA KS solve preserved final-state eligibility");
     const auto recovered = plan.run();
     require(recovered.converged && std::abs(recovered.energy - result.energy) < 1e-11,
             "failed CUDA item replaced its last-good warm state");
@@ -258,6 +337,9 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
   const auto limited = unfinished.run();
   require(!limited.converged && !unfinished.failed(), "iteration limit misreported its status");
   require(unfinished.warm_density().empty(), "unfinished solve published a good warm state");
+  require(
+      unfinished.final_state_token(unavailable, snapshot_detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+      "unfinished CUDA KS solve published a final-state token");
   physical_check(cpu, basis, grid, pbe, limited);
 
   // Exact arena request is charged through the existing #203 device ledger.
@@ -283,12 +365,93 @@ void run_case(unsigned atoms, bool restricted, bool pbe) {
             << " iterations=" << result.iterations
             << " residual=" << result.dft_diagnostic.physical_residual << '\n';
 }
+/** Exercise the C validation layer, which can reject a request before the
+ * prepared method's execute() invalidation is reached. */
+void rejected_api_requests_revoke_tokens() {
+  vibeqc_context_descriptor context_spec{sizeof(vibeqc_context_descriptor), VIBEQC_ABI_VERSION, 0,
+                                         VIBEQC_BACKEND_CUDA};
+  vibeqc_context* raw_context{};
+  require(vibeqc_context_create(&context_spec, &raw_context) == VIBEQC_STATUS_SUCCESS,
+          "KS token API test context failed");
+  std::unique_ptr<vibeqc_context, decltype(&vibeqc_context_destroy)> context(
+      raw_context, vibeqc_context_destroy);
+  vibeqc_system system{hydrogens(2, true)};
+  vibeqc_method_descriptor method{sizeof(vibeqc_method_descriptor),
+                                  VIBEQC_ABI_VERSION,
+                                  VIBEQC_METHOD_LDA_RKS,
+                                  150,
+                                  8,
+                                  1e-12,
+                                  1e-10,
+                                  1e-12,
+                                  VIBEQC_DENSITY_FITTING_NONE,
+                                  nullptr,
+                                  1e-10,
+                                  0};
+  vibeqc_calculation* raw_calculation{};
+  require(vibeqc_calculation_prepare(context.get(), &system, &method, &raw_calculation) ==
+              VIBEQC_STATUS_SUCCESS,
+          "KS token API test preparation failed");
+  std::unique_ptr<vibeqc_calculation, decltype(&vibeqc_calculation_destroy)> calculation(
+      raw_calculation, vibeqc_calculation_destroy);
+  std::string detail;
+  dft::CudaKsFinalStateToken token;
+  dft::VerifiedKsFinalState snapshot;
+  for (int rejected = 0; rejected < 3; ++rejected) {
+    vibeqc_result_descriptor output{};
+    output.struct_size = sizeof(output);
+    output.abi_version = VIBEQC_ABI_VERSION;
+    require(vibeqc_calculation_execute(calculation.get(), &output) == VIBEQC_STATUS_SUCCESS &&
+                methods::detail::dft_final_state_token(*calculation->plan, token, detail) ==
+                    VIBEQC_STATUS_SUCCESS,
+            "KS calculation failed to publish current token");
+    if (rejected == 1) ++output.abi_version;
+    if (rejected == 2) output.force_count = 1;
+    require(vibeqc_calculation_execute(calculation.get(), rejected == 0 ? nullptr : &output) !=
+                VIBEQC_STATUS_SUCCESS,
+            "malformed KS calculation unexpectedly executed");
+    require(methods::detail::read_dft_final_state(*calculation->plan, token, false, snapshot,
+                                                  detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+            "rejected C calculation request retained a previous token");
+  }
+
+  const vibeqc_system* systems[]{&system, &system};
+  vibeqc_batch* raw_batch{};
+  require(vibeqc_batch_prepare(context.get(), systems, 2, &method, VIBEQC_BATCH_ENABLE_WARM_STARTS,
+                               &raw_batch) == VIBEQC_STATUS_SUCCESS,
+          "KS token batch preparation failed");
+  std::unique_ptr<vibeqc_batch, decltype(&vibeqc_batch_destroy)> batch(raw_batch,
+                                                                       vibeqc_batch_destroy);
+  for (int rejected = 0; rejected < 3; ++rejected) {
+    vibeqc_batch_item_result_descriptor outputs[2]{};
+    for (auto& output : outputs) {
+      output.struct_size = sizeof(output);
+      output.abi_version = VIBEQC_ABI_VERSION;
+    }
+    require(vibeqc_batch_execute(batch.get(), nullptr, 0, outputs, 2) == VIBEQC_STATUS_SUCCESS,
+            "KS token batch execution failed");
+    dft::CudaKsFinalStateToken tokens[2];
+    for (std::size_t i = 0; i < 2; ++i)
+      require(methods::detail::dft_final_state_token(*batch->plan, i, tokens[i], detail) ==
+                  VIBEQC_STATUS_SUCCESS,
+              "KS batch failed to publish current token");
+    if (rejected == 2) ++outputs[1].abi_version;
+    require(vibeqc_batch_execute(batch.get(), nullptr, 0, rejected == 0 ? nullptr : outputs,
+                                 rejected == 1 ? 1 : 2) != VIBEQC_STATUS_SUCCESS,
+            "malformed KS batch unexpectedly executed");
+    for (std::size_t i = 0; i < 2; ++i)
+      require(methods::detail::read_dft_final_state(*batch->plan, i, tokens[i], false, snapshot,
+                                                    detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
+              "rejected C batch request retained a previous token");
+  }
+}
 }  // namespace
 
 int main() {
   int devices = 0;
   if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0) return 77;
   try {
+    rejected_api_requests_revoke_tokens();
     for (bool pbe : {false, true}) {
       run_case(2, true, pbe);
       run_hydroxyl(pbe);

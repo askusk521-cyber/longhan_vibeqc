@@ -165,6 +165,8 @@ KsTransportDiagnostic adapt_transfers(const dft::CudaKsTransfers& value) {
           value.density_h2d_bytes,
           value.scalar_d2h_bytes,
           value.matrix_d2h_bytes,
+          value.final_state_d2h_bytes,
+          value.final_state_reads,
           value.synchronizations,
           value.iterations,
           value.occupation_stabilized_proposals};
@@ -180,6 +182,8 @@ void add_transfers(dft::CudaKsTransfers& target, const dft::CudaKsTransfers& val
   add(target.density_h2d_bytes, value.density_h2d_bytes);
   add(target.scalar_d2h_bytes, value.scalar_d2h_bytes);
   add(target.matrix_d2h_bytes, value.matrix_d2h_bytes);
+  add(target.final_state_d2h_bytes, value.final_state_d2h_bytes);
+  add(target.final_state_reads, value.final_state_reads);
   add(target.synchronizations, value.synchronizations);
   add(target.iterations, value.iterations);
   add(target.occupation_stabilized_proposals, value.occupation_stabilized_proposals);
@@ -242,6 +246,18 @@ class KsPreparedCalculation final : public PreparedCalculation {
 #endif
   }
 
+  void invalidate_result() override {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) cuda_->invalidate_final_state();
+#endif
+  }
+
+  void invalidate_final_state() noexcept {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) cuda_->invalidate_final_state();
+#endif
+  }
+
 #if VIBEQC_HAS_CUDA
   dft::CudaKsPlan* cuda_plan() noexcept { return cuda_.get(); }
 #endif
@@ -253,7 +269,31 @@ class KsPreparedCalculation final : public PreparedCalculation {
     return std::nullopt;
   }
 
+  vibeqc_status final_state_token(dft::CudaKsFinalStateToken& token, std::string& detail) const {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) return cuda_->final_state_token(token, detail);
+#endif
+    token = {};
+    detail = "KS final-state handoff requires the resident CUDA backend";
+    return VIBEQC_STATUS_NOT_IMPLEMENTED;
+  }
+
+  vibeqc_status read_final_state(const dft::CudaKsFinalStateToken& expected,
+                                 bool compute_weighted_density, dft::VerifiedKsFinalState& state,
+                                 std::string& detail) {
+#if VIBEQC_HAS_CUDA
+    if (cuda_) return cuda_->read_final_state(expected, compute_weighted_density, state, detail);
+#else
+    (void)expected;
+    (void)compute_weighted_density;
+#endif
+    state = {};
+    detail = "KS final-state handoff requires the resident CUDA backend";
+    return VIBEQC_STATUS_NOT_IMPLEMENTED;
+  }
+
   Result execute(bool compute_forces) override {
+    invalidate_final_state();
     const char* method_name =
         (method_ == VIBEQC_METHOD_PBE_RKS || method_ == VIBEQC_METHOD_PBE_UKS) ? "PBE" : "LDA";
     if (compute_forces) {
@@ -373,8 +413,14 @@ class KsPreparedBatch final : public PreparedBatch {
 
   std::size_t size() const noexcept override { return systems_.size(); }
 
+  void invalidate_result() override {
+    for (auto& item : items_)
+      if (item.plan) item.plan->invalidate_final_state();
+  }
+
   std::vector<BatchItemResult> execute(const Coordinates& coordinates,
                                        bool compute_forces) override {
+    invalidate_result();
     if (compute_forces)
       throw MethodError(VIBEQC_STATUS_NOT_IMPLEMENTED,
                         "KS nuclear gradients are tracked separately in issue #163");
@@ -570,6 +616,26 @@ class KsPreparedBatch final : public PreparedBatch {
     return std::nullopt;
   }
 
+  vibeqc_status final_state_token(std::size_t index, dft::CudaKsFinalStateToken& token,
+                                  std::string& detail) const {
+    if (index < items_.size() && items_[index].plan)
+      return items_[index].plan->final_state_token(token, detail);
+    token = {};
+    detail = "KS batch item has no prepared final-state owner";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+
+  vibeqc_status read_final_state(std::size_t index, const dft::CudaKsFinalStateToken& expected,
+                                 bool compute_weighted_density, dft::VerifiedKsFinalState& state,
+                                 std::string& detail) {
+    if (index < items_.size() && items_[index].plan)
+      return items_[index].plan->read_final_state(expected, compute_weighted_density, state,
+                                                  detail);
+    state = {};
+    detail = "KS batch item has no prepared final-state owner";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+
   // These profiles describe HF graph/provider layouts, not this method's
   // ordinary-stream schedule. Absence is explicit at the common interface.
   std::optional<std::vector<DirectShellClassProfileEntry>> last_direct_shell_class_profile()
@@ -636,6 +702,46 @@ class KsPreparedBatch final : public PreparedBatch {
 };
 
 }  // namespace
+
+vibeqc_status dft_final_state_token(const PreparedCalculation& calculation,
+                                    dft::CudaKsFinalStateToken& token, std::string& detail) {
+  const auto* ks = dynamic_cast<const KsPreparedCalculation*>(&calculation);
+  if (ks) return ks->final_state_token(token, detail);
+  token = {};
+  detail = "prepared calculation is not a KS final-state owner";
+  return VIBEQC_STATUS_INVALID_ARGUMENT;
+}
+
+vibeqc_status read_dft_final_state(PreparedCalculation& calculation,
+                                   const dft::CudaKsFinalStateToken& expected,
+                                   bool compute_weighted_density, dft::VerifiedKsFinalState& state,
+                                   std::string& detail) {
+  auto* ks = dynamic_cast<KsPreparedCalculation*>(&calculation);
+  if (ks) return ks->read_final_state(expected, compute_weighted_density, state, detail);
+  state = {};
+  detail = "prepared calculation is not a KS final-state owner";
+  return VIBEQC_STATUS_INVALID_ARGUMENT;
+}
+
+vibeqc_status dft_final_state_token(const PreparedBatch& batch, std::size_t index,
+                                    dft::CudaKsFinalStateToken& token, std::string& detail) {
+  const auto* ks = dynamic_cast<const KsPreparedBatch*>(&batch);
+  if (ks) return ks->final_state_token(index, token, detail);
+  token = {};
+  detail = "prepared batch is not a KS final-state owner";
+  return VIBEQC_STATUS_INVALID_ARGUMENT;
+}
+
+vibeqc_status read_dft_final_state(PreparedBatch& batch, std::size_t index,
+                                   const dft::CudaKsFinalStateToken& expected,
+                                   bool compute_weighted_density, dft::VerifiedKsFinalState& state,
+                                   std::string& detail) {
+  auto* ks = dynamic_cast<KsPreparedBatch*>(&batch);
+  if (ks) return ks->read_final_state(index, expected, compute_weighted_density, state, detail);
+  state = {};
+  detail = "prepared batch is not a KS final-state owner";
+  return VIBEQC_STATUS_INVALID_ARGUMENT;
+}
 
 vibeqc_status validate_dft_system(vibeqc_method method, const core::System& system,
                                   std::string& detail) {

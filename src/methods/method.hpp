@@ -59,6 +59,11 @@ struct KsTransportDiagnostic {
   std::uint64_t density_h2d_bytes{};
   std::uint64_t scalar_d2h_bytes{};
   std::uint64_t matrix_d2h_bytes{};
+  /** Internal #163 handoff accounting. The legacy public ABI continues to
+   * report these bytes
+   * inside matrix_d2h_bytes without adding fields. */
+  std::uint64_t final_state_d2h_bytes{};
+  std::uint64_t final_state_reads{};
   std::uint64_t synchronizations{};
   std::uint64_t iterations{};
   std::uint64_t occupation_stabilized_proposals{};
@@ -197,6 +202,8 @@ class PreparedBatch {
    * A false force request skips response evaluation for the complete fleet. */
   virtual std::vector<BatchItemResult> execute(const Coordinates& coordinates,
                                                bool compute_forces = true) = 0;
+  /** Revoke exported-state eligibility even when API validation rejects a replay. */
+  virtual void invalidate_result() {}
   virtual void clear_warm_starts() = 0;
   [[nodiscard]] virtual std::size_t warm_density_size(std::size_t index) const = 0;
   [[nodiscard]] virtual const std::optional<scf::HfWarmState>& warm_state(
