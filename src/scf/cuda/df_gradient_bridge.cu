@@ -534,15 +534,33 @@ vibeqc_status execute_cuda_df_hf_gradient(
     arena.stream = reinterpret_cast<cudaStream_t>(stream_handle);
     arena.owns_stream = false;
     const auto o = arena.upload(host_o), x = arena.upload(host_a);
+    // Clean complete-force endpoints qualify this combined default only for
+    // resident 192--384-AO sm_120 execution. Small UHF regresses from launch and
+    // pinned-allocation overhead; other backends and source-backed/larger
+    // regimes need their own endpoint evidence. Explicit selectors stay usable
+    // everywhere. Attribution probes retain the original comparison defaults.
+    bool promoted_default = false;
+    const char* upload_diagnostic = std::getenv("VIBEQC_DF_RESPONSE_UPLOAD_PROBE");
+    const char* scatter_diagnostic = std::getenv("VIBEQC_DF_RESPONSE_SCATTER_PROBE");
+    const char* serial_diagnostic = std::getenv("VIBEQC_DF_SERIAL_RESPONSE_DOT");
+    if (device_metric && schedule == 0 && !source && n >= 192 && n <= 384 &&
+        !(upload_diagnostic && *upload_diagnostic) &&
+        !(scatter_diagnostic && *scatter_diagnostic) &&
+        !(serial_diagnostic && std::string_view(serial_diagnostic) == "1")) {
+      cudaDeviceProp properties{};
+      check(cudaGetDeviceProperties(&properties, device));
+      promoted_default = properties.major == 12 && properties.minor == 0;
+    }
     const char* execution_control = std::getenv("VIBEQC_DF_WEIGHTED_EXECUTION");
-    const std::string_view execution = execution_control ? execution_control : "generic";
+    const std::string_view execution =
+        execution_control ? execution_control : (promoted_default ? "shell" : "generic");
     if (execution != "generic" && execution != "shell-sp" && execution != "shell")
       throw std::invalid_argument("unknown DF weighted execution (use generic, shell-sp or shell)");
     const bool shell_execution = execution != "generic" && device_metric && schedule == 0;
     const bool full_shell_domain = execution == "shell";
     const char* shell_schedule_control = std::getenv("VIBEQC_DF_SHELL_SCHEDULE");
     const std::string_view shell_schedule =
-        shell_schedule_control ? shell_schedule_control : "warp";
+        shell_schedule_control ? shell_schedule_control : (promoted_default ? "compact" : "warp");
     if (shell_schedule != "warp" && shell_schedule != "packed" && shell_schedule != "compact")
       throw std::invalid_argument("unknown DF shell schedule (use warp, packed or compact)");
     const unsigned shell_variant = shell_schedule == "warp"     ? 0
@@ -596,7 +614,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
       // Causal attribution controls, not production schedule candidates. Both
       // drain prior work before a raw read; packed additionally exposes the
       // CPU gather and a contiguous pinned H2D copy as separate intervals.
-      // Default execution retains the original pageable strided submission.
+      // Probes retain the original pageable strided submission by default.
       const char* upload_probe = std::getenv("VIBEQC_DF_RESPONSE_UPLOAD_PROBE");
       const std::string_view probe = upload_probe ? upload_probe : "";
       if (!probe.empty() && probe != "drain" && probe != "packed")
@@ -604,7 +622,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
       if (!probe.empty() && source)
         throw std::invalid_argument("DF response upload probe requires resident host raw values");
       const char* staging_control = std::getenv("VIBEQC_DF_RAW_STAGING");
-      const std::string_view staging = staging_control ? staging_control : "pageable";
+      const std::string_view staging =
+          staging_control ? staging_control : (promoted_default ? "pinned-panels" : "pageable");
       if (staging != "pageable" && staging != "pinned-panels")
         throw std::invalid_argument("unknown DF raw staging (use pageable or pinned-panels)");
       if (staging == "pinned-panels" && !source) {
@@ -652,7 +671,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
       const char* dot_policy = std::getenv("VIBEQC_DF_SERIAL_RESPONSE_DOT");
       const bool serial_dot = dot_policy && dot_policy[0] == '1' && dot_policy[1] == '\0';
       const char* algebra_control = std::getenv("VIBEQC_DF_RESPONSE_ALGEBRA");
-      const std::string_view algebra = algebra_control ? algebra_control : "scalar";
+      const std::string_view algebra =
+          algebra_control ? algebra_control : (promoted_default ? "blas" : "scalar");
       if (algebra != "scalar" && algebra != "blas")
         throw std::invalid_argument("unknown DF response algebra (use scalar or blas)");
       check(contract_cuda_df_response_weights(

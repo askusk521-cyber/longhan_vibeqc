@@ -2,9 +2,20 @@
 
 `VIBEQC_DF_WEIGHTED_EXECUTION=shell` selects generated weighted three-center
 derivatives across all 64 s/p/d/f shell classes. `shell-sp` retains the original
-seven non-SSS s/p classes as a comparison subset. The default remains `generic`
-until complete endpoint measurements qualify promotion. The initial s/p-only
-prototype did not resolve the 192-to-384-AO force scaling problem in #308.
+seven non-SSS s/p classes as a comparison subset. Clean endpoints qualify the
+combined `shell` / `compact` / `blas` / `pinned-panels` default for resident
+192--384-AO sm_120 device-metric execution. Other sizes, backends, source-backed
+values, serial mappings and attribution probes retain the previous defaults.
+In particular, small UHF remains generic because pinned allocations and shell
+launches regress its complete endpoint. The initial s/p-only prototype did not
+resolve the 192-to-384-AO force scaling problem in #308.
+
+The measured 384-AO batch-one/four complete-force means fall from 12.007/47.905 s
+to 3.261/13.498 s with compact scheduling. Corresponding 192-to-384 ratios fall
+from 14.94/14.87 to 12.14/12.94. This is a material endpoint improvement, with
+substantial scaling work still remaining. The selection evidence, numerical
+gates and qualification scope are retained in
+`benchmarks/results/issue308-shell-schedules/`.
 
 The scalar and shell consumers use the same generated primitive geometry and
 Boys routine. The compiler builds each shell class's axis-moment cache from
@@ -79,10 +90,17 @@ metric/subspace response cases, bounded budgets, and memory sanitization.
 
 Two additional controls isolate the measured response bottlenecks:
 
-| Control | Default | Alternative |
+| Control | Default outside the qualified regime | Alternative |
 | --- | --- | --- |
 | `VIBEQC_DF_RESPONSE_ALGEBRA` | `scalar` | `blas`: parallel charge GEMV and density GEMM |
 | `VIBEQC_DF_RAW_STAGING` | `pageable` | `pinned-panels`: two bounded host panels |
+
+All four selectors override their respective defaults independently. To request
+the complete original comparison route, set `VIBEQC_DF_WEIGHTED_EXECUTION=generic`,
+`VIBEQC_DF_SHELL_SCHEDULE=warp`, `VIBEQC_DF_RESPONSE_ALGEBRA=scalar` and
+`VIBEQC_DF_RAW_STAGING=pageable`. Unset selectors are resolved from the native
+source, device and response dimensions; prepared provenance retains the explicit
+environment controls and the native source identity.
 
 BLAS execution borrows the existing host-scalar handle and its owning stream.
 Transpose flags preserve the original row-major contractions. Terms with
