@@ -216,6 +216,12 @@ docs(dft): record stationary gradient ownership boundary
 
 ## Completion evidence
 
+Authoritative acceptance runs use the dedicated Issue #163-A worktree on qz:
+CPU executes the independent oracle and focused regressions, while a separate
+#163-specific high-priority GPU workload checks the CUDA build/environment and
+unchanged generated-XC path without claiming CUDA gradient execution. Local
+Windows runs are fast development checks rather than the final platform gate.
+
 The goal is complete only when all of the following are current and verified:
 
 - the contract and oracle files are merged into `origin/master`;

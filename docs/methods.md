@@ -79,6 +79,14 @@ The resident owner replaces #307's host-controlled method path; its compiler
 spatial-XC consumer remains available with the separate `interior-v1` contract.
 Nuclear gradients remain #163. No DFT density-fitting or performance-leadership
 claim follows from the tested CPU/CUDA energy endpoints.
+An internal #163-A stationary derivative boundary now validates current LDA/PBE
+RKS/UKS final-state identity and consumes the generated fixed-density XC
+AO-centre, grid-point, and quadrature-weight geometric partials on an explicitly
+stable topology branch. An independent multistep CPU oracle re-evaluates scalar
+XC energies on displaced inputs. This is infrastructure for later assembly, not
+a complete molecular gradient: atom-centred grid/partition response, the other
+energy terms and Pulay contributions, CUDA gradient lowering, and public DFT
+forces remain unsupported.
 The public `Result.density_rms` retains its density-update convergence meaning.
 The separate `Result.physical_residual_rms` reports the physical commutator
 RMS; UKS combines the alpha/beta matrix entries in both public RMS measures.
