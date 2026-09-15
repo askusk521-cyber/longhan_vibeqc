@@ -5,6 +5,7 @@ assemble a complete molecular gradient or enable public DFT forces.
 """
 
 from dataclasses import dataclass, field
+from numbers import Real
 
 import numpy as np
 from vibeqc_compiler.common.arrays import immutable
@@ -93,6 +94,16 @@ class StationaryKsState:
     def __post_init__(self):
         if not isinstance(self.identity, StationaryKsIdentity):
             raise TypeError("stationary state requires a typed identity")
+        for name in ("successful", "converged", "physical"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"stationary {name} gate must be boolean")
+        if isinstance(self.physical_residual, bool) or not isinstance(
+            self.physical_residual, Real
+        ):
+            raise TypeError("physical residual must be one real scalar")
+        if not np.isfinite(self.physical_residual):
+            raise ValueError("physical residual must be finite")
+        object.__setattr__(self, "physical_residual", float(self.physical_residual))
         for name in (
             "density",
             "fock",

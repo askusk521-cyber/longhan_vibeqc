@@ -201,6 +201,18 @@ def test_stationary_state_owns_read_only_snapshot_arrays():
         value.density[0, 0, 0] = 1.0
 
 
+@pytest.mark.parametrize("field", ["successful", "converged", "physical"])
+def test_stationary_state_rejects_truthy_nonboolean_gates(field):
+    with pytest.raises(TypeError, match="boolean"):
+        replace(state(), **{field: "false"})
+
+
+@pytest.mark.parametrize("residual", [True, np.nan, np.array([0.0])])
+def test_stationary_state_requires_finite_scalar_physical_residual(residual):
+    with pytest.raises((TypeError, ValueError), match="physical residual"):
+        replace(state(), physical_residual=residual)
+
+
 @pytest.mark.parametrize("method", ["b3lyp-rks", "pbe0-rks", "pbe-rhf"])
 def test_stationary_contract_rejects_unsupported_method_domain(method):
     with pytest.raises(ValueError, match="LDA/PBE RKS/UKS"):
