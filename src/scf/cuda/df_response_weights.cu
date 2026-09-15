@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <limits>
 
 #include "runtime/cuda_component_trace.hpp"
 #include "scf/cuda/df_jk_kernels.hpp"
@@ -75,11 +76,13 @@ __global__ void packed_coulomb_weights(std::size_t n, std::size_t begin, std::si
  * entries contracts precisely the symmetric part of the original adjoint.
  */
 __global__ void add_packed_exchange_block(std::size_t begin, std::size_t rows, std::size_t columns,
-                                          const double* block, double* weights) {
+                                          const double* block, double* weights,
+                                          std::size_t count = 1, std::size_t pair_stride = 0) {
   const auto k = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
-  if (k >= rows * columns) return;
-  const auto i = begin + k / columns, j = k % columns;
-  if (j <= i) weights[i * (i + 1) / 2 + j] += (i == j ? 1 : 2) * block[k];
+  if (k >= count * rows * columns) return;
+  const auto panel = k / (rows * columns), element = k % (rows * columns);
+  const auto i = begin + element / columns, j = element % columns;
+  if (j <= i) weights[panel * pair_stride + i * (i + 1) / 2 + j] += (i == j ? 1 : 2) * block[k];
 }
 
 __global__ void coulomb_metric_kernel(std::size_t a, double coefficient, const double* charges,
@@ -159,9 +162,12 @@ __global__ void metric_response_kernel(std::size_t a, unsigned stage, CudaDfMetr
   output[ij] = value;
 }
 
-__global__ void symmetrize_kernel(std::size_t a, double* values) {
-  const auto ij = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
-  if (ij >= a * a || ij / a >= ij % a) return;
+__global__ void symmetrize_kernel(std::size_t a, double* values, std::size_t count = 1) {
+  const auto element = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
+  if (element >= count * a * a) return;
+  const auto ij = element % (a * a);
+  values += element / (a * a) * a * a;
+  if (ij / a >= ij % a) return;
   const auto ji = (ij % a) * a + ij / a;
   values[ij] = values[ji] = .5 * (values[ij] + values[ji]);
 }
@@ -172,8 +178,8 @@ std::size_t cuda_df_response_workspace_elements(std::size_t n, std::size_t a, st
   return 4 * a * a + (3 + 2 * tile) * n * n + 2 * terms * a;
 }
 
-/** Reuse the resident plan's three full J/K temporaries, with no new tensor allocation.
- * Upload raw A once and transpose it to [Q,ij]. For each exchange density,
+/** Borrow the resident plan's raw view and two full J/K temporaries.
+ * The legacy provider instead uploads raw A and transposes it to [Q,ij]. For each exchange density,
  * compute every R_Q=D^T A_Q D once, then perform both all-auxiliary contractions
  * with GEMM. The raw tensor remains intact across spin terms. In particular,
  * E[P,Q]=A_P:R_Q still contains discarded metric directions; the same spectral
@@ -205,7 +211,7 @@ static cudaError_t contract_resident_response(
   const auto blas_check = [](cublasStatus_t status) {
     if (status != CUBLAS_STATUS_SUCCESS) throw CudaDfResponseBlasFailure{status};
   };
-  {
+  if (!buffers.resident_raw.data) {
     runtime::cuda_trace::TraceRegion upload("raw_value_resident_upload", stream);
     const auto error = cudaMemcpyAsync(weights, raw_host.data(), raw_host.size_bytes(),
                                        cudaMemcpyHostToDevice, stream);
@@ -213,7 +219,7 @@ static cudaError_t contract_resident_response(
     runtime::cuda_trace::trace_counter("raw_value_upload_bytes", raw_host.size_bytes());
     runtime::cuda_trace::trace_counter("raw_value_bulk_uploads", 1);
   }
-  {
+  if (!buffers.resident_raw.data) {
     runtime::cuda_trace::TraceRegion transpose("raw_value_resident_transpose", stream);
     // Host [ij,Q] is column-major [Q,ij]; turn it into column-major [ij,Q].
     // CuMetal exposes a subset of cuBLAS without GEAM. A dependent capability
@@ -361,7 +367,7 @@ static cudaError_t contract_occupied_response(
   const auto checked = [](cublasStatus_t status) {
     if (status != CUBLAS_STATUS_SUCCESS) throw CudaDfResponseBlasFailure{status};
   };
-  {
+  if (!buffers.resident_raw.data) {
     runtime::cuda_trace::TraceRegion upload("raw_value_resident_upload", stream);
     auto error = cudaMemcpyAsync(transformed_projected, raw_host.data(), raw_host.size_bytes(),
                                  cudaMemcpyHostToDevice, stream);
@@ -369,7 +375,7 @@ static cudaError_t contract_occupied_response(
     runtime::cuda_trace::trace_counter("raw_value_upload_bytes", raw_host.size_bytes());
     runtime::cuda_trace::trace_counter("raw_value_bulk_uploads", 1);
   }
-  {
+  if (!buffers.resident_raw.data) {
     runtime::cuda_trace::TraceRegion transpose("raw_value_resident_transpose", stream);
     // The existing gather supports both NVIDIA and providers without GEAM.
     cuda_df::launch_gather_auxiliary_tile_kernel(blocks(matrix * a), threads, 0, stream, matrix, a,
@@ -399,13 +405,32 @@ static cudaError_t contract_occupied_response(
         terms[t].exchange_coefficient * factor.density_scale * factor.density_scale;
     {
       runtime::cuda_trace::TraceRegion products("exchange_response_occupied_products", stream);
-      for (std::size_t q = 0; q < a; ++q) {
-        checked(cublasDgemm(blas, CUBLAS_OP_N, CUBLAS_OP_N, ni, ri, ni, &one, raw + q * matrix, ni,
-                            factor.coefficients, ni, &zero, temporary, ni));
-        checked(cublasDgemm(blas, CUBLAS_OP_T, CUBLAS_OP_N, ri, ri, ni, &one, factor.coefficients,
-                            ni, temporary, ni, &zero, projected + q * rr, ri));
-      }
-      runtime::cuda_trace::trace_counter("response_occupied_projection_products", 2 * a);
+      if (buffers.batch_products &&
+          n * a <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
+          n * r <= (buffers.elements_per_buffer - retained) / a) {
+        // Concatenate all raw AO slices: C^T [A_0 ... A_(a-1)] is one
+        // larger GEMM. Its (r,n) slices then share C in a batched product.
+        // The U destination is free until the following metric contraction;
+        // previous spin U factors live strictly below retained.
+        auto* projected_once = transformed_projected + retained;
+        checked(cublasDgemm(blas, CUBLAS_OP_T, CUBLAS_OP_N, ri, static_cast<int>(n * a), ni, &one,
+                            factor.coefficients, ni, raw, ni, &zero, projected_once, ri));
+        checked(cublasDgemmStridedBatched(blas, CUBLAS_OP_N, CUBLAS_OP_N, ri, ri, ni, &one,
+                                          projected_once, ri, n * r, factor.coefficients, ni, 0,
+                                          &zero, projected, ri, rr, ai));
+        runtime::cuda_trace::trace_counter("response_occupied_projection_blas_calls", 2);
+        runtime::cuda_trace::trace_counter("response_occupied_projection_products", a + 1);
+        runtime::cuda_trace::trace_counter("response_occupied_projection_temporary_bytes",
+                                           n * r * a * sizeof(double));
+      } else
+        for (std::size_t q = 0; q < a; ++q) {
+          checked(cublasDgemm(blas, CUBLAS_OP_N, CUBLAS_OP_N, ni, ri, ni, &one, raw + q * matrix,
+                              ni, factor.coefficients, ni, &zero, temporary, ni));
+          checked(cublasDgemm(blas, CUBLAS_OP_T, CUBLAS_OP_N, ri, ri, ni, &one, factor.coefficients,
+                              ni, temporary, ni, &zero, projected + q * rr, ri));
+          runtime::cuda_trace::trace_counter("response_occupied_projection_blas_calls", 2);
+          runtime::cuda_trace::trace_counter("response_occupied_projection_products", 2);
+        }
       runtime::cuda_trace::trace_counter("response_occupied_projection_flops",
                                          2 * a * (n * n * r + n * rr));
     }
@@ -465,6 +490,57 @@ static cudaError_t contract_occupied_response(
       const double alpha =
           -2 * terms[t].exchange_coefficient * factor.density_scale * factor.density_scale;
       runtime::cuda_trace::TraceRegion expand("exchange_response_pseudo_density_products", stream);
+      const auto per_panel = pair_stride + n * r + n * std::min(n, ao_block_rows);
+      if (buffers.batch_products &&
+          r * count <= static_cast<std::size_t>(std::numeric_limits<int>::max()) &&
+          per_panel <= buffers.elements_per_buffer / count) {
+        // Projected T is dead after the metric/weight GEMMs. Its former
+        // buffer now holds disjoint bounded W, CU and rectangular block
+        // panels. Capacity is checked together, including both live spins.
+        // Full rectangular output keeps its original orientation; packed
+        // output folds only the explicitly symmetrized low-rank adjoint.
+        auto* u = transformed_projected + offset + begin * rr;
+        auto* cu = weights + count * pair_stride;
+        auto* block = cu + count * n * r;
+        if (packed_pairs)
+          symmetrize_kernel<<<blocks(count * rr), threads, 0, stream>>>(r, u, count);
+        checked(cublasDgemm(blas, CUBLAS_OP_N, CUBLAS_OP_N, ni, static_cast<int>(r * count), ri,
+                            &one, factor.coefficients, ni, u, ri, &zero, cu, ni));
+        runtime::cuda_trace::trace_counter("response_pseudo_density_products", 1);
+        runtime::cuda_trace::trace_counter("response_pseudo_density_blas_calls", 1);
+        runtime::cuda_trace::trace_counter("response_pseudo_density_flops", 2 * count * n * rr);
+        if (packed_pairs) {
+          for (std::size_t row = 0; row < n; row += ao_block_rows) {
+            const auto rows = std::min(ao_block_rows, n - row), columns = row + rows;
+            block_peak_elements = std::max(block_peak_elements, count * rows * columns);
+            checked(cublasDgemmStridedBatched(
+                blas, CUBLAS_OP_N, CUBLAS_OP_T, static_cast<int>(columns), static_cast<int>(rows),
+                ri, &alpha, factor.coefficients, ni, 0, cu + row, ni, n * r, &zero, block,
+                static_cast<int>(columns), rows * columns, static_cast<int>(count)));
+            add_packed_exchange_block<<<blocks(count * rows * columns), threads, 0, stream>>>(
+                row, rows, columns, block, weights, count, pair_stride);
+            runtime::cuda_trace::trace_counter("response_pseudo_density_products", count);
+            runtime::cuda_trace::trace_counter("response_pseudo_density_blas_calls", 1);
+            runtime::cuda_trace::trace_counter("response_pseudo_density_flops",
+                                               2 * count * rows * columns * r);
+            runtime::cuda_trace::trace_counter("response_pseudo_density_rectangular_elements",
+                                               count * rows * columns);
+          }
+        } else {
+          checked(cublasDgemmStridedBatched(blas, CUBLAS_OP_N, CUBLAS_OP_T, ni, ni, ri, &alpha, cu,
+                                            ni, n * r, factor.coefficients, ni, 0, &one, weights,
+                                            ni, matrix, static_cast<int>(count)));
+          runtime::cuda_trace::trace_counter("response_pseudo_density_products", count);
+          runtime::cuda_trace::trace_counter("response_pseudo_density_blas_calls", 1);
+          runtime::cuda_trace::trace_counter("response_pseudo_density_flops",
+                                             2 * count * n * n * r);
+          runtime::cuda_trace::trace_counter("response_pseudo_density_rectangular_elements",
+                                             count * matrix);
+        }
+        runtime::cuda_trace::trace_counter("response_pseudo_density_batched_panels", 1);
+        offset += a * rr;
+        continue;
+      }
       for (std::size_t p = 0; p < count; ++p) {
         auto* u = transformed_projected + offset + (begin + p) * rr;
         if (packed_pairs) symmetrize_kernel<<<blocks(rr), threads, 0, stream>>>(r, u);

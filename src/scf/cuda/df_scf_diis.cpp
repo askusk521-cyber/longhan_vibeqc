@@ -3,6 +3,7 @@
 #include <limits>
 #include <new>
 
+#include "runtime/cuda_component_trace.hpp"
 #include "runtime/df_progress_trace.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
@@ -76,6 +77,9 @@ vibeqc_status allocate_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfSta
 vibeqc_status reset_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfState& state,
                              const std::vector<double>& overlap, std::string& detail) {
   if (!state.diis_history) return VIBEQC_STATUS_SUCCESS;
+  runtime::cuda_trace::TraceOperation trace(
+      "compact_diis_reset", plan.stream,
+      {plan.batch_size, plan.nbf, plan.naux, plan.integral_source != nullptr, plan.streamed});
   if (overlap.size() != state.expected || !finite_values(overlap)) {
     detail = "CUDA DF DIIS overlap has invalid dimensions or values";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
@@ -96,8 +100,12 @@ vibeqc_status reset_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfState&
 vibeqc_status apply_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfState& state,
                              std::string& detail) {
   if (!state.diis_history) return VIBEQC_STATUS_SUCCESS;
+  runtime::cuda_trace::TraceOperation trace(
+      "compact_diis", plan.stream,
+      {plan.batch_size, plan.nbf, plan.naux, plan.integral_source != nullptr, plan.streamed});
   runtime::df_progress::Scope progress("compact_diis_update");
   runtime::df_progress::number("history_capacity", state.diis_history);
+  runtime::cuda_trace::trace_counter("diis_cooperative_dots", plan.cooperative_diis);
   const auto spins = state.unrestricted ? 2U : 1U;
   const auto matrix = plan.matrix_elements;
   const auto bytes = matrix * sizeof(double);
@@ -118,6 +126,7 @@ vibeqc_status apply_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfState&
                ? VIBEQC_STATUS_SUCCESS
                : blas_failure(status, "CUDA DF DIIS physical residual", detail);
   };
+  runtime::cuda_trace::TraceRegion residual_products("diis_residual_products", plan.stream);
   for (unsigned spin = 0; spin < spins; ++spin) {
     auto* residual = state.d_diis_residual + spin * matrix;
     auto status = product(densities[spin], focks[spin], state.d_diis_temporary, matrix);
@@ -129,6 +138,7 @@ vibeqc_status apply_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfState&
       status = product(focks[spin], state.d_diis_temporary, residual, spins * matrix, -1.0, 1.0);
     if (status != VIBEQC_STATUS_SUCCESS) return status;
   }
+  residual_products.finish();
   double* effective = state.unrestricted ? state.d_diis_fock : state.d_fock;
   if (state.unrestricted)
     for (unsigned spin = 0; spin < spins; ++spin) {
@@ -140,13 +150,36 @@ vibeqc_status apply_scf_diis(CudaDensityFittingJkPlan& plan, PersistentScfState&
     }
   // Common normalization and oldest-dependent-history retirement match the
   // existing CPU DIIS policy and the qualified KS device implementation.
+  runtime::cuda_trace::TraceRegion update("diis_history_update", plan.stream);
+  const auto parts = (spins * matrix + 4095) / 4096;
+  const auto history = std::size_t{state.diis_history};
+  const bool parallel_dots = plan.cooperative_diis && plan.batch_size <= 65535 &&
+                             history * history <= 65535 && parts <= matrix / (history * history);
+  const double* partials = nullptr;
+  if (parallel_dots) {
+    // All residual GEMMs have consumed this AO temporary. Lend it to a
+    // deterministic two-level reduction; no extra allocation or host wait
+    // is needed, and dependent-history retries reuse the same dot products.
+    partials = state.d_diis_temporary;
+    cuda_execution::launch_diis_dot_partials(
+        plan.stream, static_cast<std::int32_t>(plan.batch_size),
+        static_cast<std::int32_t>(plan.nbf), spins, state.diis_history, state.d_diis_residual,
+        state.d_diis_residual_history, state.d_active, state.d_diis_count, state.d_diis_head, parts,
+        state.d_diis_temporary);
+    const auto error = cudaPeekAtLastError();
+    if (error != cudaSuccess) return cuda_failure(error, "CUDA DF DIIS dot partials", detail);
+    runtime::cuda_trace::trace_counter(
+        "diis_dot_partial_bytes", plan.batch_size * history * history * parts * sizeof(double));
+  }
   cuda_execution::launch_update_diis_kernel(
       static_cast<unsigned>(plan.batch_size), 32, 0, plan.stream,
       static_cast<std::int32_t>(plan.batch_size), static_cast<std::int32_t>(plan.nbf), spins,
       state.diis_history, effective, state.d_diis_residual, state.d_active,
       state.d_diis_fock_history, state.d_diis_residual_history, state.d_diis_gram,
-      state.d_diis_coefficients, state.d_diis_count, state.d_diis_head, effective, true);
+      state.d_diis_coefficients, state.d_diis_count, state.d_diis_head, effective, true,
+      plan.cooperative_diis, partials, parallel_dots ? parts : 0);
   auto status = cudaPeekAtLastError();
+  update.finish();
   if (status != cudaSuccess) return cuda_failure(status, "update CUDA DF DIIS proposal", detail);
   if (state.unrestricted)
     for (unsigned spin = 0; spin < spins; ++spin) {

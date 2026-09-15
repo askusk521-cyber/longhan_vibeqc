@@ -8,12 +8,28 @@ explicit comparison overrides. This changes execution of the existing DF
 exchange and complete analytic force model without changing its approximation.
 
 For one spin, `D = w C C^T` with canonical occupation w=2 (RHF) or w=1 (UHF).
-For each auxiliary slice compute `U = C^T L_row^T`, then accumulate
+On a full resident plan, project the existing pair-major tensor directly:
+`U[mu,i,Q] = sum_nu B[mu,nu,Q] C[nu,i]`. One strided-batched GEMM builds U;
+a Gram contraction over `(i,Q)` produces `K = w U U^T`. The triangular route
+uses SYRK and mirrors its result; providers without SYRK use full GEMM.
+Generated and bounded panels retain `U = C^T L_row^T` followed by
 `K_row,column += w U_row^T U_column`. Host `OccupiedDensityFactor` snapshots
 already contain `sqrt(w)*C` in row-major AO/occupied layout and use w=1 in the
 CUDA product. Device SCF retains column-major C and applies w once at the
 second product. Existing Fock consumers retain their RHF -1/2 and UHF -1
 exchange prefactors. Empty spin rank produces zero K without a GEMM.
+
+Dense resident K keeps square per-Q products but divides Q into half-capacity
+panels. Gathered B and per-Q contributions occupy disjoint halves of one
+buffer; the other holds the density projection. Raw A stays untouched. The
+running auxiliary sum continues across panel boundaries in its original order;
+odd auxiliary counts have a bounded tail. The `flat` ablation instead projects
+`B_mu D` and contracts the combined `(nu,Q)` dimension, using one scratch
+tensor. Both identities preserve nonsymmetric diagnostic B and D.
+`VIBEQC_DF_RESIDENT_EXCHANGE=legacy|full|flat|auto` selects original J/K,
+resident full-Gram K, resident flattened dense K, or the default panel-dense
+and triangular occupied route. The plan freezes this policy; changing it
+rebuilds captured SCF work.
 
 The same plan supports resident tensors, generated panels and compatibility
 host-backed tiles. Full AO panels follow #282's capacity rebalance and reuse
@@ -57,11 +73,46 @@ requires preparing a new batch and is rejected before native execution. The
 fixed-density factor API needs no additional allocation and still borrows the
 existing tiles independently of the SCF reservation.
 
-`ri_k_occupied` traces report factor bytes, rank,
-projection/exchange products and panel hits. Captured records describe graph
+`ri_k_occupied` traces report factor bytes, rank, projection/exchange products,
+GEMM dimensions, intermediate bytes and panel hits. Captured records describe graph
 construction; `occupied_scf_provenance` separately reports executed iteration
 counts, dense seeding and final generation validation. Uninstrumented complete
 endpoints remain the performance selection gate.
+
+## Resident raw ownership and response storage
+
+A full, single-system host-raw plan retains the original FP64 values in its
+former exchange-contribution buffer as `A[Q,mu,nu]`. Setup fills this buffer
+while the original raw device input is still live. The new resident K path
+fits its temporaries in the two other tensors, so no extra full tensor is
+allocated and both the setup and persistent reservations remain unchanged. Transformed B
+alone cannot recover discarded metric directions needed by exact forces.
+
+The prepared HF owner binds immutable raw, atom and shell allocations plus
+both basis representations. These allocations survive moves into the prepared
+cache. A force call must match these bindings before receiving a
+`CudaDfRawTensorView`: pointer, dimensions, strides, process-unique owner
+identity, and the original metric eigensystem/cutoff. The view always denotes
+untruncated raw values, never a streamed panel or transformed B. Rebuilding
+geometry, either basis, or the metric owner invalidates the previous view.
+Standalone tensor-plan callers have no immutable source binding and upload
+through the compatibility adapter.
+
+J/K and response share one stream. Two full buffers become mutable response
+scratch; the retained raw buffer remains read-only until the bridge drains.
+Matching warm resident calls perform zero raw-tensor H2D copies or transposes.
+`VIBEQC_DF_RAW_REUSE=off` retains the upload ablation. An upload revokes raw
+validity before submission and restores it only after successful response
+from the matching immutable source, including failure/retry handling.
+
+`VIBEQC_DF_RESPONSE_STORAGE=auto` borrows this capacity for the qualified
+384/384 and 768/768 batch-one RHF shell/BLAS endpoints on RTX 5090. The
+384 case keeps dense response algebra while evaluating its expensive all-Q
+projections only once. `panel` preserves bounded execution; `jk-scratch`
+requests validated borrowing explicitly. Batch and source-backed plans retain
+their existing bounded/upload contracts. Borrowed capacity is reported once
+alongside owned scratch and transfers; reuse is never inferred from dimensions
+or a small component-local budget alone.
 
 ## Exact occupied force response
 
@@ -70,7 +121,7 @@ same measured 768/768 RHF rank-160 device domain, with automatic resident
 storage and the default generated shell schedule. Explicit panel storage and
 diagnostic schedules preserve their original route. `dense` retains the full-AO
 comparison; `occupied` requests factor validation on compatible resident plans.
-Small systems keep dense automatic response.
+The 384-AO borrowed path and smaller systems keep dense automatic response.
 
 The method passes its verified final-state token. The response owner checks
 source identity, solve epoch, system, model, occupations, exact canonical device
@@ -84,8 +135,16 @@ three-center values, preserving finite discarded metric directions. In the
 qualified domain it feeds at most 64 auxiliary slices of packed symmetric
 AO-pair weights to the existing generated derivative consumers. It does not
 retain a full response-weight tensor. Projections, transformed projections and raw
-values borrow the three already charged resident J/K tensors; the consumed
-projection buffer becomes panel storage. Additional response workspace contains
+values occupy the three already charged resident J/K tensors; the consumed
+projection buffer becomes panel storage. `VIBEQC_DF_RESPONSE_BATCHING=auto`
+concatenates Q slices for a large `C^T [A_0 ... A_(a-1)]` GEMM and batches the
+second multiplication by C. Previously retained spin factors remain outside
+that staging range. Pseudo-density expansion batches `C U_P` and lower
+rectangular products across each bounded auxiliary panel. Capacity checks
+include weights, projected factors and rectangular outputs simultaneously;
+`off` and insufficient capacity preserve serial projections. The algebraic
+FLOP count stays fixed while BLAS submissions and repeated factor reads fall.
+Additional response workspace contains
 four auxiliary matrices, three AO matrices, densities and auxiliary charges.
 `DfGradientResources` reports the executed route and borrowed capacity.
 
@@ -118,7 +177,8 @@ nonzero Cartesian contractions, rectangular GEMM entries and panel bytes.
 disabled for clean timings.
 
 Packing halves the weight handoff, not the complete resident plan allocation.
-The full raw upload and borrowed J/K capacity remain separately reported.
+Raw uploads, validated raw reuse and borrowed J/K capacity are reported
+separately; packed weights do not imply a smaller persistent value plan.
 Tiny explicit domains can fit in one panel or one AO block; counters report
 their actual dense and packed materialization rather than implying a saving.
 
@@ -134,3 +194,33 @@ not a measured global GPU peak.
 The [packed derivative note](../.agents/notes/implemented/performance/2026-09-15-packed-df-derivative-pairs.md)
 documents symmetry, diagonal-shell treatment, the block-size tradeoff and
 [current qualification](../benchmarks/results/issue382-packed-df/README.md).
+
+## Compact SCF DIIS and solver timing
+
+`VIBEQC_DF_DIIS_DOTS=auto` forms deterministic partial residual dots in blocks
+of 4096 elements, then reduces the partials in the existing small DIIS solve.
+The completed residual-product temporary supplies the partial storage. No
+allocation, atomic dot accumulation, or host synchronization is added.
+Physical slots are validated against the chronological circular history,
+including a short window after dependent-history retirement. Inactive systems
+and unpopulated entries remain untouched. Small reservations fall back to a
+warp reduction; `serial` retains the original dot order for comparison.
+
+Normalization, pivot threshold, chronological retirement, Fock construction
+and physical convergence gates are unchanged. Floating-point reduction order
+can change the iteration branch, so endpoint evidence must retain both the
+starting checkpoint identity and actual update counts. The diagnostic policy
+is frozen with captured work and all response/exchange controls participate
+in global resource-plan identity.
+
+Compact eigensolves keep the existing cuSOLVER provider and retained host and
+device workspaces. `compact_diis`, `diis_residual_products`,
+`diis_history_update` and `compact_eigensolve_provider` expose their separate
+GPU/host scopes. A provider host call can wait for preceding queued DIIS work;
+subtracting its GPU events from host duration does not measure CPU eigensolver
+work. Component tracing introduces fences and must be qualified with separate
+host-only or Nsight timelines and clean complete endpoints.
+
+The [resident DF dataflow note](../.agents/notes/implemented/performance/2026-09-16-resident-df-dataflow.md)
+records the algebra, rejected variants, numerical gates and retained evidence
+for these paths.

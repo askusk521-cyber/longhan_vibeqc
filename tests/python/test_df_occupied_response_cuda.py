@@ -128,7 +128,10 @@ def test_occupied_response_replay_and_zero_rank_spin(
                     assert counters["response_ao_matrix_products"] > 0
 
 
-def test_packed_response_crosses_ao_blocks_and_auxiliary_panels(monkeypatch, tmp_path):
+@pytest.mark.parametrize("batch_products", ["off", "auto"])
+def test_packed_response_crosses_ao_blocks_and_auxiliary_panels(
+    monkeypatch, tmp_path, batch_products
+):
     """A 96-AO oracle covers the ragged second GEMM block and two packed panels.
 
     Smaller molecular fixtures fit in a single AO block and cannot detect a
@@ -147,6 +150,7 @@ def test_packed_response_crosses_ao_blocks_and_auxiliary_panels(monkeypatch, tmp
     monkeypatch.setenv("VIBEQC_DF_EXCHANGE", "occupied")
     monkeypatch.setenv("VIBEQC_DF_RESPONSE_STORAGE", "jk-scratch")
     monkeypatch.setenv("VIBEQC_DF_RESPONSE_SPACE", "occupied")
+    monkeypatch.setenv("VIBEQC_DF_RESPONSE_BATCHING", batch_products)
     monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", "shell")
     monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", "compact")
     monkeypatch.setenv("VIBEQC_DF_PRIMITIVE_BUCKETS", "packet")
@@ -182,4 +186,84 @@ def test_packed_response_crosses_ao_blocks_and_auxiliary_panels(monkeypatch, tmp
     assert c["shell_triples_visited"] == (48 * 49 // 2) * 48
     # These include the small unused upper triangles of diagonal blocks.
     assert c["response_pseudo_density_rectangular_elements"] == 96 * (64 * 64 + 32 * 96)
-    assert c["response_pseudo_density_block_peak_elements"] == 64 * 64
+    assert c["response_pseudo_density_block_peak_elements"] == 64 * 64 * (
+        64 if batch_products == "auto" else 1
+    )
+    # Both schedules execute the same exact occupied-space arithmetic. The
+    # fused schedule reduces submission count and retains bounded panels.
+    assert c["response_occupied_projection_flops"] == 2 * 96 * (
+        96 * 96 * 20 + 96 * 20 * 20
+    )
+    assert c["response_pseudo_density_flops"] == (
+        2 * 96 * (96 * 20 * 20 + (64 * 64 + 32 * 96) * 20)
+    )
+    assert c["response_occupied_projection_blas_calls"] == (
+        2 if batch_products == "auto" else 192
+    )
+
+
+@pytest.mark.parametrize("method", ["rhf", "uhf"])
+def test_batched_full_response_keeps_rectangular_output(method, monkeypatch, tmp_path):
+    """Exercise the full batched expansion with both nonempty UHF spin factors.
+
+    Tiny full-output fixtures exhaust the shared tensor with their weight
+    panel and fall back to serial expansion. At 192 AOs, a bounded panel and
+    CU staging fit together, so this checks the actual batched full branch.
+    """
+    from pyscf import gto, scf
+
+    assert os.environ.get("SLURM_JOB_ID")
+    case = benchmark_cases()["water-octamer-s4-def2-svp-spherical"]
+    mol = gto.M(atom=case.atoms, unit="Bohr", basis="def2-svp", verbose=0)
+    reference = (scf.RHF if method == "rhf" else scf.UHF)(mol).density_fit(
+        auxbasis="def2-svp"
+    )
+    reference.conv_tol, reference.conv_tol_grad, reference.max_cycle = 1e-12, 1e-10, 100
+    reference.kernel()
+    assert reference.converged
+    expected = -reference.nuc_grad_method().kernel()
+    for name, value in {
+        "VIBEQC_DF_EXCHANGE": "occupied",
+        "VIBEQC_DF_RESPONSE_STORAGE": "jk-scratch",
+        "VIBEQC_DF_RESPONSE_SPACE": "occupied",
+        "VIBEQC_DF_WEIGHTED_EXECUTION": "shell",
+        "VIBEQC_DF_SHELL_SCHEDULE": "compact",
+        "VIBEQC_DF_PRIMITIVE_BUCKETS": "packet",
+        "VIBEQC_DF_DERIVATIVE_PAIRS": "full",
+    }.items():
+        monkeypatch.setenv(name, value)
+    calc = Calculator(
+        method=method,
+        basis="def2-svp",
+        basis_representation="spherical",
+        device="cuda",
+        density_fitting="cuda",
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+        max_iterations=100,
+    )
+    with calc.prepare_batch([case.atoms]) as batch:
+        batch.execute(strict=True)
+        batch.set_warm_start_updates(False)
+        for policy in ("off", "auto"):
+            monkeypatch.setenv("VIBEQC_DF_RESPONSE_BATCHING", policy)
+            trace = tmp_path / f"full-{policy}.jsonl"
+            monkeypatch.setenv("VIBEQC_DF_TRACE", str(trace))
+            actual = batch.execute(strict=True).items[0]
+            assert actual.energy == pytest.approx(reference.e_tot, abs=1e-9, rel=0)
+            np.testing.assert_allclose(actual.forces, expected, atol=1e-8, rtol=0)
+            (response,) = [
+                row for row in read_trace(trace) if row["operation"] == "force_response"
+            ]
+            counters = response["counters"]
+            assert counters["response_packed_pairs"] == 0
+            assert counters["response_dense_weight_panel_elements"] > 0
+            assert counters["response_full_weight_tensor_elements"] == 0
+            spins = 2 if method == "uhf" else 1
+            assert counters["response_pseudo_density_flops"] == spins * 2 * 192 * (
+                192 * 40 * 40 + 192 * 192 * 40
+            )
+            if policy == "auto":
+                assert counters["response_pseudo_density_batched_panels"] > 0
+                assert counters["response_pseudo_density_products"] < spins * 2 * 192
+                assert counters["response_occupied_projection_blas_calls"] == 2 * spins

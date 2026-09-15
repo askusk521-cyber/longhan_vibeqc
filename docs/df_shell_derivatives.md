@@ -22,6 +22,13 @@ The scalar and shell consumers use the same generated primitive geometry and
 Boys routine. The compiler builds each shell class's axis-moment cache from
 `axis_polynomial`, the existing Gaussian-moment DAG. Component derivatives use
 the same raised/lowered Gaussian identity as the generic generated evaluator.
+The two orbital derivatives share
+`H_i = sum_jk v_j w_k F_(i+j+k)` for each differentiated axis. Raising the
+second orbital center uses the exact polynomial identity
+`M_(a,b+1,c) = M_(a+1,b,c) + (A-B) M_(a,b,c)`, so the cache reserves only
+the raised-first-center boundary. The coefficient beyond the base degree is
+zero, including coincident centers. This reduces polynomial preparation and
+shared storage without changing the primitive geometry/Boys DAG.
 The auxiliary derivative follows from translation of the two independent
 orbital centers. Exponents, normalization and external response weights remain
 fixed in this derivative.
@@ -200,3 +207,7 @@ SCF branches, missing warm starts, numerical parity failures, and missing
 selected-consumer counters in traced qualification. Every GPU invocation must
 run in a finite Slurm `main` allocation with
 `--gres=gpu:5090:1`; preserve the assigned device visibility.
+
+The [resident DF dataflow note](../.agents/notes/implemented/performance/2026-09-16-resident-df-dataflow.md)
+retains isolated arithmetic/cache ablations, the comparison with GPU4PySCF's
+Rys consumer, unchanged scientific work counters, and binary/resource costs.

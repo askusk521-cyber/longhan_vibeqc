@@ -42,6 +42,14 @@ remain visible in the per-file/region breakdown and the capability ledger.
 Classification requires review; keywords do not decide whether arithmetic is
 scientific. An existing region is not permission to add a second formula.
 
+The native DIIS kernels are method-specific scientific regions: they select
+live circular histories, build the residual Gram matrix, normalize and solve
+the augmented system, retire dependent histories, and extrapolate Fock matrices.
+Their launch wrappers and declarations remain runtime. This classification
+includes pre-existing numerical code; moving it from runtime to scientific
+ownership is reported separately from physical additions or retirement. The
+`scf_tensor` ledger records the missing generated replacement and its gates.
+
 The #240 DF runtime extraction moves the existing cuBLAS J/K composition and
 generated-force adapter from `cuda_density_fitting.cu` to `cuda/df_coulomb.cpp`,
 `df_exchange.cpp` and `df_force_response.cpp`. These native equations remain

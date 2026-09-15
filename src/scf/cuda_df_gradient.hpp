@@ -2,6 +2,7 @@
 #define VIBEQC_SCF_CUDA_DF_GRADIENT_HPP
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
@@ -11,6 +12,16 @@
 #include "scf/df_response_weights.hpp"
 namespace vibeqc::scf {
 struct CudaDensityFittingIntegralSource;
+struct CudaDensityFittingJkPlan;
+/** Bind the prepared owner's immutable source after copying that source into
+ * a new single-system plan. The caller owns these host arrays for the plan's
+ * lifetime; geometry/basis changes create a new owner. Arbitrary tensor-plan
+ * callers do not invoke this contract and keep the explicit upload adapter.
+ */
+void bind_cuda_density_fitting_response_source(CudaDensityFittingJkPlan* plan,
+                                               const core::System& orbital,
+                                               const core::System& auxiliary,
+                                               std::span<const double> raw) noexcept;
 /** Borrowed device factors for one fixed-geometry metric. Eigenvectors use
  * cuSOLVER column-major order; X=M^(-1/2) is symmetric. All pointers and the
  * retained cutoff belong to the same plan and outlive its owning stream work.
@@ -21,12 +32,6 @@ struct CudaDfMetricView {
   const double* eigenvalues{};
   double relative_threshold{};
 };
-/** Exclusive, stream-ordered borrow of three existing J/K scratch tensors.
- * The value-plan owner validates full [nbf*nbf,naux] capacity before lending
- * these distinct buffers. Response does not own or free them. The same plan
- * stream orders the last J/K use, this complete force, and the next SCF use;
- * the synchronous bridge drains on success and failure before returning.
- */
 /** Borrow of one canonical column-major C, with D=density_scale*C*C^T.
  * The plan owner validates the method token, exact density and device
  * generation before constructing this view. A zero-rank spin has no pointer.
@@ -36,6 +41,30 @@ struct CudaDfOccupiedResponseFactor {
   std::size_t rank{};
   double density_scale{};
 };
+/** Immutable FP64 raw [Q,mu,nu] view borrowed from one resident value plan.
+ * Strides are in doubles. owner_identity is the process-unique immutable
+ * geometry/orbital/auxiliary/metric identity also used for occupied factors;
+ * rebuilding that owner invalidates the view even if addresses are recycled.
+ * Construction also checks the prepared source's immutable raw/atom/shell
+ * allocation bindings and orbital/auxiliary representation identities.
+ * The metric eigensystem and cutoff record the forward rank policy, but raw
+ * values include ALL metric directions. The pointer is plan-owned, live until
+ * stream drain, and never denotes a streamed panel or transformed B. No new
+ * allocation is associated with this view.
+ */
+struct CudaDfRawTensorView {
+  const double* data{};
+  std::size_t nbf{}, naux{}, auxiliary_stride{}, row_stride{}, column_stride{1};
+  std::uint64_t owner_identity{};
+  CudaDfMetricView metric{};
+};
+/** Exclusive, stream-ordered borrow from the existing J/K tensor allocation.
+ * Two buffers remain mutable response scratch. The third is immutable when
+ * resident_raw is present; otherwise it receives the explicit host upload.
+ * The owner validates capacity and provenance before lending distinct buffers.
+ * The plan's stream orders the last J/K use, force, and next SCF use, and the
+ * synchronous bridge drains on success and failure before releasing the borrow.
+ */
 struct CudaDfResponseBuffers {
   double* staging_weights{};
   double* raw_auxiliary_major{};
@@ -43,6 +72,8 @@ struct CudaDfResponseBuffers {
   std::size_t elements_per_buffer{};
   bool occupied_response{};
   std::array<CudaDfOccupiedResponseFactor, 3> occupied_factors{};
+  CudaDfRawTensorView resident_raw{};
+  bool batch_products{true};
 };
 /** Owned numeric staging and explicit transfers, excluding caller weights/system data. */
 struct DfGradientResources {

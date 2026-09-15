@@ -7,6 +7,58 @@
 
 namespace vibeqc::scf::cuda_execution {
 
+namespace {
+__global__ void diis_dot_partials_kernel(std::size_t vector_size, std::uint32_t history,
+                                         const double* residual, const double* residual_history,
+                                         const std::uint8_t* active, const std::uint32_t* counts,
+                                         const std::uint32_t* heads, std::size_t parts,
+                                         double* partials) {
+  const auto system = blockIdx.z, row = blockIdx.y / history, column = blockIdx.y % history;
+  if (!active[system]) return;
+  const auto count = counts[system] < history ? counts[system] + 1 : history;
+  // History retirement can leave a short live window anywhere in the ring.
+  // Physical slot numbers therefore cannot be compared directly with count.
+  const auto first = (heads[system] + 1 + history - count) % history;
+  if (count < 2 || (row + history - first) % history >= count ||
+      (column + history - first) % history >= count)
+    return;
+  // A not-yet-stored current residual logically occupies head. Other slots
+  // remain read-only until this complete grid precedes the update kernel.
+  const auto current = residual + system * vector_size;
+  const auto base = residual_history + system * history * vector_size;
+  const auto left = row == heads[system] ? current : base + row * vector_size;
+  const auto right = column == heads[system] ? current : base + column * vector_size;
+  const std::size_t begin = std::size_t{blockIdx.x} * 4096;
+  const auto end = min(begin + 4096, vector_size);
+  double value = 0;
+  for (auto element = begin + threadIdx.x; element < end; element += blockDim.x)
+    value += left[element] * right[element];
+  for (unsigned delta = 16; delta; delta /= 2) value += __shfl_down_sync(0xffffffffU, value, delta);
+  __shared__ double warps[8];
+  if (threadIdx.x % 32 == 0) warps[threadIdx.x / 32] = value;
+  __syncthreads();
+  if (threadIdx.x < 32) {
+    value = threadIdx.x < 8 ? warps[threadIdx.x] : 0;
+    for (unsigned delta = 16; delta; delta /= 2)
+      value += __shfl_down_sync(0xffffffffU, value, delta);
+    if (threadIdx.x == 0)
+      partials[(static_cast<std::size_t>(system) * history * history + blockIdx.y) * parts +
+               blockIdx.x] = value;
+  }
+}
+}  // namespace
+
+void launch_diis_dot_partials(cudaStream_t stream, std::int32_t batch_size, std::int32_t nbf,
+                              std::int32_t spins, std::uint32_t history, const double* residual,
+                              const double* residual_history, const std::uint8_t* active,
+                              const std::uint32_t* counts, const std::uint32_t* heads,
+                              std::size_t parts, double* partials) {
+  diis_dot_partials_kernel<<<dim3(parts, history * history, batch_size), 256, 0, stream>>>(
+      static_cast<std::size_t>(nbf) * nbf * spins, history, residual, residual_history, active,
+      counts, heads, parts, partials);
+}
+
+template <bool CooperativeDots>
 __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
                                    std::int32_t matrices_per_system, std::uint32_t history_capacity,
                                    const double* fock, const double* residual,
@@ -14,11 +66,13 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
                                    double* residual_history, double* linear_system,
                                    double* coefficients, std::uint32_t* history_count,
                                    std::uint32_t* history_head, double* effective_fock,
-                                   bool normalize_metric) {
+                                   bool normalize_metric, const double* dot_partials,
+                                   std::size_t parts) {
+  constexpr bool cooperative_dots = CooperativeDots;
   // One warp owns one system.  History vectors and the O(N^2) residual-dot
   // products are distributed across lanes, while the small dense DIIS solve
-  // remains in lane zero.  This preserves the original dot-product order for
-  // each B-matrix entry and avoids the old single-thread N^2 bottleneck.
+  // remains in lane zero. The legacy instantiation preserves its dot order;
+  // DF can instead consume deterministic parallel partials from free scratch.
   const std::int32_t system = static_cast<std::int32_t>(blockIdx.x);
   if (system >= batch_size || active[system] == 0) return;
   const std::size_t matrix_size = static_cast<std::size_t>(nbf) * nbf;
@@ -77,7 +131,13 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
     }
     __syncwarp();
     const std::size_t dot_count = static_cast<std::size_t>(count) * count;
-    for (std::size_t pair = threadIdx.x; pair < dot_count; pair += blockDim.x) {
+    // DF's compact solves have only a few history pairs on warm replays.
+    // Assigning one lane per pair leaves nearly the whole warp idle while
+    // each lane serially traverses nbf^2 values. An optional collective dot
+    // shares each vector traversal across the warp. The small solve, common
+    // normalization and dependent-history retirement below are identical.
+    for (std::size_t pair = cooperative_dots ? 0 : threadIdx.x; pair < dot_count;
+         pair += cooperative_dots ? 1 : blockDim.x) {
       const std::uint32_t row = static_cast<std::uint32_t>(pair / count);
       const std::uint32_t column = static_cast<std::uint32_t>(pair % count);
       const std::size_t row_offset =
@@ -87,10 +147,25 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
           static_cast<std::size_t>(system) * history_stride +
           static_cast<std::size_t>((first + column) % history_capacity) * vector_size;
       double dot = 0.0;
-      for (std::size_t element = 0; element < vector_size; ++element) {
-        dot += residual_history[row_offset + element] * residual_history[column_offset + element];
-      }
-      matrix[static_cast<std::size_t>(row) * dimension + column] = dot;
+      if (cooperative_dots && dot_partials) {
+        const auto row_slot = (first + row) % history_capacity;
+        const auto column_slot = (first + column) % history_capacity;
+        const auto offset =
+            ((static_cast<std::size_t>(system) * history_capacity + row_slot) * history_capacity +
+             column_slot) *
+            parts;
+        for (std::size_t part = threadIdx.x; part < parts; part += blockDim.x)
+          dot += dot_partials[offset + part];
+      } else
+        for (std::size_t element = cooperative_dots ? threadIdx.x : 0; element < vector_size;
+             element += cooperative_dots ? blockDim.x : 1) {
+          dot += residual_history[row_offset + element] * residual_history[column_offset + element];
+        }
+      if (cooperative_dots)
+        for (unsigned delta = 16; delta; delta /= 2)
+          dot += __shfl_down_sync(0xffffffffU, dot, delta);
+      if (!cooperative_dots || threadIdx.x == 0)
+        matrix[static_cast<std::size_t>(row) * dimension + column] = dot;
     }
     __syncwarp();
     if (threadIdx.x == 0) {
@@ -182,19 +257,25 @@ __global__ void update_diis_kernel(std::int32_t batch_size, std::int32_t nbf,
   }
 }
 
-void launch_update_diis_kernel(dim3 grid, dim3 block, std::size_t shared_bytes, cudaStream_t stream,
-                               std::int32_t batch_size, std::int32_t nbf,
-                               std::int32_t matrices_per_system, std::uint32_t history_capacity,
-                               const double* fock, const double* residual,
-                               const std::uint8_t* active, double* fock_history,
-                               double* residual_history, double* linear_system,
-                               double* coefficients, std::uint32_t* history_count,
-                               std::uint32_t* history_head, double* effective_fock,
-                               bool normalize_metric) {
-  update_diis_kernel<<<grid, block, shared_bytes, stream>>>(
-      batch_size, nbf, matrices_per_system, history_capacity, fock, residual, active, fock_history,
-      residual_history, linear_system, coefficients, history_count, history_head, effective_fock,
-      normalize_metric);
+void launch_update_diis_kernel(
+    dim3 grid, dim3 block, std::size_t shared_bytes, cudaStream_t stream, std::int32_t batch_size,
+    std::int32_t nbf, std::int32_t matrices_per_system, std::uint32_t history_capacity,
+    const double* fock, const double* residual, const std::uint8_t* active, double* fock_history,
+    double* residual_history, double* linear_system, double* coefficients,
+    std::uint32_t* history_count, std::uint32_t* history_head, double* effective_fock,
+    bool normalize_metric, bool cooperative_dots, const double* dot_partials, std::size_t parts) {
+  // Separate instantiations preserve the existing Direct/KS register and
+  // instruction path; only the admitted DF policy uses collective dot work.
+  const auto launch = [&]<bool CooperativeDots>() {
+    update_diis_kernel<CooperativeDots><<<grid, block, shared_bytes, stream>>>(
+        batch_size, nbf, matrices_per_system, history_capacity, fock, residual, active,
+        fock_history, residual_history, linear_system, coefficients, history_count, history_head,
+        effective_fock, normalize_metric, dot_partials, parts);
+  };
+  if (cooperative_dots)
+    launch.template operator()<true>();
+  else
+    launch.template operator()<false>();
 }
 
 }  // namespace vibeqc::scf::cuda_execution

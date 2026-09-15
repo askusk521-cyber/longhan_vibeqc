@@ -12,6 +12,7 @@
 
 #include "runtime/cuda_component_trace.hpp"
 #include "runtime/df_progress_trace.hpp"
+#include "scf/cuda/df_jk_kernels.hpp"
 #include "scf/cuda/df_metric_kernels.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
@@ -176,6 +177,19 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
   }
 
   const bool occupied_scf_reserved = df_occupied_exchange_requested(nbf, naux, batch_size);
+  const char* diis_policy = std::getenv("VIBEQC_DF_DIIS_DOTS");
+  if (diis_policy && std::strcmp(diis_policy, "auto") != 0 &&
+      std::strcmp(diis_policy, "serial") != 0) {
+    detail = "VIBEQC_DF_DIIS_DOTS must be auto or serial";
+    return fail_before_plan(VIBEQC_STATUS_INVALID_ARGUMENT);
+  }
+  const char* resident_policy = std::getenv("VIBEQC_DF_RESIDENT_EXCHANGE");
+  if (resident_policy && std::strcmp(resident_policy, "auto") != 0 &&
+      std::strcmp(resident_policy, "full") != 0 && std::strcmp(resident_policy, "flat") != 0 &&
+      std::strcmp(resident_policy, "legacy") != 0) {
+    detail = "VIBEQC_DF_RESIDENT_EXCHANGE must be auto, full, flat or legacy";
+    return fail_before_plan(VIBEQC_STATUS_INVALID_ARGUMENT);
+  }
   cudaError_t cuda_error = cudaSetDevice(device_id);
   if (cuda_error != cudaSuccess) {
     return fail_before_plan(cuda_failure(cuda_error, "select CUDA DF device", detail));
@@ -184,6 +198,10 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
   if (candidate == nullptr) return fail_before_plan(VIBEQC_STATUS_OUT_OF_MEMORY);
   candidate->device_id = device_id;
   candidate->occupied_scf_reserved = occupied_scf_reserved;
+  candidate->resident_exchange_enabled = df_resident_exchange_requested();
+  candidate->triangular_exchange = df_triangular_exchange_requested();
+  candidate->flat_dense_exchange = df_flat_dense_exchange_requested();
+  candidate->cooperative_diis = df_cooperative_diis_requested();
   candidate->metric_relative_threshold = relative_threshold;
   candidate->batch_size = batch_size;
   candidate->nbf = nbf;
@@ -517,6 +535,21 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
     if (blas_status != CUBLAS_STATUS_SUCCESS) {
       return fail_plan(candidate,
                        blas_failure(blas_status, "transform CUDA DF three-center tensor", detail));
+    }
+    if (candidate->resident_exchange_enabled && batch_size == 1 && candidate->row_tile == nbf &&
+        auxiliary_tile == naux &&
+        nbf * naux <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+      // The resident exchange contractions no longer write this third full
+      // scratch tensor. Preserve the original, untruncated raw values here
+      // while setup still owns them; B alone cannot reconstruct discarded
+      // metric directions needed by the exact Frechet derivative.
+      launch_gather_auxiliary_tile_kernel(
+          blocks_for(tensor_elements_per_system), kThreads, 0, candidate->stream, matrix_elements,
+          naux, 0, 0, naux, setup.raw_three_center, candidate->exchange_contributions);
+      cuda_error = cudaGetLastError();
+      if (cuda_error != cudaSuccess)
+        return fail_plan(candidate, cuda_failure(cuda_error, "retain raw DF tensor", detail));
+      candidate->resident_raw_valid = true;
     }
   }
   // Source force replay borrows these original device factors. Transfer them

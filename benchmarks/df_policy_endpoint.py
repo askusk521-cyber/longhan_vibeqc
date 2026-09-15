@@ -101,16 +101,68 @@ def main():
     parser.add_argument("--control", default="VIBEQC_DF_EXCHANGE")
     parser.add_argument("--policies", nargs="+", default=["dense", "occupied"])
     parser.add_argument("--trace", action="store_true")
+    parser.add_argument(
+        "--components-after",
+        action="store_true",
+        help="Run a separate component pass after all clean samples",
+    )
+    parser.add_argument("--cuda-profile", action="store_true")
     parser.add_argument("--host-trace", action="store_true")
     parser.add_argument("--journal", action="store_true")
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--source-patch", type=Path)
+    parser.add_argument("--warm-checkpoint-in", type=Path)
+    parser.add_argument("--warm-checkpoint-out", type=Path)
+    parser.add_argument(
+        "--cold-control",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Freeze a common post-cold density using declared execution controls",
+    )
+    parser.add_argument(
+        "--skip-cold",
+        action="store_true",
+        help="Initialize from the checkpoint; requires an independent reference",
+    )
+    parser.add_argument(
+        "--energy-only",
+        action="store_true",
+        help="Measure SCF after a complete cold reference call",
+    )
+    parser.add_argument(
+        "--expected-iterations",
+        type=int,
+        help="Reject samples outside the declared fixed SCF update count",
+    )
     args = parser.parse_args()
-    if not os.environ.get("SLURM_JOB_ID") or args.repeats < 1:
+    if (
+        not os.environ.get("SLURM_JOB_ID")
+        or args.repeats < 1
+        or (args.expected_iterations is not None and args.expected_iterations < 1)
+    ):
         parser.error("requires Slurm and positive repeats")
+    if args.energy_only and (
+        args.trace or args.host_trace or args.journal or args.components_after
+    ):
+        parser.error(
+            "energy-only diagnostics must use clean timing; trace complete endpoints separately"
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.output.exists():
         parser.error("refusing to overwrite evidence")
+    if args.warm_checkpoint_out and args.warm_checkpoint_out.exists():
+        parser.error("refusing to overwrite the frozen warm checkpoint")
+    if args.skip_cold and (not args.warm_checkpoint_in or not args.reference):
+        parser.error("skip-cold requires a frozen checkpoint and independent reference")
+    from vibeqc.resources_hf import _CUDA_SCHEDULE_VARIABLES
+
+    cold_controls = {}
+    for assignment in args.cold_control:
+        name, separator, value = assignment.partition("=")
+        if name not in _CUDA_SCHEDULE_VARIABLES or not separator or not value:
+            parser.error("cold-control requires a known CUDA schedule NAME=VALUE")
+        cold_controls[name] = value
     case = benchmark_cases()[CASES[args.aos]]
     library = Path(os.environ["VIBEQC_LIBRARY"]).resolve()
     native = _native.load_library()
@@ -130,7 +182,7 @@ def main():
         "case": CASES[args.aos],
         "aos": args.aos,
         "scope": "intrusive diagnostic"
-        if args.trace or args.host_trace or args.journal
+        if args.trace or args.host_trace or args.journal or args.cuda_profile
         else "clean endpoint",
         "native_source_identity": native.vibeqc_get_source_identity().decode(),
         "source_patch_sha256": hashlib.sha256(patch).hexdigest(),
@@ -153,9 +205,13 @@ def main():
         ).strip(),
         "library_sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
         "slurm_job_id": os.environ["SLURM_JOB_ID"],
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "control": args.control,
         "policies": args.policies,
         "warm_policy": "one frozen post-cold density, prime every policy transition",
+        "measured_properties": ["energy"] if args.energy_only else ["energy", "forces"],
+        "expected_iterations": args.expected_iterations,
+        "cold_controls": cold_controls,
         "samples": [],
     }
 
@@ -163,14 +219,21 @@ def main():
         """Keep raw numerical evidence even if a subsequent gate fails."""
         args.output.write_text(json.dumps(payload, indent=2) + "\n")
 
-    def execute(batch):
+    def execute(batch, *, cold=False):
         """Time the complete strict energy-and-force endpoint."""
         start = time.perf_counter()
-        result = batch.execute(strict=True, properties=("energy", "forces"))
+        result = batch.execute(
+            strict=True,
+            properties=("energy",)
+            if args.energy_only and not cold
+            else ("energy", "forces"),
+        )
         seconds = time.perf_counter() - start
         return result, seconds
 
     os.environ[args.control] = args.policies[0]
+    previous_controls = {name: os.environ.get(name) for name in cold_controls}
+    os.environ.update(cold_controls)
     calculator = Calculator(
         method=case.method,
         basis=case.vibeqc_basis,
@@ -187,12 +250,55 @@ def main():
     prepare_start = time.perf_counter()
     with calculator.prepare_batch([case.atoms]) as batch:
         payload["prepare_seconds"] = time.perf_counter() - prepare_start
-        cold, payload["cold_seconds"] = execute(batch)
+        if args.skip_cold:
+            # This is a complete untimed checkpoint replay, not a cold solve.
+            # Freeze before replay so it cannot replace the declared input D.
+            payload["warm_checkpoint_restore"] = batch.load_checkpoint(
+                args.warm_checkpoint_in, allow_warm=True
+            )
+            batch.set_warm_start_updates(False)
+        cold, initial_seconds = execute(batch, cold=True)
+        payload["cold_seconds"] = None if args.skip_cold else initial_seconds
         payload["complete_cold_seconds"] = (
-            payload["prepare_seconds"] + payload["cold_seconds"]
+            None if args.skip_cold else payload["prepare_seconds"] + initial_seconds
         )
-        payload["cold_convergence"] = convergence_payload(cold)
+        payload["cold_convergence"] = (
+            None if args.skip_cold else convergence_payload(cold)
+        )
+        payload["initialization"] = "checkpoint replay" if args.skip_cold else "cold"
+        payload["initialization_seconds"] = initial_seconds
+        payload["initialization_convergence"] = convergence_payload(cold)
+        # Checkpoints carry the exact density and scientific restart identity.
+        # Loading after cold preserves cold cost/reference reporting while
+        # making cross-library warm replays use byte-identical input arrays.
+        if args.warm_checkpoint_in and not args.skip_cold:
+            # Runtime ablation controls intentionally differ. The restart
+            # loader still validates basis/model identity and imports only D;
+            # the target performs its complete normal convergence/force gates.
+            payload["warm_checkpoint_restore"] = batch.load_checkpoint(
+                args.warm_checkpoint_in, allow_warm=True
+            )
+        if args.warm_checkpoint_out:
+            args.warm_checkpoint_out.parent.mkdir(parents=True, exist_ok=True)
+            batch.save_checkpoint(args.warm_checkpoint_out)
+        checkpoint = args.warm_checkpoint_out or args.warm_checkpoint_in
+        if checkpoint:
+            from vibeqc.checkpoint import inspect_checkpoint
+
+            payload["warm_checkpoint_sha256"] = hashlib.sha256(
+                checkpoint.read_bytes()
+            ).hexdigest()
+            payload["warm_density_sha256"] = {
+                blob["name"]: blob["sha256"]
+                for blob in inspect_checkpoint(checkpoint).blobs
+                if blob["name"].startswith("density_")
+            }
         batch.set_warm_start_updates(False)
+        for name, value in previous_controls.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         expected_energy = cold.energies
         expected_forces = np.array([item.forces for item in cold.items])
         if args.reference:
@@ -206,103 +312,142 @@ def main():
             )
             payload["reference_sha256"] = hashlib.sha256(reference_bytes).hexdigest()
         save()
-        for repeat in range(args.repeats):
-            policies = args.policies if repeat % 2 == 0 else args.policies[::-1]
-            for policy in policies:
-                os.environ[args.control] = policy
-                prime, prime_seconds = execute(batch)
-                trace = args.output.with_suffix(f".{repeat}-{policy}.jsonl")
-                host_trace = args.output.with_suffix(f".{repeat}-{policy}.host.jsonl")
-                if args.trace:
-                    os.environ["VIBEQC_DF_TRACE"] = str(trace.resolve())
-                if args.trace or args.host_trace:
-                    os.environ["VIBEQC_DF_HOST_TRACE"] = str(host_trace.resolve())
-                journal = args.output.with_suffix(f".{repeat}-{policy}.journal.jsonl")
-                if args.journal:
-                    os.environ["VIBEQC_DF_PROGRESS_TRACE"] = str(journal.resolve())
-                result, seconds = execute(batch)
-                os.environ.pop("VIBEQC_DF_PROGRESS_TRACE", None)
-                os.environ.pop("VIBEQC_DF_TRACE", None)
-                os.environ.pop("VIBEQC_DF_HOST_TRACE", None)
-                forces = np.array([item.forces for item in result.items])
-                if (
-                    result.energies.shape != expected_energy.shape
-                    or forces.shape != expected_forces.shape
-                    or not np.all(np.isfinite(result.energies))
-                    or not np.all(np.isfinite(forces))
-                ):
-                    raise RuntimeError("endpoint returned invalid energy/force arrays")
-                sample = {
-                    "policy": policy,
-                    "repeat": repeat,
-                    "seconds": seconds,
-                    "prime_seconds": prime_seconds,
-                    "prime_iterations": [item.iterations for item in prime.items],
-                    "iterations": [item.iterations for item in result.items],
-                    "convergence": convergence_payload(result),
-                    "energies_hartree": result.energies.tolist(),
-                    "forces_hartree_per_bohr": forces.tolist(),
-                    "maximum_energy_error": float(
-                        np.max(np.abs(result.energies - expected_energy))
-                    ),
-                    "maximum_force_error": float(
-                        np.max(np.abs(forces - expected_forces))
-                    ),
-                    "metric": [
-                        d.to_dict()
-                        for d in batch.last_density_fitting_metric_diagnostics()
+        # Every clean replay precedes instrumentation. Component records live
+        # in a separate collection and reuse the same frozen density/owner.
+        jobs = [
+            (repeat, policy, False)
+            for repeat in range(args.repeats)
+            for policy in (args.policies if repeat % 2 == 0 else args.policies[::-1])
+        ]
+        if args.components_after:
+            jobs += [(0, policy, True) for policy in args.policies]
+        for repeat, policy, diagnostic in jobs:
+            traced = args.trace or diagnostic
+            phase = "diagnostic-" if diagnostic else ""
+            os.environ[args.control] = policy
+            prime, prime_seconds = execute(batch)
+            trace = args.output.with_suffix(f".{phase}{repeat}-{policy}.jsonl")
+            host_trace = args.output.with_suffix(
+                f".{phase}{repeat}-{policy}.host.jsonl"
+            )
+            if traced:
+                os.environ["VIBEQC_DF_TRACE"] = str(trace.resolve())
+            if traced or args.host_trace:
+                os.environ["VIBEQC_DF_HOST_TRACE"] = str(host_trace.resolve())
+            journal = args.output.with_suffix(
+                f".{phase}{repeat}-{policy}.journal.jsonl"
+            )
+            if args.journal:
+                os.environ["VIBEQC_DF_PROGRESS_TRACE"] = str(journal.resolve())
+            if args.cuda_profile:
+                cudart = ctypes.CDLL("libcudart.so.12")
+                if cudart.cudaProfilerStart() != 0:
+                    raise RuntimeError("cudaProfilerStart failed")
+            previous_counters = os.environ.get("VIBEQC_DF_SHELL_COUNTERS")
+            if diagnostic:
+                os.environ["VIBEQC_DF_SHELL_COUNTERS"] = "1"
+            result, seconds = execute(batch)
+            if diagnostic:
+                if previous_counters is None:
+                    os.environ.pop("VIBEQC_DF_SHELL_COUNTERS", None)
+                else:
+                    os.environ["VIBEQC_DF_SHELL_COUNTERS"] = previous_counters
+            if args.cuda_profile and cudart.cudaProfilerStop() != 0:
+                raise RuntimeError("cudaProfilerStop failed")
+            os.environ.pop("VIBEQC_DF_PROGRESS_TRACE", None)
+            os.environ.pop("VIBEQC_DF_TRACE", None)
+            os.environ.pop("VIBEQC_DF_HOST_TRACE", None)
+            forces = (
+                None
+                if args.energy_only
+                else np.array([item.forces for item in result.items])
+            )
+            if (
+                result.energies.shape != expected_energy.shape
+                or (forces is not None and forces.shape != expected_forces.shape)
+                or not np.all(np.isfinite(result.energies))
+                or (forces is not None and not np.all(np.isfinite(forces)))
+            ):
+                raise RuntimeError("endpoint returned invalid energy/force arrays")
+            sample = {
+                "policy": policy,
+                "scope": "intrusive diagnostic"
+                if traced or args.host_trace or args.journal or args.cuda_profile
+                else "clean endpoint",
+                "repeat": repeat,
+                "seconds": seconds,
+                "prime_seconds": prime_seconds,
+                "prime_iterations": [item.iterations for item in prime.items],
+                "iterations": [item.iterations for item in result.items],
+                "convergence": convergence_payload(result),
+                "energies_hartree": result.energies.tolist(),
+                "forces_hartree_per_bohr": None if forces is None else forces.tolist(),
+                "maximum_energy_error": float(
+                    np.max(np.abs(result.energies - expected_energy))
+                ),
+                "maximum_force_error": None
+                if forces is None
+                else float(np.max(np.abs(forces - expected_forces))),
+                "metric": [
+                    d.to_dict() for d in batch.last_density_fitting_metric_diagnostics()
+                ],
+            }
+            if traced:
+                sample["components"] = aggregate(read_trace(trace))
+                # Query after the timed call, while the prepared owner is
+                # still live. A separate sampler measures process peaks;
+                # a post-close reading would instead measure teardown.
+                processes = subprocess.check_output(
+                    [
+                        "nvidia-smi",
+                        "--query-compute-apps=pid,used_memory",
+                        "--format=csv,noheader,nounits",
                     ],
+                    text=True,
+                )
+                process_memory = {
+                    int(pid): int(mib) * 1024**2
+                    for line in processes.splitlines()
+                    for pid, mib in [line.split(",")]
                 }
-                if args.trace:
-                    sample["components"] = aggregate(read_trace(trace))
-                    # Query after the timed call, while the prepared owner is
-                    # still live. A separate sampler measures process peaks;
-                    # a post-close reading would instead measure teardown.
-                    processes = subprocess.check_output(
-                        [
-                            "nvidia-smi",
-                            "--query-compute-apps=pid,used_memory",
-                            "--format=csv,noheader,nounits",
-                        ],
-                        text=True,
-                    )
-                    process_memory = {
-                        int(pid): int(mib) * 1024**2
-                        for line in processes.splitlines()
-                        for pid, mib in [line.split(",")]
-                    }
-                    sample["process_device_resident_bytes"] = process_memory[
-                        os.getpid()
-                    ]
-                if args.trace or args.host_trace:
-                    # Inclusive host force scope begins after the physical
-                    # final state is selected and includes one-electron/Pulay,
-                    # DF response, transfers and the completed atom gradient.
-                    # These are intrusive stage timings, not clean endpoints
-                    # or an energy-only subtraction with a different SCF solve.
-                    force_regions = [
-                        region
-                        for record in read_host_trace(host_trace)
-                        for region in record["regions"]
-                        if region["name"] == "force_response"
-                    ]
-                    if len(force_regions) != 1 or force_regions[0]["failed"]:
-                        raise RuntimeError("expected one completed force stage")
-                    sample["force_stage_seconds"] = force_regions[0]["wall_ms"] / 1000
-                if args.journal:
-                    sample["final_state_observations"] = [
-                        row
-                        for line in journal.read_text().splitlines()
-                        if (row := json.loads(line)).get("key", "").startswith("final_")
-                    ]
-                payload["samples"].append(sample)
-                save()
-                print(policy, repeat, seconds, sample["iterations"], flush=True)
-                if (
-                    sample["maximum_energy_error"] > 1e-9
-                    or sample["maximum_force_error"] > 1e-8
-                ):
-                    raise RuntimeError("unchanged DF energy/force gate failed")
+                sample["process_device_resident_bytes"] = process_memory[os.getpid()]
+            if traced or args.host_trace:
+                # Inclusive host force scope begins after the physical
+                # final state is selected and includes one-electron/Pulay,
+                # DF response, transfers and the completed atom gradient.
+                # These are intrusive stage timings, not clean endpoints
+                # or an energy-only subtraction with a different SCF solve.
+                force_regions = [
+                    region
+                    for record in read_host_trace(host_trace)
+                    for region in record["regions"]
+                    if region["name"] == "force_response"
+                ]
+                if len(force_regions) != 1 or force_regions[0]["failed"]:
+                    raise RuntimeError("expected one completed force stage")
+                sample["force_stage_seconds"] = force_regions[0]["wall_ms"] / 1000
+            if args.journal:
+                sample["final_state_observations"] = [
+                    row
+                    for line in journal.read_text().splitlines()
+                    if (row := json.loads(line)).get("key", "").startswith("final_")
+                ]
+            payload.setdefault("diagnostics" if diagnostic else "samples", []).append(
+                sample
+            )
+            save()
+            print(phase + policy, repeat, seconds, sample["iterations"], flush=True)
+            if sample["maximum_energy_error"] > 1e-9 or (
+                sample["maximum_force_error"] is not None
+                and sample["maximum_force_error"] > 1e-8
+            ):
+                raise RuntimeError("unchanged DF energy/force gate failed")
+            if args.expected_iterations is not None and any(
+                count != args.expected_iterations for count in sample["iterations"]
+            ):
+                raise RuntimeError(
+                    "SCF iteration branch differs from the declared fixed work"
+                )
 
 
 if __name__ == "__main__":

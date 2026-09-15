@@ -3,6 +3,9 @@
 #include "scf/cuda_density_fitting_final_state.hpp"
 
 namespace vibeqc::scf {
+void bind_cuda_density_fitting_response_source(CudaDensityFittingJkPlan*, const core::System&,
+                                               const core::System&,
+                                               std::span<const double>) noexcept {}
 std::uint64_t cuda_density_fitting_solve_epoch(const CudaDensityFittingJkPlan*) noexcept {
   return 0;
 }

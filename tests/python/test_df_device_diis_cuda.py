@@ -19,8 +19,9 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize("representation", ("cartesian", "spherical"))
 @pytest.mark.parametrize("size", (1, 4))
 @pytest.mark.parametrize("exchange", ("dense", "occupied"))
+@pytest.mark.parametrize("dots", ("serial", "auto"))
 def test_compact_diis_independent_forces_and_warm_reset(
-    method, representation, size, exchange, monkeypatch, tmp_path
+    method, representation, size, exchange, dots, monkeypatch, tmp_path
 ):
     from pyscf import gto, scf
 
@@ -51,6 +52,7 @@ def test_compact_diis_independent_forces_and_warm_reset(
         gradient.auxbasis_response = True
         references.append((mf.e_tot, -gradient.kernel()))
     monkeypatch.setenv("VIBEQC_DF_EXCHANGE", exchange)
+    monkeypatch.setenv("VIBEQC_DF_DIIS_DOTS", dots)
     monkeypatch.delenv("VIBEQC_DF_DISABLE_DEVICE_DIIS", raising=False)
     calc = Calculator(
         method=method,

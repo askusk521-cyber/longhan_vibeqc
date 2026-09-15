@@ -1221,6 +1221,9 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
   // failure in that copy must still release all CUDA resources.
   CudaDensityFittingPlanPtr owned_plan(raw_plan, &destroy_cuda_density_fitting_jk_plan);
   reserve_cuda_df_diis(owned_plan.get(), data.raw.nbf, options, diagnostics);
+  if (data.df_gradient_orbital && data.df_gradient_auxiliary)
+    bind_cuda_density_fitting_response_source(owned_plan.get(), *data.df_gradient_orbital,
+                                              *data.df_gradient_auxiliary, data.raw.three_center);
   set_cuda_density_fitting_scf_value_budget(owned_plan.get(), planning_budget);
   if (output_diagnostics != nullptr) {
     *output_diagnostics = diagnostics;
@@ -1343,6 +1346,10 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
   // failure in that copy must still release all CUDA resources.
   CudaDensityFittingPlanPtr owned_plan(raw_plan, &destroy_cuda_density_fitting_jk_plan);
   reserve_cuda_df_diis(owned_plan.get(), nbf, options, diagnostics);
+  if (data.size() == 1 && data[0].df_gradient_orbital && data[0].df_gradient_auxiliary)
+    bind_cuda_density_fitting_response_source(owned_plan.get(), *data[0].df_gradient_orbital,
+                                              *data[0].df_gradient_auxiliary,
+                                              data[0].raw.three_center);
   set_cuda_density_fitting_scf_value_budget(owned_plan.get(), planning_budget);
   if (output_diagnostics != nullptr) {
     *output_diagnostics = diagnostics;

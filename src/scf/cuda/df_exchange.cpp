@@ -332,10 +332,48 @@ vibeqc_status build_exchange(CudaDensityFittingJkPlan& plan, const double* densi
         return cuda_failure(cuda_error, "transpose CUDA DF exchange density", detail);
       }
     }
+    const bool retain_raw =
+        plan.resident_exchange_enabled && plan.row_tile == plan.nbf &&
+        plan.auxiliary_tile == plan.naux &&
+        plan.nbf * plan.naux <= static_cast<std::size_t>(std::numeric_limits<int>::max());
+    if (retain_raw && (plan.flat_dense_exchange || plan.naux == 1)) {
+      // B[mu,nu,Q] is column-major (Q,nu) for each mu. X_mu = B_mu D
+      // keeps that layout; a single contraction over (nu,Q) produces K^T,
+      // which is precisely the public row-major K. No symmetry of D or B
+      // is assumed. Only one full scratch tensor is written, leaving the
+      // response owner's immutable raw tensor untouched across dense seeds.
+      const auto a = static_cast<int>(plan.naux), an = a * nbf;
+      const auto* b = plan.three_center + system * plan.tensor_elements_per_system;
+      auto* x = plan.auxiliary_tile_values;
+      auto status = trace_call("ri_k_density_projection_gemm", plan.stream, [&] {
+        return cublasDgemmStridedBatched(plan.blas, CUBLAS_OP_N, CUBLAS_OP_N, a, nbf, nbf, &one, b,
+                                         a, plan.naux * plan.nbf, density_column_major, nbf, 0,
+                                         &zero, x, a, plan.naux * plan.nbf, nbf);
+      });
+      if (status != CUBLAS_STATUS_SUCCESS)
+        return blas_failure(status, "resident DF density projection", detail);
+      status = trace_call("ri_k_exchange_gemm", plan.stream, [&] {
+        return cublasDgemm(plan.blas, CUBLAS_OP_T, CUBLAS_OP_N, nbf, nbf, an, &one, b, an, x, an,
+                           &zero, exchange + system * plan.matrix_elements, nbf);
+      });
+      if (status != CUBLAS_STATUS_SUCCESS)
+        return blas_failure(status, "resident DF exchange contraction", detail);
+      continue;
+    }
+    // Three simultaneous legacy operands fit two full scratch tensors when
+    // Q is split in half: gathered B and contributions occupy disjoint halves
+    // of the first buffer, while BD uses the second. The raw owner remains
+    // untouched. Square per-Q GEMMs avoid the long-K flattened GEMM's poor
+    // throughput on the qualified device. An odd naux has a bounded tail.
+    const auto auxiliary_tile = retain_raw ? plan.naux / 2 : plan.auxiliary_tile;
+    auto* contributions = retain_raw
+                              ? plan.auxiliary_tile_values + auxiliary_tile * plan.matrix_elements
+                              : plan.exchange_contributions;
+    runtime::df_progress::number("executed_auxiliary_tile", auxiliary_tile);
+    runtime::cuda_trace::trace_counter("dense_exchange_auxiliary_tile", auxiliary_tile);
     for (std::size_t auxiliary_begin = 0; auxiliary_begin < plan.naux;
-         auxiliary_begin += plan.auxiliary_tile) {
-      const std::size_t auxiliary_count =
-          std::min(plan.auxiliary_tile, plan.naux - auxiliary_begin);
+         auxiliary_begin += auxiliary_tile) {
+      const std::size_t auxiliary_count = std::min(auxiliary_tile, plan.naux - auxiliary_begin);
       const std::size_t tile_elements = auxiliary_count * plan.matrix_elements;
       launch_gather_auxiliary_tile_kernel(
           blocks_for(tile_elements), kThreads, 0, plan.stream, plan.matrix_elements, plan.naux,
@@ -346,30 +384,32 @@ vibeqc_status build_exchange(CudaDensityFittingJkPlan& plan, const double* densi
       }
 
       const int tile_count = static_cast<int>(auxiliary_count);
-      cublasStatus_t blas_status = trace_call("ri_k_gemm", plan.stream, [&] {
-        return cublasDgemmStridedBatched(
-            // The gathered AO-pair tile is B^T in cuBLAS layout.  Use D^T as
-            // the first factor; the reduction below maps the column-major
-            // result back to row-major public storage, yielding B D B^T.
-            plan.blas, CUBLAS_OP_T, CUBLAS_OP_N, nbf, nbf, nbf, &one, density_column_major, nbf, 0,
-            plan.auxiliary_tile_values, nbf, matrix_stride, &zero, plan.exchange_intermediate, nbf,
-            matrix_stride, tile_count);
-      });
+      cublasStatus_t blas_status =
+          trace_call(retain_raw ? "ri_k_density_projection_gemm" : "ri_k_gemm", plan.stream, [&] {
+            return cublasDgemmStridedBatched(
+                // The gathered AO-pair tile is B^T in cuBLAS layout.  Use D^T as
+                // the first factor; the reduction below maps the column-major
+                // result back to row-major public storage, yielding B D B^T.
+                plan.blas, CUBLAS_OP_T, CUBLAS_OP_N, nbf, nbf, nbf, &one, density_column_major, nbf,
+                0, plan.auxiliary_tile_values, nbf, matrix_stride, &zero,
+                plan.exchange_intermediate, nbf, matrix_stride, tile_count);
+          });
       if (blas_status != CUBLAS_STATUS_SUCCESS) {
         return blas_failure(blas_status, "DF exchange first GEMM", detail);
       }
-      blas_status = trace_call("ri_k_gemm", plan.stream, [&] {
-        return cublasDgemmStridedBatched(
-            plan.blas, CUBLAS_OP_T, CUBLAS_OP_N, nbf, nbf, nbf, &one, plan.auxiliary_tile_values,
-            nbf, matrix_stride, plan.exchange_intermediate, nbf, matrix_stride, &zero,
-            plan.exchange_contributions, nbf, matrix_stride, tile_count);
+      blas_status = trace_call(retain_raw ? "ri_k_exchange_gemm" : "ri_k_gemm", plan.stream, [&] {
+        return cublasDgemmStridedBatched(plan.blas, CUBLAS_OP_T, CUBLAS_OP_N, nbf, nbf, nbf, &one,
+                                         plan.auxiliary_tile_values, nbf, matrix_stride,
+                                         plan.exchange_intermediate, nbf, matrix_stride, &zero,
+                                         contributions, nbf, matrix_stride, tile_count);
       });
       if (blas_status != CUBLAS_STATUS_SUCCESS) {
         return blas_failure(blas_status, "DF exchange second GEMM", detail);
       }
+      runtime::cuda_trace::TraceRegion reduction("ri_k_exchange_reduce", plan.stream);
       launch_reduce_exchange_tile_kernel(blocks_for(plan.matrix_elements), kThreads, 0, plan.stream,
                                          plan.matrix_elements, auxiliary_count, system,
-                                         plan.exchange_contributions, exchange);
+                                         contributions, exchange, retain_raw);
       cuda_error = cudaPeekAtLastError();
       if (cuda_error != cudaSuccess) {
         return cuda_failure(cuda_error, "reduce DF exchange tile", detail);

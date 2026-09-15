@@ -21,6 +21,22 @@
 namespace vibeqc::scf {
 using namespace cuda_df;
 
+void bind_cuda_density_fitting_response_source(CudaDensityFittingJkPlan* plan,
+                                               const core::System& orbital,
+                                               const core::System& auxiliary,
+                                               std::span<const double> raw) noexcept {
+  if (!plan || plan->response_host_raw || !plan->resident_raw_valid || plan->batch_size != 1 ||
+      raw.size() != plan->tensor_elements_per_system)
+    return;
+  plan->response_host_raw = raw.data();
+  plan->response_orbital_atoms = orbital.atoms.data();
+  plan->response_auxiliary_atoms = auxiliary.atoms.data();
+  plan->response_orbital_shells = orbital.shells.data();
+  plan->response_auxiliary_shells = auxiliary.shells.data();
+  plan->response_orbital_representation = orbital.basis_representation;
+  plan->response_auxiliary_representation = auxiliary.basis_representation;
+}
+
 namespace {
 /** Validate a method-authorized canonical density before lending SCF factors.
  * Tokens bind owner/geometry, epoch, system, model and occupations. Exact
@@ -175,8 +191,9 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
   // An explicit occupied request already chose compatible borrowed storage;
   // automatic device filtering must not replace that comparison override.
   if (space != "occupied" && storage == "auto" && full_scratch && schedule == 0 &&
-      plan->nbf == 768 && plan->naux == 768 && plan->batch_size == 1 && terms.size() == 1) {
-    // Promote only the measured large RHF endpoint. Explicit comparison
+      (plan->nbf == 384 || plan->nbf == 768) && plan->naux == plan->nbf && plan->batch_size == 1 &&
+      terms.size() == 1) {
+    // Promote only the measured resident RHF endpoints. Explicit comparison
     // schedules and attribution probes keep their panel execution; other
     // shapes/backends remain available through the checked opt-in selector.
     const auto compatible = [](const char* name, std::string_view expected) {
@@ -196,16 +213,37 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
       cudaDeviceProp properties{};
       const auto error = cudaGetDeviceProperties(&properties, plan->device_id);
       if (error != cudaSuccess) return cuda_failure(error, "DF response device properties", detail);
-      borrow = properties.major == 12 && properties.minor == 0;
+      borrow = properties.major == 12 && properties.minor == 0 &&
+               (plan->nbf == 768 || std::string_view(properties.name) == "NVIDIA GeForce RTX 5090");
       // The low-rank endpoint is qualified only for this exact RHF rank and
       // device. The token is only a selection hint here; full owner, model,
       // density and device-generation validation below authorizes execution.
-      automatic_occupied =
-          borrow && std::string_view(properties.name) == "NVIDIA GeForce RTX 5090" && final_state &&
-          final_state->identity.occupied.size() == 1 && final_state->identity.occupied[0] == 160;
+      automatic_occupied = borrow && plan->nbf == 768 &&
+                           std::string_view(properties.name) == "NVIDIA GeForce RTX 5090" &&
+                           final_state && final_state->identity.occupied.size() == 1 &&
+                           final_state->identity.occupied[0] == 160;
     }
   }
   CudaDfResponseBuffers buffers;
+  const bool matching_source =
+      plan->response_host_raw && plan->response_host_raw == raw_a.data() &&
+      plan->response_orbital_atoms == orbital.atoms.data() &&
+      plan->response_auxiliary_atoms == auxiliary.atoms.data() &&
+      plan->response_orbital_shells == orbital.shells.data() &&
+      plan->response_auxiliary_shells == auxiliary.shells.data() &&
+      plan->response_orbital_representation == orbital.basis_representation &&
+      plan->response_auxiliary_representation == auxiliary.basis_representation;
+  const auto enabled = [](const char* name) {
+    const char* value = std::getenv(name);
+    return !value || std::string_view(value) == "auto";
+  };
+  for (const char* name : {"VIBEQC_DF_RAW_REUSE", "VIBEQC_DF_RESPONSE_BATCHING"}) {
+    const char* value = std::getenv(name);
+    if (value && std::string_view(value) != "auto" && std::string_view(value) != "off") {
+      detail = std::string(name) + " must be auto or off";
+      return VIBEQC_STATUS_INVALID_ARGUMENT;
+    }
+  }
   if (borrow) {
     // Dense resident plans reserved three full tensor temporaries for J/K.
     // Force executes after SCF on this same stream, and lends them back before
@@ -217,6 +255,19 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
     }
     buffers = {plan->auxiliary_tile_values, plan->exchange_contributions,
                plan->exchange_intermediate, plan->tensor_elements_per_system};
+    buffers.batch_products = enabled("VIBEQC_DF_RESPONSE_BATCHING");
+    if (plan->resident_raw_valid && matching_source && enabled("VIBEQC_DF_RAW_REUSE")) {
+      buffers.resident_raw = {
+          plan->exchange_contributions,
+          plan->nbf,
+          plan->naux,
+          plan->nbf * plan->nbf,
+          plan->nbf,
+          1,
+          plan->factor_basis_identity,
+          {plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
+           plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold}};
+    }
   }
   if (borrow && (space == "occupied" || (space == "auto" && automatic_occupied))) {
     const auto selected = select_occupied_response_factors(*plan, system, final_state, terms,
@@ -231,11 +282,20 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
     const CudaDfMetricView metric{
         plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
         plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold};
-    return execute_cuda_df_hf_gradient(
+    // The diagnostic upload route writes the former raw scratch buffer.
+    // Revoke its immutable view before submission, so an interrupted copy
+    // cannot leave a previously valid cache available to the next force.
+    if (borrow && !buffers.resident_raw.data) plan->resident_raw_valid = false;
+    const auto status = execute_cuda_df_hf_gradient(
         plan->device_id, reinterpret_cast<void*>(plan->stream), plan->integral_source, system,
         orbital, auxiliary, raw_a, {}, {}, terms, plan->metric_relative_threshold, schedule,
         maximum_bytes, maximum_auxiliary_tile, derivative, detail, resources, &metric,
         reinterpret_cast<void*>(plan->blas), borrow ? &buffers : nullptr);
+    if (status == VIBEQC_STATUS_SUCCESS && borrow && matching_source &&
+        plan->resident_exchange_enabled && plan->batch_size == 1 &&
+        plan->nbf * plan->naux <= static_cast<std::size_t>(std::numeric_limits<int>::max()))
+      plan->resident_raw_valid = true;
+    return status;
   }
   // Copies isolate one system's spectral reverse map from the packed batch.
   // Charge them while the bounded HF/derivative bridge is also alive.

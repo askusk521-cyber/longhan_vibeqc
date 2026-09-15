@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <limits>
 #include <new>
 
 #include "runtime/cuda_component_trace.hpp"
@@ -29,6 +30,76 @@ vibeqc_status build_occupied_exchange(CudaDensityFittingJkPlan& plan, std::size_
   trace_counter("occupied_rank", rank);
   trace_counter("occupied_factor_bytes", plan.nbf * rank * sizeof(double));
   if (!rank) return VIBEQC_STATUS_SUCCESS;
+
+  if (plan.resident_exchange_enabled && !plan.streamed && plan.row_tile == plan.nbf &&
+      plan.auxiliary_tile == plan.naux &&
+      plan.naux * rank <= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    // B[mu,nu,Q] is a batch of column-major (Q,nu) matrices. Project the
+    // contracted AO index directly, retaining U[mu,i,Q] in one existing
+    // buffer. Flattening (i,Q) then sums every auxiliary contribution inside
+    // GEMM: K = w U U^T. This also works for nonsymmetric diagnostic B.
+    const auto n = static_cast<int>(plan.nbf), a = static_cast<int>(plan.naux);
+    const auto r = static_cast<int>(rank), ar = a * r;
+    const double one = 1, zero = 0;
+    const auto* b = plan.three_center + system * plan.tensor_elements_per_system;
+    auto* u = plan.auxiliary_tile_values;
+    auto status = trace_call("ri_k_occupied_projection_gemm", plan.stream, [&] {
+      return cublasDgemmStridedBatched(plan.blas, CUBLAS_OP_N,
+                                       column_major ? CUBLAS_OP_N : CUBLAS_OP_T, a, r, n, &one, b,
+                                       a, plan.naux * plan.nbf, coefficients, column_major ? n : r,
+                                       0, &zero, u, a, plan.naux * rank, n);
+    });
+    if (status != CUBLAS_STATUS_SUCCESS)
+      return blas_failure(status, "resident occupied DF projection", detail);
+    bool triangular = false;
+    auto* output = exchange + system * plan.matrix_elements;
+    status = trace_call("ri_k_occupied_exchange_gemm", plan.stream, [&] {
+      // K is a Gram matrix even when the three-center fixture is not AO
+      // symmetric. Reduce its product domain before BLAS, then mirror the
+      // result. Providers without SYRK retain the exact full GEMM route.
+      const auto product = [&](auto handle) {
+        if constexpr (requires {
+                        cublasDsyrk(handle, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_T, n, ar, &weight, u,
+                                    ar, &zero, output, n);
+                      }) {
+          if (plan.triangular_exchange) {
+            triangular = true;
+            return cublasDsyrk(handle, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_T, n, ar, &weight, u, ar,
+                               &zero, output, n);
+          }
+        }
+        return cublasDgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, n, n, ar, &weight, u, ar, u, ar, &zero,
+                           output, n);
+      };
+      return product(plan.blas);
+    });
+    if (status != CUBLAS_STATUS_SUCCESS)
+      return blas_failure(status, "resident occupied DF K product", detail);
+    if (triangular) {
+      runtime::cuda_trace::TraceRegion mirror("ri_k_occupied_mirror", plan.stream);
+      launch_mirror_exchange_triangle(blocks_for(plan.matrix_elements), kThreads, plan.stream,
+                                      plan.nbf, output);
+      error = cudaPeekAtLastError();
+      if (error != cudaSuccess) return cuda_failure(error, "mirror occupied DF K", detail);
+    }
+    trace_counter("occupied_projection_products", plan.nbf);
+    trace_counter("occupied_projection_flops", 2 * plan.naux * plan.nbf * plan.nbf * rank);
+    trace_counter("occupied_exchange_products", 1);
+    trace_counter("occupied_exchange_flops",
+                  plan.naux * rank * plan.nbf * (triangular ? plan.nbf + 1 : 2 * plan.nbf));
+    trace_counter("occupied_exchange_triangular", triangular);
+    trace_counter("occupied_projection_m", plan.naux);
+    trace_counter("occupied_projection_n", rank);
+    trace_counter("occupied_projection_k", plan.nbf);
+    trace_counter("occupied_projection_batch", plan.nbf);
+    trace_counter("occupied_exchange_m", plan.nbf);
+    trace_counter("occupied_exchange_n", plan.nbf);
+    trace_counter("occupied_exchange_k", plan.naux * rank);
+    trace_counter("occupied_intermediate_bytes", plan.nbf * plan.naux * rank * sizeof(double));
+    return status == CUBLAS_STATUS_SUCCESS
+               ? VIBEQC_STATUS_SUCCESS
+               : blas_failure(status, "resident occupied DF K product", detail);
+  }
 
   // Rank never exceeds nbf, so both T panels fit the dense plan's buffers.
   // Source-backed execution uses exactly the dense raw-work policy; host
