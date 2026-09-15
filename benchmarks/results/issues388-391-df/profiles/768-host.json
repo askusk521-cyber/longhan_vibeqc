@@ -1,0 +1,868 @@
+{
+  "serial": {
+    "trace_sha256": "604214b653810fe61b43c4a00c47077e5fbb5a1a1ccf1e434530bd0d8f7e7c64",
+    "regions": [
+      {
+        "name": "batch_execute",
+        "reason": "unspecified",
+        "parent": -1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 5686.008606,
+        "cpu_ms": 5685.29084299999,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "run_rhf_density_fitting_cuda_bucket_impl",
+        "reason": "unspecified",
+        "parent": 0,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 5683.231042,
+        "cpu_ms": 5682.514825999988,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_item",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 7.530986,
+        "cpu_ms": 7.530923000004464,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_initial_frame",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 8.084126,
+        "cpu_ms": 8.083690000006527,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "overlap_cache_hit",
+        "reason": "unspecified",
+        "parent": 3,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.001994,
+        "cpu_ms": 0.0016629999919359761,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "initial_density",
+        "reason": "core_guess",
+        "parent": 3,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 7.19989,
+        "cpu_ms": 7.199783000004345,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "device_scf_submission_wait",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 1538.176898,
+        "cpu_ms": 1538.024326999988,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "compact_eigensolve_provider",
+        "reason": "unspecified",
+        "parent": 6,
+        "item": -1,
+        "nbf": 768,
+        "wall_ms": 909.959192,
+        "cpu_ms": 909.845219999994,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "compact_eigensolve_provider",
+        "reason": "unspecified",
+        "parent": 6,
+        "item": -1,
+        "nbf": 768,
+        "wall_ms": 294.412244,
+        "cpu_ms": 294.38755900000046,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "compact_eigensolve_provider",
+        "reason": "unspecified",
+        "parent": 6,
+        "item": -1,
+        "nbf": 768,
+        "wall_ms": 298.92865,
+        "cpu_ms": 298.91636300000357,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "finalization",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 4126.060809,
+        "cpu_ms": 4125.497300000006,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_read",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 5.861205,
+        "cpu_ms": 5.86154299999464,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_fock_build",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 836.101161,
+        "cpu_ms": 836.0305690000018,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_validation",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 1174.980937,
+        "cpu_ms": 1174.7994290000038,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_weighted_density",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 90.571947,
+        "cpu_ms": 90.55837200000383,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_reuse",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.000912,
+        "cpu_ms": 0.0008709999974598759,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "force_response",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 2009.884478,
+        "cpu_ms": 2009.590732999996,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_metadata",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.103999,
+        "cpu_ms": 0.10345399999778238,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.211375,
+        "cpu_ms": 0.20824099999572354,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.123257,
+        "cpu_ms": 0.12322100000972114,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.118598,
+        "cpu_ms": 0.11850199999230426,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117725,
+        "cpu_ms": 0.11763099999484439,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.118056,
+        "cpu_ms": 0.11795199999653505,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.12484,
+        "cpu_ms": 0.12474399999007346,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.118346,
+        "cpu_ms": 0.11832199999162185,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.118076,
+        "cpu_ms": 0.11801200000149947,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117245,
+        "cpu_ms": 0.11716999999578093,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117024,
+        "cpu_ms": 0.11697000000765456,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.123437,
+        "cpu_ms": 0.12332199999320892,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117145,
+        "cpu_ms": 0.11709000000337255,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.116874,
+        "cpu_ms": 0.1168090000049915,
+        "finished": true,
+        "failed": false
+      }
+    ],
+    "inclusive_totals": {
+      "batch_execute": {
+        "calls": 1,
+        "wall_ms": 5686.008606,
+        "cpu_ms": 5685.29084299999
+      },
+      "run_rhf_density_fitting_cuda_bucket_impl": {
+        "calls": 1,
+        "wall_ms": 5683.231042,
+        "cpu_ms": 5682.514825999988
+      },
+      "prepare_item": {
+        "calls": 1,
+        "wall_ms": 7.530986,
+        "cpu_ms": 7.530923000004464
+      },
+      "prepare_initial_frame": {
+        "calls": 1,
+        "wall_ms": 8.084126,
+        "cpu_ms": 8.083690000006527
+      },
+      "overlap_cache_hit": {
+        "calls": 1,
+        "wall_ms": 0.001994,
+        "cpu_ms": 0.0016629999919359761
+      },
+      "initial_density": {
+        "calls": 1,
+        "wall_ms": 7.19989,
+        "cpu_ms": 7.199783000004345
+      },
+      "device_scf_submission_wait": {
+        "calls": 1,
+        "wall_ms": 1538.176898,
+        "cpu_ms": 1538.024326999988
+      },
+      "compact_eigensolve_provider": {
+        "calls": 3,
+        "wall_ms": 1503.300086,
+        "cpu_ms": 1503.149141999998
+      },
+      "finalization": {
+        "calls": 1,
+        "wall_ms": 4126.060809,
+        "cpu_ms": 4125.497300000006
+      },
+      "final_state_read": {
+        "calls": 1,
+        "wall_ms": 5.861205,
+        "cpu_ms": 5.86154299999464
+      },
+      "final_state_fock_build": {
+        "calls": 1,
+        "wall_ms": 836.101161,
+        "cpu_ms": 836.0305690000018
+      },
+      "final_state_validation": {
+        "calls": 1,
+        "wall_ms": 1174.980937,
+        "cpu_ms": 1174.7994290000038
+      },
+      "final_state_weighted_density": {
+        "calls": 1,
+        "wall_ms": 90.571947,
+        "cpu_ms": 90.55837200000383
+      },
+      "final_state_reuse": {
+        "calls": 1,
+        "wall_ms": 0.000912,
+        "cpu_ms": 0.0008709999974598759
+      },
+      "force_response": {
+        "calls": 1,
+        "wall_ms": 2009.884478,
+        "cpu_ms": 2009.590732999996
+      },
+      "df_shell_metadata": {
+        "calls": 1,
+        "wall_ms": 0.103999,
+        "cpu_ms": 0.10345399999778238
+      },
+      "df_shell_signature_dispatch": {
+        "calls": 13,
+        "wall_ms": 1.6419980000000003,
+        "cpu_ms": 1.6379859999773316
+      }
+    }
+  },
+  "auto": {
+    "trace_sha256": "3b53ca20bbd482fe7d91d80b4c436d1bf3527a4dfaaddd863bef1cd104318346",
+    "regions": [
+      {
+        "name": "batch_execute",
+        "reason": "unspecified",
+        "parent": -1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 5621.635253,
+        "cpu_ms": 5621.274850000006,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "run_rhf_density_fitting_cuda_bucket_impl",
+        "reason": "unspecified",
+        "parent": 0,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 5619.016142,
+        "cpu_ms": 5618.657392000003,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_item",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 7.556944,
+        "cpu_ms": 7.556641999997282,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_initial_frame",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 8.08653,
+        "cpu_ms": 8.086204999997904,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "overlap_cache_hit",
+        "reason": "unspecified",
+        "parent": 3,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.001804,
+        "cpu_ms": 0.0016329999965591924,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "initial_density",
+        "reason": "core_guess",
+        "parent": 3,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 7.197005,
+        "cpu_ms": 7.19691700000169,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "device_scf_submission_wait",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 1459.039852,
+        "cpu_ms": 1458.947046999995,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "compact_eigensolve_provider",
+        "reason": "unspecified",
+        "parent": 6,
+        "item": -1,
+        "nbf": 768,
+        "wall_ms": 911.671668,
+        "cpu_ms": 911.6077859999905,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "compact_eigensolve_provider",
+        "reason": "unspecified",
+        "parent": 6,
+        "item": -1,
+        "nbf": 768,
+        "wall_ms": 254.677266,
+        "cpu_ms": 254.6669890000004,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "compact_eigensolve_provider",
+        "reason": "unspecified",
+        "parent": 6,
+        "item": -1,
+        "nbf": 768,
+        "wall_ms": 257.969556,
+        "cpu_ms": 257.9533020000042,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "finalization",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 4141.015316,
+        "cpu_ms": 4140.749344,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_read",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 7.92474,
+        "cpu_ms": 7.925063000001842,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_fock_build",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 848.312662,
+        "cpu_ms": 848.2663659999901,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_validation",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 1169.89647,
+        "cpu_ms": 1169.8243889999985,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_weighted_density",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 90.281447,
+        "cpu_ms": 90.27665400000728,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_reuse",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.000731,
+        "cpu_ms": 0.0008210000004282847,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "force_response",
+        "reason": "unspecified",
+        "parent": 10,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 2013.502516,
+        "cpu_ms": 2013.3639200000034,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_metadata",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.107706,
+        "cpu_ms": 0.10709100000383387,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.206636,
+        "cpu_ms": 0.20426300000053743,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.121283,
+        "cpu_ms": 0.12128800000255069,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.119439,
+        "cpu_ms": 0.11942400000464204,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117686,
+        "cpu_ms": 0.117670999998154,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.118147,
+        "cpu_ms": 0.11808200000018587,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117936,
+        "cpu_ms": 0.11791100000380084,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117756,
+        "cpu_ms": 0.11768100000608683,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117786,
+        "cpu_ms": 0.117720000005761,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117606,
+        "cpu_ms": 0.1175800000083882,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117976,
+        "cpu_ms": 0.11793100000545564,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.124228,
+        "cpu_ms": 0.12416299999529201,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117916,
+        "cpu_ms": 0.11784100000511444,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 16,
+        "item": 0,
+        "nbf": 768,
+        "wall_ms": 0.117606,
+        "cpu_ms": 0.11756099999615799,
+        "finished": true,
+        "failed": false
+      }
+    ],
+    "inclusive_totals": {
+      "batch_execute": {
+        "calls": 1,
+        "wall_ms": 5621.635253,
+        "cpu_ms": 5621.274850000006
+      },
+      "run_rhf_density_fitting_cuda_bucket_impl": {
+        "calls": 1,
+        "wall_ms": 5619.016142,
+        "cpu_ms": 5618.657392000003
+      },
+      "prepare_item": {
+        "calls": 1,
+        "wall_ms": 7.556944,
+        "cpu_ms": 7.556641999997282
+      },
+      "prepare_initial_frame": {
+        "calls": 1,
+        "wall_ms": 8.08653,
+        "cpu_ms": 8.086204999997904
+      },
+      "overlap_cache_hit": {
+        "calls": 1,
+        "wall_ms": 0.001804,
+        "cpu_ms": 0.0016329999965591924
+      },
+      "initial_density": {
+        "calls": 1,
+        "wall_ms": 7.197005,
+        "cpu_ms": 7.19691700000169
+      },
+      "device_scf_submission_wait": {
+        "calls": 1,
+        "wall_ms": 1459.039852,
+        "cpu_ms": 1458.947046999995
+      },
+      "compact_eigensolve_provider": {
+        "calls": 3,
+        "wall_ms": 1424.3184899999999,
+        "cpu_ms": 1424.228076999995
+      },
+      "finalization": {
+        "calls": 1,
+        "wall_ms": 4141.015316,
+        "cpu_ms": 4140.749344
+      },
+      "final_state_read": {
+        "calls": 1,
+        "wall_ms": 7.92474,
+        "cpu_ms": 7.925063000001842
+      },
+      "final_state_fock_build": {
+        "calls": 1,
+        "wall_ms": 848.312662,
+        "cpu_ms": 848.2663659999901
+      },
+      "final_state_validation": {
+        "calls": 1,
+        "wall_ms": 1169.89647,
+        "cpu_ms": 1169.8243889999985
+      },
+      "final_state_weighted_density": {
+        "calls": 1,
+        "wall_ms": 90.281447,
+        "cpu_ms": 90.27665400000728
+      },
+      "final_state_reuse": {
+        "calls": 1,
+        "wall_ms": 0.000731,
+        "cpu_ms": 0.0008210000004282847
+      },
+      "force_response": {
+        "calls": 1,
+        "wall_ms": 2013.502516,
+        "cpu_ms": 2013.3639200000034
+      },
+      "df_shell_metadata": {
+        "calls": 1,
+        "wall_ms": 0.107706,
+        "cpu_ms": 0.10709100000383387
+      },
+      "df_shell_signature_dispatch": {
+        "calls": 13,
+        "wall_ms": 1.6320010000000003,
+        "cpu_ms": 1.629116000032127
+      }
+    }
+  }
+}

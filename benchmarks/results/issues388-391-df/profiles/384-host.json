@@ -1,0 +1,528 @@
+{
+  "serial": {
+    "trace_sha256": "b1d1051cb1b1f5926dfe1a32d01c5f66fbbb583e2146fc97de063634cd782e0a",
+    "regions": [
+      {
+        "name": "batch_execute",
+        "reason": "unspecified",
+        "parent": -1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 980.874628,
+        "cpu_ms": 980.7573059999992,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "run_rhf_density_fitting_cuda_bucket_impl",
+        "reason": "unspecified",
+        "parent": 0,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 980.766911,
+        "cpu_ms": 980.6512759999997,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_item",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 0.99618,
+        "cpu_ms": 0.9960280000012034,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_initial_frame",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 0.867352,
+        "cpu_ms": 0.8673070000000394,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "overlap_cache_hit",
+        "reason": "unspecified",
+        "parent": 3,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.001012,
+        "cpu_ms": 0.0009020000000248274,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "initial_density",
+        "reason": "core_guess",
+        "parent": 3,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.646029,
+        "cpu_ms": 0.6460009999997851,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "device_scf_submission_wait",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 253.871714,
+        "cpu_ms": 253.8562379999991,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "finalization",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 724.548159,
+        "cpu_ms": 724.44913,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_read",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 0.739427,
+        "cpu_ms": 0.7395070000004722,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_fock_build",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 60.350929,
+        "cpu_ms": 60.34962900000096,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_validation",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 157.69447,
+        "cpu_ms": 157.66161500000032,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_weighted_density",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 9.864035,
+        "cpu_ms": 9.863528000000343,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_reuse",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.000591,
+        "cpu_ms": 0.0005709999992831172,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "force_response",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 494.353154,
+        "cpu_ms": 494.29356999999993,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_metadata",
+        "reason": "unspecified",
+        "parent": 13,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.081666,
+        "cpu_ms": 0.08153200000116101,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 13,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.206545,
+        "cpu_ms": 0.20395300000153327,
+        "finished": true,
+        "failed": false
+      }
+    ],
+    "inclusive_totals": {
+      "batch_execute": {
+        "calls": 1,
+        "wall_ms": 980.874628,
+        "cpu_ms": 980.7573059999992
+      },
+      "run_rhf_density_fitting_cuda_bucket_impl": {
+        "calls": 1,
+        "wall_ms": 980.766911,
+        "cpu_ms": 980.6512759999997
+      },
+      "prepare_item": {
+        "calls": 1,
+        "wall_ms": 0.99618,
+        "cpu_ms": 0.9960280000012034
+      },
+      "prepare_initial_frame": {
+        "calls": 1,
+        "wall_ms": 0.867352,
+        "cpu_ms": 0.8673070000000394
+      },
+      "overlap_cache_hit": {
+        "calls": 1,
+        "wall_ms": 0.001012,
+        "cpu_ms": 0.0009020000000248274
+      },
+      "initial_density": {
+        "calls": 1,
+        "wall_ms": 0.646029,
+        "cpu_ms": 0.6460009999997851
+      },
+      "device_scf_submission_wait": {
+        "calls": 1,
+        "wall_ms": 253.871714,
+        "cpu_ms": 253.8562379999991
+      },
+      "finalization": {
+        "calls": 1,
+        "wall_ms": 724.548159,
+        "cpu_ms": 724.44913
+      },
+      "final_state_read": {
+        "calls": 1,
+        "wall_ms": 0.739427,
+        "cpu_ms": 0.7395070000004722
+      },
+      "final_state_fock_build": {
+        "calls": 1,
+        "wall_ms": 60.350929,
+        "cpu_ms": 60.34962900000096
+      },
+      "final_state_validation": {
+        "calls": 1,
+        "wall_ms": 157.69447,
+        "cpu_ms": 157.66161500000032
+      },
+      "final_state_weighted_density": {
+        "calls": 1,
+        "wall_ms": 9.864035,
+        "cpu_ms": 9.863528000000343
+      },
+      "final_state_reuse": {
+        "calls": 1,
+        "wall_ms": 0.000591,
+        "cpu_ms": 0.0005709999992831172
+      },
+      "force_response": {
+        "calls": 1,
+        "wall_ms": 494.353154,
+        "cpu_ms": 494.29356999999993
+      },
+      "df_shell_metadata": {
+        "calls": 1,
+        "wall_ms": 0.081666,
+        "cpu_ms": 0.08153200000116101
+      },
+      "df_shell_signature_dispatch": {
+        "calls": 1,
+        "wall_ms": 0.206545,
+        "cpu_ms": 0.20395300000153327
+      }
+    }
+  },
+  "auto": {
+    "trace_sha256": "ce78570013a4dd2e6e2f6e6692f3a4f2a25cc5040ff5b2c86c21e1817f18166a",
+    "regions": [
+      {
+        "name": "batch_execute",
+        "reason": "unspecified",
+        "parent": -1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 958.08737,
+        "cpu_ms": 958.0378189999976,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "run_rhf_density_fitting_cuda_bucket_impl",
+        "reason": "unspecified",
+        "parent": 0,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 958.014039,
+        "cpu_ms": 957.9660239999992,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_item",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 0.692047,
+        "cpu_ms": 0.6921379999997868,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "prepare_initial_frame",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 0.891639,
+        "cpu_ms": 0.8916019999993807,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "overlap_cache_hit",
+        "reason": "unspecified",
+        "parent": 3,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.001022,
+        "cpu_ms": 0.0008820000001463768,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "initial_density",
+        "reason": "core_guess",
+        "parent": 3,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.617874,
+        "cpu_ms": 0.6178290000011799,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "device_scf_submission_wait",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": -1,
+        "nbf": 0,
+        "wall_ms": 231.428158,
+        "cpu_ms": 231.419880999999,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "finalization",
+        "reason": "unspecified",
+        "parent": 1,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 724.430862,
+        "cpu_ms": 724.392614000001,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_read",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 0.814822,
+        "cpu_ms": 0.8148680000008568,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_fock_build",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 0,
+        "wall_ms": 57.389383,
+        "cpu_ms": 57.38723300000004,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_validation",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 157.463285,
+        "cpu_ms": 157.4569419999996,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_weighted_density",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 9.847995,
+        "cpu_ms": 9.847478000001075,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "final_state_reuse",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.000641,
+        "cpu_ms": 0.0006110000008163752,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "force_response",
+        "reason": "unspecified",
+        "parent": 7,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 497.179148,
+        "cpu_ms": 497.1526819999994,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_metadata",
+        "reason": "unspecified",
+        "parent": 13,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.081987,
+        "cpu_ms": 0.08181300000131841,
+        "finished": true,
+        "failed": false
+      },
+      {
+        "name": "df_shell_signature_dispatch",
+        "reason": "unspecified",
+        "parent": 13,
+        "item": 0,
+        "nbf": 384,
+        "wall_ms": 0.201617,
+        "cpu_ms": 0.1991229999998012,
+        "finished": true,
+        "failed": false
+      }
+    ],
+    "inclusive_totals": {
+      "batch_execute": {
+        "calls": 1,
+        "wall_ms": 958.08737,
+        "cpu_ms": 958.0378189999976
+      },
+      "run_rhf_density_fitting_cuda_bucket_impl": {
+        "calls": 1,
+        "wall_ms": 958.014039,
+        "cpu_ms": 957.9660239999992
+      },
+      "prepare_item": {
+        "calls": 1,
+        "wall_ms": 0.692047,
+        "cpu_ms": 0.6921379999997868
+      },
+      "prepare_initial_frame": {
+        "calls": 1,
+        "wall_ms": 0.891639,
+        "cpu_ms": 0.8916019999993807
+      },
+      "overlap_cache_hit": {
+        "calls": 1,
+        "wall_ms": 0.001022,
+        "cpu_ms": 0.0008820000001463768
+      },
+      "initial_density": {
+        "calls": 1,
+        "wall_ms": 0.617874,
+        "cpu_ms": 0.6178290000011799
+      },
+      "device_scf_submission_wait": {
+        "calls": 1,
+        "wall_ms": 231.428158,
+        "cpu_ms": 231.419880999999
+      },
+      "finalization": {
+        "calls": 1,
+        "wall_ms": 724.430862,
+        "cpu_ms": 724.392614000001
+      },
+      "final_state_read": {
+        "calls": 1,
+        "wall_ms": 0.814822,
+        "cpu_ms": 0.8148680000008568
+      },
+      "final_state_fock_build": {
+        "calls": 1,
+        "wall_ms": 57.389383,
+        "cpu_ms": 57.38723300000004
+      },
+      "final_state_validation": {
+        "calls": 1,
+        "wall_ms": 157.463285,
+        "cpu_ms": 157.4569419999996
+      },
+      "final_state_weighted_density": {
+        "calls": 1,
+        "wall_ms": 9.847995,
+        "cpu_ms": 9.847478000001075
+      },
+      "final_state_reuse": {
+        "calls": 1,
+        "wall_ms": 0.000641,
+        "cpu_ms": 0.0006110000008163752
+      },
+      "force_response": {
+        "calls": 1,
+        "wall_ms": 497.179148,
+        "cpu_ms": 497.1526819999994
+      },
+      "df_shell_metadata": {
+        "calls": 1,
+        "wall_ms": 0.081987,
+        "cpu_ms": 0.08181300000131841
+      },
+      "df_shell_signature_dispatch": {
+        "calls": 1,
+        "wall_ms": 0.201617,
+        "cpu_ms": 0.1991229999998012
+      }
+    }
+  }
+}

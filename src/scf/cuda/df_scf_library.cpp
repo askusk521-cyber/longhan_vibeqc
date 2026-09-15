@@ -12,6 +12,7 @@
 
 #include "runtime/cuda_component_trace.hpp"
 #include "runtime/df_progress_trace.hpp"
+#include "runtime/host_component_trace.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_runtime.hpp"
 #include "scf/cuda/eigensolver.hpp"
@@ -162,9 +163,18 @@ vibeqc_status solve_device_batch(CudaDensityFittingJkPlan& plan, DeviceSolver& s
       "compact_eigensolve", plan.stream,
       {batch_size, nbf, plan.naux, plan.integral_source != nullptr, plan.streamed});
   runtime::cuda_trace::trace_counter("eigensystems", batch_size);
+  runtime::cuda_trace::trace_counter("retained_solver_device_workspace_bytes",
+                                     solver.workspace_bytes);
+  runtime::cuda_trace::trace_counter("retained_solver_host_workspace_bytes",
+                                     solver.host_workspace_bytes);
   runtime::df_progress::label("eigen_provider",
                               solver.xsyev ? "cusolverDnXsyevBatched" : "cusolverDnDsyevjBatched");
   cusolverStatus_t status = CUSOLVER_STATUS_SUCCESS;
+  // All descriptors, occupation buffers and workspaces were prepared once.
+  // The provider call can itself block on queued GPU work or perform host
+  // orchestration. Keep its host interval separate from the eigensolve's GPU
+  // events: their difference is not an unmeasured CPU eigenframe validation.
+  runtime::host_trace::Region provider("compact_eigensolve_provider", nbf);
   if (!solver.xsyev) {
     status = cusolverDnDsyevjBatched(
         solver.handle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, static_cast<int>(nbf),

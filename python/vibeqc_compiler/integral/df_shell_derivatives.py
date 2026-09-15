@@ -47,15 +47,15 @@ def shell_schedule(angular, variant):
 
 
 def axis_cache_layout(angular):
-    """Pack variable-length polynomials, leaving only unused doubly-raised slots.
+    """Pack moment polynomials with only the first orbital center raised.
 
-    The rectangular indexing makes device lookup arithmetic independent of
-    component tables. Only A or B is raised for a first derivative, so their
-    jointly raised boundary is reserved but never generated or read.
+    Raising B follows exactly from raising A plus the center displacement
+    times the base moment. The rectangular cache therefore needs no raised-B
+    boundary, while indexing stays independent of Cartesian component tables.
     """
     offsets, size = {}, 0
     for powers in product(
-        range(angular[0] + 2), range(angular[1] + 2), range(angular[2] + 1)
+        range(angular[0] + 2), range(angular[1] + 1), range(angular[2] + 1)
     ):
         offsets[powers] = size
         size += sum(powers) + 1
@@ -93,8 +93,8 @@ template<unsigned A,unsigned B,unsigned C>
 struct Moments {
   static constexpr unsigned na=(A+1)*(A+2)/2,nb=(B+1)*(B+2)/2,nc=(C+1)*(C+2)/2;
   static constexpr unsigned components=na*nb*nc;
-  static constexpr unsigned rows=B+2,columns=C+1;
-  static constexpr unsigned axis_size=(A+2)*rows*columns*(A+B+C+4)/2;
+  static constexpr unsigned rows=B+1,columns=C+1;
+  static constexpr unsigned axis_size=(A+2)*rows*columns*(A+B+C+3)/2;
   /** Translation recovers the auxiliary center from the two independent ones. */
   __device__ static Contracted finish(const double* independent) {
     Contracted result{};
@@ -112,20 +112,22 @@ struct Moments {
   }
   /** High-angular caches distribute unique moment polynomials over all lanes.
    * The same scalar-generated moment DAG supplies every coefficient; the
-   * doubly-raised boundary is unused by a first derivative and stays unread.
+   * raised-B moments follow from raised-A and the unraised moment below.
    */
   __device__ static void prepare(const scalar::Geometry& g,double* cache,unsigned lane,unsigned lanes) {
-    constexpr unsigned entries=(A+2)*(B+2)*(C+1);
+    constexpr unsigned entries=(A+2)*(B+1)*(C+1);
     for(unsigned item=lane;item<3*entries;item+=lanes) {
       const unsigned axis=item/entries,index=item%entries;
       const unsigned a=index/rows/columns,b=index/columns%rows,c=index%columns;
-      if(a==A+1 && b==B+1) continue;
       scalar::axis_polynomial(a,b,c,g.pa[axis],g.pb[axis],g.dx[axis],g.sx,g.sy,g.ip,g.iq,
                               cache+axis*axis_size+offset(a,b,c));
     }
   }
-  /** Fuse the differentiated axis before integrating shared other-axis moments.
-   * alpha/beta and all external weights stay fixed under nuclear response.
+  /** Integrate the other two axes once for both differentiated centers.
+   * For each coefficient i, H_i=sum_jk v_j w_k F_(i+j+k) is independent
+   * of the differentiated center. Contract its two analytic derivatives
+   * together, rather than repeating that polynomial product for A and B.
+   * alpha/beta and external weights stay fixed under nuclear response.
    */
   __device__ __forceinline__ static void accumulate(unsigned item,double alpha,double beta,
       const scalar::Geometry& g,const double* cache,double weight,double* out) {
@@ -139,20 +141,24 @@ struct Moments {
       const unsigned other=(axis+1)%3,last=(axis+2)%3;
       const auto x=scalar::power(a,axis),y=scalar::power(b,axis),z=scalar::power(c,axis);
       const double* v=cache+index[other];const double* w=cache+index[last];
-      for(unsigned center=0;center<2;++center) {
-        const unsigned n=center==0?x:y;
-        const double exponent=center==0?alpha:beta;
-        const double* raised=cache+axis*axis_size+offset(x+(center==0),y+(center==1),z);
-        const double* lowered=n?cache+axis*axis_size+offset(x-(center==0),y-(center==1),z):raised;
-        double value=0;
-        for(unsigned i=0;i<=degree[axis]+1;++i) {
-          const double derivative=2*exponent*raised[i]-(n && i<degree[axis]?n*lowered[i]:0.0);
-          for(unsigned j=0;j<=degree[other];++j)
-            for(unsigned k=0;k<=degree[last];++k)
-              value+=derivative*v[j]*w[k]*g.f[i+j+k];
-        }
-        out[center*3+axis]+=weight*g.prefactor*value;
+      const double* raised_a=cache+axis*axis_size+offset(x+1,y,z);
+      const double* base=cache+index[axis];
+      const double displacement=g.pb[axis]-g.pa[axis];
+      const double* lowered_a=x?cache+axis*axis_size+offset(x-1,y,z):raised_a;
+      const double* lowered_b=y?cache+axis*axis_size+offset(x,y-1,z):raised_a;
+      double value_a=0,value_b=0;
+      for(unsigned i=0;i<=degree[axis]+1;++i) {
+        double other_moment=0;
+        for(unsigned j=0;j<=degree[other];++j)
+          for(unsigned k=0;k<=degree[last];++k)
+            other_moment+=v[j]*w[k]*g.f[i+j+k];
+        value_a+=(2*alpha*raised_a[i]-(x && i<degree[axis]?x*lowered_a[i]:0.0))*other_moment;
+        // (r-B)=(r-A)+(A-B); no second raised moment cache is needed.
+        const double raised_b=raised_a[i]+displacement*(i<=degree[axis]?base[i]:0.0);
+        value_b+=(2*beta*raised_b-(y && i<degree[axis]?y*lowered_b[i]:0.0))*other_moment;
       }
+      out[axis]+=weight*g.prefactor*value_a;
+      out[3+axis]+=weight*g.prefactor*value_b;
     }
   }
 };
@@ -171,8 +177,6 @@ struct Moments {
             "    const double sx=g.sx,sy=g.sy,ip=g.ip,iq=g.iq;",
         ]
         for powers, offset in offsets.items():
-            if powers[0] == angular[0] + 1 and powers[1] == angular[1] + 1:
-                continue
             graph, roots = axis_polynomial(*powers)
             emitter = CudaEmitter(graph, {})
             emitter.emit(roots)

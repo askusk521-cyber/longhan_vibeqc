@@ -57,6 +57,24 @@ struct CudaDensityFittingJkPlan {
   double* auxiliary_tile_values{};
   double* exchange_intermediate{};
   double* exchange_contributions{};
+  // Resident occupied K uses one scratch tensor; dense K fits its Q panels
+  // in the other two. The former contribution buffer retains raw A[Q,mu,nu],
+  // including discarded metric directions, from setup until destruction.
+  // Never reuse it as J/K output under the resident exchange policy.
+  bool resident_raw_valid{};
+  bool resident_exchange_enabled{};
+  bool triangular_exchange{};
+  bool flat_dense_exchange{};
+  bool cooperative_diis{};
+  // The prepared HF owner binds the exact immutable host allocations from
+  // which setup copied A. Their vector storage survives moves into/out of the
+  // prepared cache. Standalone tensor callers have no such source lease and
+  // retain upload semantics. No host tensor is copied for this binding.
+  const double* response_host_raw{};
+  const core::Atom *response_orbital_atoms{}, *response_auxiliary_atoms{};
+  const core::Shell *response_orbital_shells{}, *response_auxiliary_shells{};
+  vibeqc_basis_representation response_orbital_representation{},
+      response_auxiliary_representation{};
   double* exchange_tile_output{};
   double* exchange_density_column_major{};
   // Every value plan keeps its forward eigensystem for the spectral force

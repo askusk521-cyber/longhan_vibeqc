@@ -109,7 +109,16 @@ unsigned cuda_density_fitting_scf_diis_history(const CudaDensityFittingJkPlan* p
 }
 
 bool cuda_density_fitting_scf_policy_matches(const CudaDensityFittingJkPlan* plan) noexcept {
+  const char* resident = std::getenv("VIBEQC_DF_RESIDENT_EXCHANGE");
+  const char* diis = std::getenv("VIBEQC_DF_DIIS_DOTS");
   return plan != nullptr &&
+         (!resident || std::strcmp(resident, "auto") == 0 || std::strcmp(resident, "full") == 0 ||
+          std::strcmp(resident, "flat") == 0 || std::strcmp(resident, "legacy") == 0) &&
+         (!diis || std::strcmp(diis, "auto") == 0 || std::strcmp(diis, "serial") == 0) &&
+         plan->resident_exchange_enabled == df_resident_exchange_requested() &&
+         plan->triangular_exchange == df_triangular_exchange_requested() &&
+         plan->flat_dense_exchange == df_flat_dense_exchange_requested() &&
+         plan->cooperative_diis == df_cooperative_diis_requested() &&
          plan->occupied_scf_reserved ==
              df_occupied_exchange_requested(plan->nbf, plan->naux, plan->batch_size);
 }

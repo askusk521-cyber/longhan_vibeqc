@@ -534,6 +534,19 @@ vibeqc_status execute_cuda_df_hf_gradient(
     detail = "invalid borrowed resident DF response tensors";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  if (borrowed && borrowed->resident_raw.data) {
+    const auto& raw = borrowed->resident_raw;
+    if (!raw.owner_identity || raw.data != borrowed->raw_auxiliary_major || raw.nbf != n ||
+        raw.naux != a || raw.auxiliary_stride != n * n || raw.row_stride != n ||
+        raw.column_stride != 1 ||
+        raw.metric.inverse_square_root != device_metric->inverse_square_root ||
+        raw.metric.eigenvectors != device_metric->eigenvectors ||
+        raw.metric.eigenvalues != device_metric->eigenvalues ||
+        raw.metric.relative_threshold != device_metric->relative_threshold) {
+      detail = "resident raw DF view differs from the response shape/layout/metric owner";
+      return VIBEQC_STATUS_INVALID_ARGUMENT;
+    }
+  }
   if (borrowed && borrowed->occupied_response) {
     if (terms.size() > borrowed->occupied_factors.size()) {
       detail = "too many occupied DF response descriptors";
@@ -706,7 +719,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
     const bool automatic_packets =
         primitive_bucket_policy == "auto" && signature_device && full_shell_domain &&
         shell_variant == 2 && a == n && terms.size() == 1 &&
-        ((n == 384 && !borrowed && derivative_pairs == DfDerivativePairs::symmetric) ||
+        ((n == 384 && derivative_pairs == DfDerivativePairs::symmetric) ||
          (n == 768 && packed_default && packed_pairs)) &&
         signature_profile(orbital) && signature_profile(auxiliary);
     const bool signature_packets = primitive_bucket_policy == "packet" || automatic_packets;
@@ -878,11 +891,18 @@ vibeqc_status execute_cuda_df_hf_gradient(
       if (borrowed && (algebra != "blas" || serial_dot || gradient_copies != 1))
         throw std::invalid_argument(
             "resident JK scratch requires BLAS response without serial/scatter probes");
-      if (borrowed) {
+      if (borrowed && !borrowed->resident_raw.data) {
         arena.stats.host_to_device_bytes += raw_a.size_bytes();
         arena.stats.tensor_host_to_device_bytes += raw_a.size_bytes();
         arena.stats.value_slices += a;
         ++arena.stats.uploads;
+      }
+      if (borrowed && borrowed->resident_raw.data) {
+        runtime::cuda_trace::trace_counter("raw_value_upload_bytes", 0);
+        runtime::cuda_trace::trace_counter("raw_value_bulk_uploads", 0);
+        runtime::cuda_trace::trace_counter("raw_value_reused_bytes", n * n * a * sizeof(double));
+        runtime::cuda_trace::trace_counter("raw_value_owner_identity",
+                                           borrowed->resident_raw.owner_identity);
       }
       check(contract_cuda_df_response_weights(
           n, a, terms, densities, *device_metric, consume_tile, workspace, arena.stream,

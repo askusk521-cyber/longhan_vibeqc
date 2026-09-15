@@ -115,8 +115,17 @@ def test_jk_scratch_survives_response_property_and_geometry_replays(
                         assert (
                             counters["response_borrowed_jk_bytes"] == 3 * n * n * a * 8
                         )
-                        assert counters["raw_value_upload_bytes"] == n * n * a * 8
-                        assert counters["raw_value_bulk_uploads"] == 1
+                        # One system retains raw device values in former K
+                        # scratch; batch scratch keeps its explicit upload.
+                        uploads = int(batch_size != 1)
+                        assert (
+                            counters["raw_value_upload_bytes"]
+                            == uploads * n * n * a * 8
+                        )
+                        assert counters["raw_value_bulk_uploads"] == uploads
+                        assert counters.get("raw_value_reused_bytes", 0) == (
+                            (1 - uploads) * n * n * a * 8
+                        )
                         assert counters["response_ao_matrix_products"] == 2 * a * (
                             2 if case.method == "uhf" else 1
                         )
@@ -217,6 +226,8 @@ def test_jk_scratch_rejects_partial_source_plan(monkeypatch):
     ("control", "value"),
     [
         ("VIBEQC_DF_RESPONSE_STORAGE", "invalid"),
+        ("VIBEQC_DF_RAW_REUSE", "invalid"),
+        ("VIBEQC_DF_RESPONSE_BATCHING", "invalid"),
         ("VIBEQC_DF_DERIVATIVE_PAIRS", "invalid"),
         ("VIBEQC_DF_PACKED_AO_BLOCK_ROWS", "0"),
         ("VIBEQC_DF_PRIMITIVE_BUCKETS", "invalid"),
@@ -248,3 +259,79 @@ def test_jk_scratch_rejects_incompatible_controls_and_recovers(
         actual = batch.execute(strict=True).items[0]
         assert actual.energy == pytest.approx(expected.energy, abs=1e-9, rel=0)
         np.testing.assert_allclose(actual.forces, expected.forces, atol=1e-8, rtol=0)
+
+
+@pytest.mark.parametrize("model_change", ["orbital", "auxiliary", "metric"])
+def test_raw_view_binds_model_and_survives_upload_ablation(
+    monkeypatch, tmp_path, model_change
+):
+    """Equal AO dimensions never authorize reuse across a changed model owner.
+
+    Toggle the upload diagnostic on an unchanged owner, then construct another
+    model with the same sizes. Both remain independently checked against CPU
+    analytic forces, and only the second model must receive a new identity.
+    """
+    select_response(monkeypatch, "jk-scratch")
+    atoms = [("H", (0, 0, -0.7)), ("H", (0.1, 0, 0.7))]
+    owners = []
+    for changed in (False, True):
+        basis = [
+            Shell(
+                i,
+                0,
+                (
+                    Primitive(
+                        1.03 if changed and model_change == "orbital" else 1.0, 1.0
+                    ),
+                ),
+            )
+            for i in range(2)
+        ]
+        auxiliary = [
+            Shell(
+                i % 2,
+                0,
+                (
+                    Primitive(
+                        e + (0.03 if changed and model_change == "auxiliary" else 0),
+                        1.0,
+                    ),
+                ),
+            )
+            for i, e in enumerate((0.6, 0.8, 1.1))
+        ]
+        options = {
+            "basis": basis,
+            "auxiliary_basis": auxiliary,
+            "density_fitting_relative_threshold": 1e-7
+            if changed and model_change == "metric"
+            else 1e-10,
+            "energy_tolerance": 1e-12,
+            "density_tolerance": 1e-10,
+            "max_iterations": 100,
+        }
+        expected = Calculator(
+            device="cpu", density_fitting="cpu", **options
+        ).singlepoint(atoms)
+        calc = Calculator(device="cuda", density_fitting="cuda", **options)
+        current_owners = []
+        with calc.prepare_batch([atoms]) as batch:
+            for replay, policy in enumerate(("auto", "off", "auto")):
+                monkeypatch.setenv("VIBEQC_DF_RAW_REUSE", policy)
+                trace = tmp_path / f"model-{changed}-{replay}.jsonl"
+                monkeypatch.setenv("VIBEQC_DF_TRACE", str(trace))
+                actual = batch.execute(strict=True).items[0]
+                assert actual.energy == pytest.approx(expected.energy, abs=1e-9, rel=0)
+                np.testing.assert_allclose(
+                    actual.forces, expected.forces, atol=1e-8, rtol=0
+                )
+                (response,) = [
+                    r for r in read_trace(trace) if r["operation"] == "force_response"
+                ]
+                counters = response["counters"]
+                assert counters["raw_value_bulk_uploads"] == int(policy == "off")
+                if policy == "auto":
+                    current_owners.append(counters["raw_value_owner_identity"])
+        assert current_owners[0] == current_owners[1]
+        owners.append(current_owners[0])
+    assert owners[0] != owners[1]

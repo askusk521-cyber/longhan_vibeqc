@@ -783,6 +783,40 @@ int main() {
               "API range");
     }
     if (cuda_device_available()) {
+      for (std::size_t a : {1U, 2U, 5U}) {
+        // Unequal dimensions and nonsymmetric A/D expose any accidental AO
+        // transpose in the flattened resident contraction. Physical integral
+        // fixtures alone cannot distinguish those layouts.
+        constexpr std::size_t n = 3;
+        std::vector<double> raw(n * n * a), density(n * n), expected(n * n), metric(a * a);
+        for (std::size_t q = 0; q < a; ++q) metric[q * a + q] = 1;
+        for (std::size_t i = 0; i < raw.size(); ++i) raw[i] = std::sin(double(i + 1));
+        for (std::size_t i = 0; i < density.size(); ++i) density[i] = .1 * (i + 1);
+        for (std::size_t mu = 0; mu < n; ++mu)
+          for (std::size_t nu = 0; nu < n; ++nu)
+            for (std::size_t q = 0; q < a; ++q)
+              for (std::size_t i = 0; i < n; ++i)
+                for (std::size_t j = 0; j < n; ++j)
+                  expected[mu * n + nu] +=
+                      raw[(mu * n + i) * a + q] * density[i * n + j] * raw[(nu * n + j) * a + q];
+        vibeqc::scf::CudaDensityFittingJkPlan* pointer{};
+        std::vector<vibeqc::scf::CudaDensityFittingMetricDiagnostic> diagnostic;
+        std::string detail;
+        require(vibeqc::scf::create_cuda_density_fitting_jk_plan(0, 1, n, a, metric, raw, 1e-12, a,
+                                                                 &pointer, diagnostic,
+                                                                 detail) == VIBEQC_STATUS_SUCCESS,
+                detail.c_str());
+        std::unique_ptr<vibeqc::scf::CudaDensityFittingJkPlan,
+                        decltype(&vibeqc::scf::destroy_cuda_density_fitting_jk_plan)>
+            plan(pointer, &vibeqc::scf::destroy_cuda_density_fitting_jk_plan);
+        std::vector<double> coulomb, actual;
+        require(vibeqc::scf::execute_cuda_density_fitting_rhf_jk(plan.get(), density, coulomb,
+                                                                 actual, detail, {false, true}) ==
+                    VIBEQC_STATUS_SUCCESS,
+                detail.c_str());
+        require_matrix_close(actual, expected, 3e-12, "resident nonsymmetric tensor/density K");
+        check_occupied_cuda(plan.get(), 1, n);
+      }
       // The CUDA integral evaluator should reproduce the independent host
       // oracle before any metric factorization or J/K staging occurs.  This
       // exercises both Cartesian recurrence output and first derivatives.
@@ -1350,9 +1384,12 @@ int main() {
           1, orbital.atoms.size(), orbital.shells.size() + auxiliary.shells.size() + 1,
           orbital_cartesian + auxiliary_cartesian + 1, source_primitives,
           source_nbf * orbital_cartesian + source_naux * auxiliary_cartesian);
-      require(
-          source_capacity == vibeqc::scf::cuda_density_fitting_integral_source_device_bytes(source),
-          "shape-only DF source capacity differs from actual owned CUDA uploads");
+      // The shape-only ABI retains a conservative dense/sparse transform bound;
+      // the sparse source need not consume every byte of that reservation.
+      const auto source_bytes =
+          vibeqc::scf::cuda_density_fitting_integral_source_device_bytes(source);
+      require(source_bytes > 0 && source_bytes <= source_capacity,
+              "shape-only DF source capacity underestimates owned CUDA uploads");
       vibeqc::scf::CudaDensityFittingJkPlan* source_raw_plan = nullptr;
       std::vector<vibeqc::scf::CudaDensityFittingMetricDiagnostic> source_diagnostics;
       require(vibeqc::scf::create_cuda_density_fitting_jk_plan_from_source(

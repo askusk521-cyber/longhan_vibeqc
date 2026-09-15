@@ -29,7 +29,19 @@ from .resources import (
     plan_resources,
 )
 
-# These runtime switches are read by scf/cuda/rhf_policy.cpp. Preserve even
+# Newly tracked controls may be absent from earlier schema-1 checkpoints.
+# Preserve that distinction in restart provenance; absence is not a claim
+# that an older build implemented today's automatic execution policy.
+_CUDA_SCHEDULE_EXTENSION_VARIABLES = (
+    "VIBEQC_DF_RESIDENT_EXCHANGE",
+    "VIBEQC_DF_RAW_REUSE",
+    "VIBEQC_DF_RESPONSE_BATCHING",
+    "VIBEQC_DF_DIIS_DOTS",
+    "VIBEQC_DF_RESPONSE_STORAGE",
+    "VIBEQC_DF_RESPONSE_SPACE",
+)
+
+# These runtime switches are read by CUDA HF/DF policy code. Preserve even
 # switches dormant for a small shape: a prepared resource identity must not
 # silently accept a different arithmetic, profiling or scheduling policy.
 _CUDA_SCHEDULE_VARIABLES = (
@@ -65,6 +77,7 @@ _CUDA_SCHEDULE_VARIABLES = (
     "VIBEQC_DF_RESPONSE_ALGEBRA",
     "VIBEQC_DF_RAW_STAGING",
     "VIBEQC_DF_EXCHANGE",
+    *_CUDA_SCHEDULE_EXTENSION_VARIABLES,
 )
 
 

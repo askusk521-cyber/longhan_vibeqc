@@ -27,7 +27,7 @@ from . import _native
 from .accuracy import ResolvedModel, TargetAccuracy
 from .calculator import Atom
 from .profiles import canonical_hash
-from .resources_hf import _CUDA_SCHEDULE_VARIABLES
+from .resources_hf import _CUDA_SCHEDULE_EXTENSION_VARIABLES, _CUDA_SCHEDULE_VARIABLES
 
 _MAGIC = b"VQHFCP01"
 _HEADER = struct.Struct("<8sQ32s")
@@ -148,7 +148,17 @@ def _validate_controls(controls):
     ):
         raise CheckpointError("invalid source precision policy")
     policy = controls["runtime_policy"]
-    _keys(policy, " ".join(_CUDA_SCHEDULE_VARIABLES), "runtime policy")
+    # Older schema-1 files predate the added DF controls. Keep their missing
+    # fields as source provenance, so exact restart remains conservative and
+    # allow_warm can still import their density. Unknown fields and missing
+    # original controls remain corruption rather than silently defaulting.
+    known = set(_CUDA_SCHEDULE_VARIABLES)
+    if (
+        not isinstance(policy, dict)
+        or set(policy) - known
+        or known - set(policy) - set(_CUDA_SCHEDULE_EXTENSION_VARIABLES)
+    ):
+        raise CheckpointError("unknown or missing required runtime policy fields")
     if any(
         value is not None and not isinstance(value, str) for value in policy.values()
     ):

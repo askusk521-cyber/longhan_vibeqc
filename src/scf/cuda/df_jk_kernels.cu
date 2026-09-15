@@ -14,6 +14,18 @@
 
 namespace vibeqc::scf::cuda_df {
 
+__global__ void mirror_exchange_triangle(std::size_t n, double* matrix) {
+  const auto k = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
+  if (k >= n * n) return;
+  const auto i = k % n, j = k / n;
+  if (i > j) matrix[j + i * n] = matrix[k];
+}
+
+void launch_mirror_exchange_triangle(dim3 grid, dim3 block, cudaStream_t stream, std::size_t n,
+                                     double* matrix) {
+  mirror_exchange_triangle<<<grid, block, 0, stream>>>(n, matrix);
+}
+
 // Existing DF arithmetic and reduction order; host orchestration compiles separately.
 __global__ void sum_spin_density_kernel(std::size_t elements, const double* alpha,
                                         const double* beta, double* total) {
@@ -88,14 +100,18 @@ __global__ void build_streamed_coulomb_tile_kernel(std::size_t pair_count,
 
 __global__ void reduce_exchange_tile_kernel(std::size_t matrix_elements,
                                             std::size_t auxiliary_count, std::size_t system,
-                                            const double* contributions, double* exchange) {
+                                            const double* contributions, double* exchange,
+                                            bool continue_sum) {
   const std::size_t element = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (element >= matrix_elements) return;
-  double value = 0.0;
+  auto& output = exchange[system * matrix_elements + element];
+  // Resident panels split storage, not the reduction: continue the running
+  // Q sum so the original full-tensor addition order survives each boundary.
+  double value = continue_sum ? output : 0.0;
   for (std::size_t auxiliary = 0; auxiliary < auxiliary_count; ++auxiliary) {
     value += contributions[auxiliary * matrix_elements + element];
   }
-  exchange[system * matrix_elements + element] += value;
+  output = continue_sum ? value : output + value;
 }
 
 __global__ void reduce_exchange_row_tile_kernel(std::size_t nbf, std::size_t row_begin,
@@ -161,9 +177,10 @@ void launch_build_streamed_coulomb_tile_kernel(dim3 grid, dim3 block, std::size_
 void launch_reduce_exchange_tile_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
                                         cudaStream_t stream, std::size_t matrix_elements,
                                         std::size_t auxiliary_count, std::size_t system,
-                                        const double* contributions, double* exchange) {
+                                        const double* contributions, double* exchange,
+                                        bool continue_sum) {
   reduce_exchange_tile_kernel<<<grid, block, shared_bytes, stream>>>(
-      matrix_elements, auxiliary_count, system, contributions, exchange);
+      matrix_elements, auxiliary_count, system, contributions, exchange, continue_sum);
 }
 void launch_reduce_exchange_row_tile_kernel(dim3 grid, dim3 block, std::size_t shared_bytes,
                                             cudaStream_t stream, std::size_t nbf,

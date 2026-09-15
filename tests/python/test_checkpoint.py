@@ -581,3 +581,40 @@ def test_runtime_numerical_policy_changes_require_explicit_warm_restart(
         target.save_checkpoint(tmp_path / "reexport")
     source = inspect_checkpoint(tmp_path / "reexport").items[0]
     assert source["controls"]["runtime_policy"][variable] is None
+
+
+def test_older_checkpoint_without_new_df_controls_keeps_source_provenance(tmp_path):
+    """Adding execution controls must not make valid historical seeds corrupt."""
+    from vibeqc.resources_hf import _CUDA_SCHEDULE_EXTENSION_VARIABLES
+
+    path = tmp_path / "older-state"
+    expected = save(path).items[0]
+
+    def remove_extensions(document):
+        policy = document["items"][0]["controls"]["runtime_policy"]
+        for name in _CUDA_SCHEDULE_EXTENSION_VARIABLES:
+            del policy[name]
+
+    rewrite(path, mutate_manifest=remove_extensions)
+    assert inspect_checkpoint(path).items[0]["seed"] is not None
+    with calc().prepare_batch([H2]) as target:
+        with pytest.raises(CheckpointError, match="numerical controls"):
+            target.load_checkpoint(path)
+        report = target.load_checkpoint(path, allow_warm=True)
+        assert report["items"][0]["compatibility"] == "warm_start_compatible"
+        target.save_checkpoint(tmp_path / "reexport")
+        actual = target.execute(strict=True).items[0]
+    assert actual.energy == pytest.approx(expected.energy, abs=2e-10)
+    source = inspect_checkpoint(tmp_path / "reexport").items[0]
+    assert not set(source["controls"]["runtime_policy"]) & set(
+        _CUDA_SCHEDULE_EXTENSION_VARIABLES
+    )
+
+    rewrite(
+        path,
+        mutate_manifest=lambda d: d["items"][0]["controls"]["runtime_policy"].pop(
+            "VIBEQC_DF_EXCHANGE"
+        ),
+    )
+    with pytest.raises(CheckpointError, match="runtime policy"):
+        inspect_checkpoint(path)
