@@ -1,5 +1,9 @@
 # Decision: separate stationary DFT state from generated XC geometry partials
 
+The state-authorization and #163-A completion claims below are superseded by
+[the native handoff decision](2026-09-16-stationary-native-handoff.md). The
+fixed-density oracle rationale remains applicable.
+
 Status: implemented
 Date: 2026-09-15
 

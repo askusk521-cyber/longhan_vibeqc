@@ -20,8 +20,9 @@ pytestmark = pytest.mark.skipif(
     [("rhf", 1, ("H", "H")), ("uhf", 3, ("H", "H")), ("uhf", 2, ("O", "H"))],
 )
 @pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("pairs", ["generic", "full", "packed"])
 def test_occupied_response_replay_and_zero_rank_spin(
-    monkeypatch, tmp_path, method, multiplicity, elements, batch_size
+    monkeypatch, tmp_path, method, multiplicity, elements, batch_size, pairs
 ):
     """Independent forces, changed geometry, rank-zero beta and dense fallback."""
     from pyscf import gto, scf
@@ -29,6 +30,15 @@ def test_occupied_response_replay_and_zero_rank_spin(
     assert os.environ.get("SLURM_JOB_ID")
     monkeypatch.setenv("VIBEQC_DF_EXCHANGE", "occupied")
     monkeypatch.setenv("VIBEQC_DF_RESPONSE_STORAGE", "jk-scratch")
+    monkeypatch.setenv(
+        "VIBEQC_DF_WEIGHTED_EXECUTION", "generic" if pairs == "generic" else "shell"
+    )
+    monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", "compact")
+    monkeypatch.setenv("VIBEQC_DF_PRIMITIVE_BUCKETS", "packet")
+    monkeypatch.setenv(
+        "VIBEQC_DF_DERIVATIVE_PAIRS", "full" if pairs == "generic" else pairs
+    )
+    monkeypatch.setenv("VIBEQC_DF_SHELL_COUNTERS", "1")
     atoms = [(elements[0], (0.0, 0.0, -0.7)), (elements[1], (0.1, 0.0, 0.7))]
     if elements == ("O", "H"):
         # Reuse the independently qualified open-shell geometry and explicitly
@@ -96,13 +106,80 @@ def test_occupied_response_replay_and_zero_rank_spin(
                 if space == "occupied" and not rebuild:
                     assert counters["response_occupied_projection_products"] > 0
                     n, a = response["nbf"], response["naux"]
+                    stride = n * (n + 1) // 2 if pairs == "packed" else n * n
                     assert counters["response_pseudo_density_peak_elements"] == (
-                        min(a, 64) * n * n
+                        min(a, 64) * stride
                     )
                     assert counters["response_full_weight_tensor_elements"] == (
-                        a * n * n if a <= 64 else 0
+                        a * n * n if a <= 64 and pairs != "packed" else 0
                     )
+                    assert counters["response_packed_pairs"] == int(pairs == "packed")
+                    if pairs == "packed":
+                        assert counters["response_dense_weight_panel_elements"] == 0
+                        assert counters["shell_public_weights_consumed"] == a * stride
+                        assert counters["three_center_derivative_weights"] == a * stride
+                        assert (
+                            counters["three_center_derivative_weight_bytes"]
+                            == a * stride * 8
+                        )
                     assert not counters.get("response_ao_matrix_products", 0)
                 else:
                     assert not counters.get("response_occupied_projection_products", 0)
                     assert counters["response_ao_matrix_products"] > 0
+
+
+def test_packed_response_crosses_ao_blocks_and_auxiliary_panels(monkeypatch, tmp_path):
+    """A 96-AO oracle covers the ragged second GEMM block and two packed panels.
+
+    Smaller molecular fixtures fit in a single AO block and cannot detect a
+    wrong row offset or leading dimension in the direct triangular producer.
+    """
+    from pyscf import gto, scf
+
+    assert os.environ.get("SLURM_JOB_ID")
+    case = benchmark_cases()["water-tetramer-def2-svp-spherical"]
+    mol = gto.M(atom=case.atoms, unit="Bohr", basis="def2-svp", verbose=0)
+    reference = scf.RHF(mol).density_fit(auxbasis="def2-svp")
+    reference.conv_tol, reference.conv_tol_grad, reference.max_cycle = 1e-12, 1e-10, 100
+    reference.kernel()
+    assert reference.converged
+    expected = -reference.nuc_grad_method().kernel()
+    monkeypatch.setenv("VIBEQC_DF_EXCHANGE", "occupied")
+    monkeypatch.setenv("VIBEQC_DF_RESPONSE_STORAGE", "jk-scratch")
+    monkeypatch.setenv("VIBEQC_DF_RESPONSE_SPACE", "occupied")
+    monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", "shell")
+    monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", "compact")
+    monkeypatch.setenv("VIBEQC_DF_PRIMITIVE_BUCKETS", "packet")
+    monkeypatch.setenv("VIBEQC_DF_DERIVATIVE_PAIRS", "packed")
+    monkeypatch.setenv("VIBEQC_DF_PACKED_AO_BLOCK_ROWS", "64")
+    monkeypatch.setenv("VIBEQC_DF_SHELL_COUNTERS", "1")
+    calc = Calculator(
+        method="rhf",
+        basis="def2-svp",
+        basis_representation="spherical",
+        device="cuda",
+        density_fitting="cuda",
+        energy_tolerance=1e-12,
+        density_tolerance=1e-10,
+        max_iterations=100,
+    )
+    with calc.prepare_batch([case.atoms]) as batch:
+        batch.execute(strict=True)
+        trace = tmp_path / "packed-panels.jsonl"
+        monkeypatch.setenv("VIBEQC_DF_TRACE", str(trace))
+        actual = batch.execute(strict=True).items[0]
+        assert actual.energy == pytest.approx(reference.e_tot, abs=1e-9, rel=0)
+        np.testing.assert_allclose(actual.forces, expected, atol=1e-8, rtol=0)
+    (response,) = [r for r in read_trace(trace) if r["operation"] == "force_response"]
+    c = response["counters"]
+    assert c["response_packed_pairs"] == 1
+    assert c["response_auxiliary_blocks"] == 2
+    assert c["response_dense_weight_panel_elements"] == 0
+    assert c["response_full_weight_tensor_elements"] == 0
+    assert c["response_pseudo_density_peak_elements"] == 64 * (96 * 97 // 2)
+    assert c["three_center_derivative_weights"] == 96 * (96 * 97 // 2)
+    assert c["shell_public_weights_consumed"] == c["three_center_derivative_weights"]
+    assert c["shell_triples_visited"] == (48 * 49 // 2) * 48
+    # These include the small unused upper triangles of diagonal blocks.
+    assert c["response_pseudo_density_rectangular_elements"] == 96 * (64 * 64 + 32 * 96)
+    assert c["response_pseudo_density_block_peak_elements"] == 64 * 64

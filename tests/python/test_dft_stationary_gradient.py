@@ -7,6 +7,7 @@ from vibeqc._dft_gradient import (
     StationaryDerivativeContract,
     StationaryKsIdentity,
     StationaryKsState,
+    _fixed_density_xc_geometry,
     bind_generated_xc_geometry,
     native_ao_geometry_identity,
     xc_geometry_topology_identity,
@@ -40,10 +41,11 @@ def identity(method="pbe-rks"):
     )
 
 
-def state(method="pbe-rks", occupations=None):
+def state(method="pbe-rks", occupations=None, overlap=None):
     spins = 1 if method.endswith("rks") else 2
-    overlap = np.diag([1.0, 2.0])
-    coefficients = np.diag([1.0, 1 / np.sqrt(2.0)])
+    overlap = np.diag([1.0, 2.0]) if overlap is None else overlap
+    eigenvalues, vectors = np.linalg.eigh(overlap)
+    coefficients = (vectors / np.sqrt(eigenvalues)) @ vectors.T
     energies = np.array([[-0.8, 0.5]] * spins)
     if occupations is None:
         occupations = (
@@ -83,10 +85,15 @@ def state(method="pbe-rks", occupations=None):
 
 def bound_h2(method, name, spin, *, occupations=None):
     spec = functional(name, spin=spin)
-    value = state(method, occupations=occupations)
     meta, _, grid = load_integration_fixture("h2")
     args = basis_arguments(meta)
     with NativeAO(**args) as basis:
+        # This is a manufactured fixed-density algebra fixture, not a solved
+        # KS state. Use the true H2 metric nonetheless, so the oracle never
+        # contracts matrices relabeled from a different AO space.
+        from tools.vibeqc_validation.dft_gradient import h2_overlap
+
+        value = state(method, occupations=occupations, overlap=h2_overlap(basis))
         value = replace(
             value,
             identity=replace(
@@ -99,7 +106,7 @@ def bound_h2(method, name, spin, *, occupations=None):
                 regularization_identity=xc_regularization_identity(spec),
             ),
         )
-        bound = bind_generated_xc_geometry(
+        bound = _fixed_density_xc_geometry(
             StationaryDerivativeContract(value.identity), value, spec, basis, grid
         )
         natom = basis.natom
@@ -115,7 +122,7 @@ def test_stationary_contract_accepts_consistent_rks_and_uks(method):
     )
     contract = StationaryDerivativeContract(value.identity)
 
-    assert contract.validate(value) is value
+    assert contract._validate_arrays(value) is value
     assert contract.spin == ("unpolarized" if method.endswith("rks") else "polarized")
     assert contract.family == ("lda" if method.startswith("lda") else "gga")
     assert contract.to_payload()["force_capability"] == "unsupported"
@@ -148,14 +155,14 @@ def test_stationary_contract_rejects_every_stale_identity_axis(field):
     stale = replace(value, identity=replace(value.identity, **{field: changed}))
 
     with pytest.raises(ValueError, match="identity mismatch"):
-        StationaryDerivativeContract(value.identity).validate(stale)
+        StationaryDerivativeContract(value.identity)._validate_arrays(stale)
 
 
 @pytest.mark.parametrize("flag", ["successful", "converged", "physical"])
 def test_stationary_contract_rejects_unsuccessful_state(flag):
     value = state()
     with pytest.raises(ValueError, match="successful converged physical"):
-        StationaryDerivativeContract(value.identity).validate(
+        StationaryDerivativeContract(value.identity)._validate_arrays(
             replace(value, **{flag: False})
         )
 
@@ -174,7 +181,7 @@ def test_stationary_contract_rejects_inconsistent_orbital_state(field, delta, me
     changed = np.array(getattr(value, field), copy=True)
     changed[0, 0, 0] += delta
     with pytest.raises(ValueError, match=message):
-        StationaryDerivativeContract(value.identity).validate(
+        StationaryDerivativeContract(value.identity)._validate_arrays(
             replace(value, **{field: changed})
         )
 
@@ -182,12 +189,16 @@ def test_stationary_contract_rejects_inconsistent_orbital_state(field, delta, me
 def test_stationary_contract_requires_weighted_density_and_true_residual():
     value = state()
     with pytest.raises(ValueError, match="weighted density"):
-        StationaryDerivativeContract(value.identity).validate(
+        StationaryDerivativeContract(value.identity)._validate_arrays(
             replace(value, weighted_density=np.empty((0, 2, 2)))
         )
     with pytest.raises(ValueError, match="physical residual"):
-        StationaryDerivativeContract(value.identity).validate(
+        StationaryDerivativeContract(value.identity)._validate_arrays(
             replace(value, physical_residual=1e-5)
+        )
+    with pytest.raises(ValueError, match="physical residual"):
+        StationaryDerivativeContract(value.identity)._validate_arrays(
+            replace(value, physical_residual=-1e-10)
         )
 
 
@@ -256,7 +267,7 @@ def test_generated_xc_binding_rejects_actual_source_or_method_mismatch():
             identity=dc_replace(value.identity, basis_identity="stale-basis"),
         )
         with pytest.raises(ValueError, match="basis identity"):
-            bind_generated_xc_geometry(
+            _fixed_density_xc_geometry(
                 StationaryDerivativeContract(stale.identity), stale, spec, basis, grid
             )
 
@@ -267,7 +278,7 @@ def test_generated_xc_binding_rejects_actual_source_or_method_mismatch():
             ),
         )
         with pytest.raises(ValueError, match="regularization identity"):
-            bind_generated_xc_geometry(
+            _fixed_density_xc_geometry(
                 StationaryDerivativeContract(stale_regularization.identity),
                 stale_regularization,
                 spec,
@@ -282,7 +293,7 @@ def test_generated_xc_binding_rejects_actual_source_or_method_mismatch():
             identity=dc_replace(value.identity, functional_identity=wrong.identity),
         )
         with pytest.raises(ValueError, match="canonical PBE"):
-            bind_generated_xc_geometry(
+            _fixed_density_xc_geometry(
                 StationaryDerivativeContract(relabeled.identity),
                 relabeled,
                 wrong,
@@ -311,7 +322,7 @@ def test_generated_xc_binding_rejects_out_of_range_grid_owner():
             ),
         )
         with pytest.raises(ValueError, match="grid owner"):
-            bind_generated_xc_geometry(
+            _fixed_density_xc_geometry(
                 StationaryDerivativeContract(relabeled.identity),
                 relabeled,
                 spec,
@@ -374,9 +385,9 @@ def test_generated_xc_geometry_rejects_stale_invalid_or_changing_motion(
         identity=replace(value.identity, functional_identity=spec.identity),
     )
     partials = GeometryPartials(np.zeros((2, 3)), np.zeros((3, 3)), np.zeros(3))
-    from vibeqc._dft_gradient import GeneratedXcGeometry
+    from vibeqc._dft_gradient import FixedDensityXcGeometry
 
-    bound = GeneratedXcGeometry(
+    bound = FixedDensityXcGeometry(
         state_identity=value.identity,
         discrete_contract_identity="generated-contract",
         basis_identity=value.identity.basis_identity,
@@ -401,12 +412,12 @@ def test_generated_xc_geometry_rejects_stale_invalid_or_changing_motion(
 
 
 def test_generated_xc_geometry_owns_read_only_partial_arrays():
-    from vibeqc._dft_gradient import GeneratedXcGeometry
+    from vibeqc._dft_gradient import FixedDensityXcGeometry
     from vibeqc_compiler.xc.contractions import GeometryPartials
 
     value = state()
     centers = np.zeros((2, 3))
-    bound = GeneratedXcGeometry(
+    bound = FixedDensityXcGeometry(
         state_identity=value.identity,
         discrete_contract_identity="generated-contract",
         basis_identity=value.identity.basis_identity,
@@ -506,3 +517,24 @@ def test_stationary_xc_oracle_detects_omission_and_sign_reversal():
     ):
         assert abs(oracle.stable_estimate - omitted) > 1e-7
     assert abs(oracle.stable_estimate + components.total) > 1e-7
+
+
+def test_manufactured_state_cannot_authorize_stationary_derivatives():
+    value = state()
+    with pytest.raises(ValueError, match="current native #162 snapshot"):
+        StationaryDerivativeContract(value.identity).validate(value)
+    spec, value, args, grid, _, _, _ = bound_h2("pbe-rks", "PBE", "unpolarized")
+    with (
+        NativeAO(**args) as basis,
+        pytest.raises(ValueError, match="current native #162 snapshot"),
+    ):
+        bind_generated_xc_geometry(
+            StationaryDerivativeContract(value.identity), value, spec, basis, grid
+        )
+
+
+def test_finite_xc_components_cannot_publish_an_overflowed_total():
+    from vibeqc._dft_gradient import XcDirectionalComponents
+
+    with pytest.raises(ArithmeticError, match="nonfinite total"):
+        _ = XcDirectionalComponents(1e308, 1e308, 0.0).total

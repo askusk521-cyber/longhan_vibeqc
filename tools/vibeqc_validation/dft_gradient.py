@@ -15,6 +15,40 @@ from vibeqc_compiler.xc.contractions import ContractionProgram
 from vibeqc_compiler.xc.spec import FunctionalSpec
 
 
+def h2_overlap(basis):
+    """Analytic s-Gaussian metric for the two-AO H2 diagnostic fixture only.
+
+    Integrate the actual normalized packed primitives; no SCF state or
+    stationarity is manufactured by this independent overlap check.
+    """
+    if (
+        basis.nao != 2
+        or basis.natom != 2
+        or any(s.angular_momentum for s in basis.shells)
+    ):
+        raise ValueError("H2 overlap oracle requires two s AOs")
+    primitives = basis.packed[6 : 6 + 2 * basis.nprimitive].reshape(-1, 2)
+    records = basis.packed[6 + 2 * basis.nprimitive :].reshape(2, 16)
+    centers = basis.packed[:6].reshape(2, 3)
+    result = np.empty((2, 2))
+    for i, left in enumerate(records):
+        for j, right in enumerate(records):
+            distance = np.sum((centers[int(left[0])] - centers[int(right[0])]) ** 2)
+            result[i, j] = (
+                sum(
+                    ca
+                    * cb
+                    * (np.pi / (a + b)) ** 1.5
+                    * np.exp(-a * b / (a + b) * distance)
+                    for a, ca in primitives[int(left[1]) : int(left[1] + left[2])]
+                    for b, cb in primitives[int(right[1]) : int(right[1] + right[2])]
+                )
+                * left[7]
+                * right[7]
+            )
+    return result
+
+
 @dataclass(frozen=True)
 class DirectionalFiniteDifference:
     """Multistep central differences and their most stable adjacent region."""

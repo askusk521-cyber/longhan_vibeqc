@@ -1,5 +1,12 @@
 # Issue 163-A stationary DFT derivative design
 
+Implementation status: the native state/source handoff and fixed-density oracle
+are available. Stationary generated XC binding remains unsupported because the
+native SCF and generated derivative domains differ; see
+[current method behavior](../../methods.md) and the
+[native handoff decision](../../../.agents/notes/implemented/numerics/2026-09-16-stationary-native-handoff.md).
+The full A-slice scope below remains the target.
+
 ## Scope
 
 Deliver the Issue #163 A slice: a typed stationary LDA/GGA derivative contract,

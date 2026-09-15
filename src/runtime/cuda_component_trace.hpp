@@ -42,6 +42,7 @@ class TraceOperation {
   std::unique_ptr<State> state_;
   friend class TraceRegion;
   friend void trace_counter(const char*, std::uint64_t) noexcept;
+  friend void trace_maximum(const char*, std::uint64_t) noexcept;
   friend void trace_tile(std::size_t, std::size_t, std::size_t, std::size_t, std::size_t,
                          std::int64_t, bool) noexcept;
   static thread_local State* active_;
@@ -49,7 +50,8 @@ class TraceOperation {
 
 /** Nested component on the active operation's stream, with inclusive timings.
  * The ledger records parent indices so aggregation can subtract immediate
- * children without double counting. finish() permits an allocation/transfer
+ * children without double counting. Labels are copied only when tracing is
+ * active, so callers may use temporary signature names. finish() permits an allocation/transfer
  * phase to end while its buffers remain in the original lexical scope.
  */
 class TraceRegion {
@@ -72,8 +74,11 @@ decltype(auto) trace_call(const char* name, cudaStream_t stream, Function&& func
   return function();
 }
 
-/** Semantic work counts, collected only under an enabled operation. */
+/** Semantic work counts; an enabled operation owns a copy of the label. */
 void trace_counter(const char* name, std::uint64_t count) noexcept;
+
+/** Retain a per-operation maximum, e.g. a launch resource limit, rather than a sum. */
+void trace_maximum(const char* name, std::uint64_t value) noexcept;
 
 /** Count production of one logical public-basis tile, before its launch.
  * Identical ranges share a key across Coulomb passes and exchange row/column

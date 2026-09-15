@@ -66,7 +66,9 @@ void pop_range() {
 
 struct TraceOperation::State {
   struct Region {
-    const char* name{};
+    // Signature labels may be formatted in a launch wrapper; retain them
+    // until the outer operation writes its deferred trace record.
+    std::string name;
     std::int64_t parent{-1};
     Clock::time_point begin{}, end{};
     cudaEvent_t first{}, last{};
@@ -88,7 +90,7 @@ struct TraceOperation::State {
   std::size_t dropped_regions{}, dropped_tiles{};
   std::vector<Region> regions;
   std::map<Tile, std::uint64_t> tiles;
-  std::map<std::string_view, std::uint64_t> counters;
+  std::map<std::string, std::uint64_t> counters;
 
   void check(cudaError_t error) noexcept {
     if (error != cudaSuccess) {
@@ -303,6 +305,18 @@ void trace_counter(const char* name, std::uint64_t count) noexcept {
       active->invalid = true;
     else
       value += count;
+  } catch (...) {
+    active->invalid = true;
+  }
+}
+
+void trace_maximum(const char* name, std::uint64_t observed) noexcept {
+  df_progress::number(name, observed);
+  auto* active = TraceOperation::active_;
+  if (!active) return;
+  try {
+    auto& value = active->counters[name];
+    if (observed > value) value = observed;
   } catch (...) {
     active->invalid = true;
   }

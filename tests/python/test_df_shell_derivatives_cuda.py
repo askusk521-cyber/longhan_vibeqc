@@ -14,6 +14,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.parametrize("buckets", ["off", "on", "packet"])
 @pytest.mark.parametrize("method", ["rhf", "uhf"])
 @pytest.mark.parametrize("representation", ["cartesian", "spherical"])
 @pytest.mark.parametrize("schedule", ["warp", "packed", "compact"])
@@ -21,7 +22,7 @@ pytestmark = pytest.mark.skipif(
     "algebra,staging", [("scalar", "pageable"), ("blas", "pinned-panels")]
 )
 def test_shell_execution_and_return_to_generic(
-    method, representation, schedule, algebra, staging, monkeypatch, tmp_path
+    buckets, method, representation, schedule, algebra, staging, monkeypatch, tmp_path
 ):
     """Independent complete gradients and counters exclude a silent generic replay.
 
@@ -65,12 +66,22 @@ def test_shell_execution_and_return_to_generic(
     )
     monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", "generic")
     monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", schedule)
+    monkeypatch.setenv("VIBEQC_DF_PRIMITIVE_BUCKETS", buckets)
     monkeypatch.setenv("VIBEQC_DF_RESPONSE_ALGEBRA", algebra)
     monkeypatch.setenv("VIBEQC_DF_RAW_STAGING", staging)
     with calc.prepare_batch([atoms], multiplicities=[spin + 1]) as owner:
         owner.execute(properties=("energy", "forces"), strict=True)
-        for index, route in enumerate(("generic", "shell-sp", "shell", "generic")):
+        routes = [
+            ("generic", "full"),
+            ("shell-sp", "full"),
+            ("shell-sp", "symmetric"),
+            ("shell", "full"),
+            ("shell", "symmetric"),
+            ("generic", "full"),
+        ]
+        for index, (route, pairs) in enumerate(routes):
             monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", route)
+            monkeypatch.setenv("VIBEQC_DF_DERIVATIVE_PAIRS", pairs)
             monkeypatch.setenv("VIBEQC_DF_SHELL_COUNTERS", "1")
             trace = tmp_path / f"response-{index}.jsonl"
             monkeypatch.setenv("VIBEQC_DF_TRACE", str(trace))
@@ -93,6 +104,29 @@ def test_shell_execution_and_return_to_generic(
                 )
             if route != "generic":
                 assert counters["three_center_shell_panels"] > 0
+                signature_keys = {
+                    key
+                    for key in counters
+                    if key.startswith("shell_") and key[6:9].isdigit() and "_p" in key
+                }
+                # Dynamic trace labels must survive each launch wrapper's stack
+                # and preserve every signature until the deferred trace write.
+                assert signature_keys
+                assert (
+                    sum(counters[key] for key in signature_keys)
+                    == counters["shell_triples_visited"]
+                )
+                if buckets != "packet":
+                    assert signature_keys <= {r["name"] for r in record["regions"]}
+                else:
+                    assert any(r["name"].endswith("_packet") for r in record["regions"])
+                assert counters["shell_resource_values_are_maxima"] == 1
+                registers = [
+                    value
+                    for key, value in counters.items()
+                    if key.startswith("shell_") and key.endswith("_registers")
+                ]
+                assert registers and all(0 < value <= 255 for value in registers)
                 assert (
                     0
                     < counters["shell_triples_nonzero"]
@@ -107,7 +141,16 @@ def test_shell_execution_and_return_to_generic(
                     < counters["shell_primitive_products"]
                     < counters["shell_cartesian_component_products"]
                 )
+                if route == "shell":
+                    ns = mol.nbas
+                    logical = ns * ns if pairs == "full" else ns * (ns + 1) // 2
+                    assert counters["shell_pairs_logical"] == logical
+                    assert counters["shell_triples_visited"] == logical * ns
+                    # Slice A folds the two dense loads; it reduces primitive
+                    # work while retaining the complete dense weight contract.
+                    assert counters["shell_public_weights_consumed"] == mol.nao**3
             else:
                 assert "shell_triples_visited" not in counters
             policy = owner._warm_metadata[0]["controls"]["runtime_policy"]
             assert policy["VIBEQC_DF_WEIGHTED_EXECUTION"] == route
+            assert policy["VIBEQC_DF_PRIMITIVE_BUCKETS"] == buckets

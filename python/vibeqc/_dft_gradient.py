@@ -17,7 +17,7 @@ from vibeqc_compiler.xc.spec import FunctionalSpec
 from vibeqc_compiler.xc.spec import functional as canonical_functional
 
 _METHODS = ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks")
-_ARRAY_TOLERANCE = 2e-10
+_ARRAY_TOLERANCE = 1e-8  # Match the absolute canonicality cap of the #162 handoff.
 _RESIDUAL_TOLERANCE = 1e-8
 
 
@@ -76,7 +76,11 @@ class StationaryKsIdentity:
 
 @dataclass(frozen=True, eq=False)
 class StationaryKsState:
-    """Detached physical KS state required by a stationary first derivative."""
+    """Detached KS arrays; only ``from_native`` supplies current-owner proof.
+
+    Direct construction is useful for numerical diagnostics and negative tests.
+    It does not authorize a stationary derivative, even with consistent arrays.
+    """
 
     identity: StationaryKsIdentity
     density: np.ndarray
@@ -90,6 +94,37 @@ class StationaryKsState:
     successful: bool
     converged: bool
     physical: bool
+    _source: object = field(default=None, repr=False)
+
+    @classmethod
+    def from_native(cls, batch, basis, grid=None, *, index=0):
+        """Read the actual current #162 state and verify its AO/grid sources.
+
+        CPU plans have no #162 handoff and fail explicitly. Native SCF keeps
+        its own regularization identity; generated interior-only XC geometry
+        remains unsupported for that model until the domains are reconciled.
+        """
+        from ._ks_snapshot import NativeKsSnapshot
+
+        if not isinstance(basis, NativeAO) or (
+            grid is not None and not isinstance(grid, ExplicitGrid)
+        ):
+            raise TypeError("stationary snapshot requires NativeAO and ExplicitGrid")
+        source = NativeKsSnapshot(batch, index)
+        try:
+            state = cls(**source.decode(basis, grid))
+            StationaryDerivativeContract(state.identity).validate(state)
+            return state
+        except Exception:
+            source.close()
+            raise
+
+    @property
+    def grid(self):
+        """The exact native quadrature, retained independently of batch replay."""
+        if self._source is None:
+            raise ValueError("state has no native quadrature source")
+        return self._source.grid
 
     def __post_init__(self):
         if not isinstance(self.identity, StationaryKsIdentity):
@@ -159,7 +194,19 @@ class StationaryDerivativeContract:
         }
 
     def validate(self, state):
-        """Return the exact accepted state; never repair or substitute it."""
+        """Require both numerical consistency and the live native #162 proof."""
+        from ._ks_snapshot import NativeKsSnapshot
+
+        self._validate_arrays(state)
+        if type(state._source) is not NativeKsSnapshot:
+            raise ValueError(
+                "stationary derivatives require a current native #162 snapshot"
+            )
+        state._source.validate(state)
+        return state
+
+    def _validate_arrays(self, state):
+        """Check array algebra only; this diagnostic never proves stationarity."""
         if not isinstance(state, StationaryKsState):
             raise TypeError("expected a stationary KS state")
         if state.identity != self.state_identity:
@@ -170,7 +217,7 @@ class StationaryDerivativeContract:
             )
         if (
             not np.isfinite(state.physical_residual)
-            or abs(state.physical_residual) > _RESIDUAL_TOLERANCE
+            or not 0 <= state.physical_residual <= _RESIDUAL_TOLERANCE
         ):
             raise ValueError("physical residual exceeds the stationary derivative gate")
 
@@ -245,12 +292,15 @@ class XcDirectionalComponents:
 
     @property
     def total(self):
-        return self.center + self.point + self.weight
+        total = self.center + self.point + self.weight
+        if not np.isfinite(total):
+            raise ArithmeticError("nonfinite total XC directional gradient")
+        return total
 
 
 @dataclass(frozen=True, eq=False)
-class GeneratedXcGeometry:
-    """Generated fixed-density XC partials bound to one stationary KS state."""
+class FixedDensityXcGeometry:
+    """Generated fixed-density diagnostic partials, without stationarity proof."""
 
     state_identity: StationaryKsIdentity
     discrete_contract_identity: str
@@ -342,6 +392,28 @@ class GeneratedXcGeometry:
         return XcDirectionalComponents(*components)
 
 
+@dataclass(frozen=True, eq=False)
+class GeneratedXcGeometry(FixedDensityXcGeometry):
+    """Stationary XC partials whose native owner must remain current at use."""
+
+    state: StationaryKsState
+
+    def __post_init__(self):
+        super().__post_init__()
+        contract = StationaryDerivativeContract(self.state_identity)
+        contract.validate(self.state)
+        spec = canonical_functional(
+            "LDA_XC_PW" if contract.family == "lda" else "PBE", spin=contract.spin
+        )
+        if self.regularization_identity != xc_regularization_identity(spec):
+            raise ValueError("stationary regularization identity mismatch")
+
+    def directional(self, motion):
+        """Recheck eligibility even when partials were computed before replay."""
+        StationaryDerivativeContract(self.state_identity).validate(self.state)
+        return super().directional(motion)
+
+
 def native_ao_geometry_identity(basis):
     """Hash the nuclear geometry owned by one exact native AO basis."""
     if not isinstance(basis, NativeAO):
@@ -414,6 +486,25 @@ def bind_generated_xc_geometry(
     if not isinstance(contract, StationaryDerivativeContract):
         raise TypeError("expected a stationary derivative contract")
     state = contract.validate(state)
+    result = _fixed_density_xc_geometry(contract, state, functional, basis, grid)
+    # Recheck after evaluation, including source identities and snapshot content.
+    return GeneratedXcGeometry(
+        **{
+            name: getattr(result, name)
+            for name, item in result.__dataclass_fields__.items()
+            if item.init
+        },
+        state=state,
+    )
+
+
+def _fixed_density_xc_geometry(contract, state, functional, basis, grid):
+    """Numerical diagnostic shared with the oracle tests; never authorize KS use.
+
+    Only ``bind_generated_xc_geometry`` supplies the live-owner gate and returns
+    a stationary result. This helper returns explicitly fixed-density partials.
+    """
+    contract._validate_arrays(state)
     if not isinstance(functional, FunctionalSpec):
         raise TypeError("expected a typed XC functional")
     if not isinstance(basis, NativeAO) or not isinstance(grid, ExplicitGrid):
@@ -451,7 +542,7 @@ def bind_generated_xc_geometry(
         ao_atoms=_native_ao_atoms(basis),
         natom=basis.natom,
     )["geometry"]
-    return GeneratedXcGeometry(
+    return FixedDensityXcGeometry(
         state_identity=state.identity,
         discrete_contract_identity=program.contract.identity,
         basis_identity=basis.identity,

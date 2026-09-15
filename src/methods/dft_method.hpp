@@ -9,6 +9,19 @@
 
 namespace vibeqc::methods::detail {
 
+/** Detached derivative inputs copied from the same owner as the #162 state.
+ * The token remains authoritative: this copy alone never proves freshness. */
+struct KsDerivativeSnapshot {
+  dft::VerifiedKsFinalState state;
+  core::System system;
+  std::vector<double> overlap, packed_basis, points, weights;
+  std::vector<std::uint32_t> grid_owners;
+};
+
+vibeqc_status read_dft_derivative_state(PreparedBatch& batch, std::size_t index,
+                                        const dft::CudaKsFinalStateToken& expected,
+                                        KsDerivativeSnapshot& output, std::string& detail);
+
 vibeqc_status validate_dft_system(vibeqc_method method, const core::System& system,
                                   std::string& detail);
 
