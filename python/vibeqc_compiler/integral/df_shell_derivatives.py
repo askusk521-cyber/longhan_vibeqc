@@ -62,6 +62,47 @@ def axis_cache_layout(angular):
     return offsets, size
 
 
+def shell_work_model(angular):
+    """Describe fixed work in the emitted lowering before compiler optimization.
+
+    Dynamic Boys iterations and sparsity depend on the primitive geometry and
+    actual folded weights. The caller multiplies each active component's loop
+    count by the number of executed primitive products; it must not count
+    inactive components or infer hardware instructions from these values.
+    """
+    if tuple(angular) not in SHELL_CLASSES:
+        raise ValueError("shell work model requires an s/p/d/f angular triple")
+    offsets, size = axis_cache_layout(angular)
+
+    def powers(degree):
+        return [
+            (degree - row, row - z, z)
+            for row in range(degree + 1)
+            for z in range(row + 1)
+        ]
+
+    loops = []
+    for components in product(*(powers(degree) for degree in angular)):
+        degrees = tuple(sum(axis) for axis in zip(*components))
+        loops.append(
+            sum(
+                (degrees[axis] + 2)
+                * (degrees[(axis + 1) % 3] + 1)
+                * (degrees[(axis + 2) % 3] + 1)
+                for axis in range(3)
+            )
+        )
+    specialized = max(angular) <= 1
+    return {
+        "boys_maximum_order": sum(angular) + 1,
+        "axis_polynomial_calls": 0 if specialized else 3 * len(offsets),
+        "specialized_prepare_axis_calls": 3 if specialized else 0,
+        "generic_prepare_entries": 0 if specialized else 3 * len(offsets),
+        "cache_coefficient_values": 3 * size,
+        "component_convolution_iterations": loops,
+    }
+
+
 def emit_df_shell_derivatives_cuda():
     """Emit class-specialized cache construction from the shared polynomial IR."""
     lines = [
@@ -95,6 +136,21 @@ struct Moments {
   static constexpr unsigned components=na*nb*nc;
   static constexpr unsigned rows=B+1,columns=C+1;
   static constexpr unsigned axis_size=(A+2)*rows*columns*(A+B+C+3)/2;
+  static constexpr unsigned polynomial_calls=(A<2 && B<2 && C<2)?0:3*(A+2)*rows*columns;
+  static constexpr unsigned specialized_axis_calls=(A<2 && B<2 && C<2)?3:0;
+  /** Exact loop-body evaluations for one active component, before optimization.
+   * Keep this alongside accumulate so diagnostic counts follow its lowering.
+   */
+  __device__ static unsigned convolution_work(unsigned item) {
+    const auto a=angular<A>(item/nb/nc),b=angular<B>(item/nc%nb),c=angular<C>(item%nc);
+    unsigned degree[3];
+    for(unsigned axis=0;axis<3;++axis)
+      degree[axis]=scalar::power(a,axis)+scalar::power(b,axis)+scalar::power(c,axis);
+    unsigned work=0;
+    for(unsigned axis=0;axis<3;++axis)
+      work+=(degree[axis]+2)*(degree[(axis+1)%3]+1)*(degree[(axis+2)%3]+1);
+    return work;
+  }
   /** Translation recovers the auxiliary center from the two independent ones. */
   __device__ static Contracted finish(const double* independent) {
     Contracted result{};

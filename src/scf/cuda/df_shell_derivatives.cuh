@@ -3,6 +3,7 @@
 #include <span>
 
 #include "scf/cuda/df_derivatives.cuh"
+#include "scf/cuda/df_shell_diagnostics.cuh"
 
 namespace vibeqc::scf {
 /** Compact angular-class shell lists; storage grows with shells, never triples.
@@ -41,7 +42,8 @@ cudaError_t launch_df_shell_derivative_panel(DfShellBasisView orbital, DfShellBa
                                              double* gradient, unsigned long long* counters,
                                              cudaStream_t stream, bool full_domain = false,
                                              unsigned variant = 0,
-                                             DfDerivativePairs pairs = DfDerivativePairs::full);
+                                             DfDerivativePairs pairs = DfDerivativePairs::full,
+                                             DfShellDiagnostics* diagnostics = nullptr);
 
 /** Launch one primitive-signature shell-group product.
  * The first/second orbital views each contain exactly one angular/signature
@@ -53,7 +55,8 @@ cudaError_t launch_df_shell_derivative_group(
     DfShellBasisView first, DfShellBasisView second, DfShellBasisView auxiliary,
     const double* positions, std::size_t auxiliary_begin, std::size_t auxiliary_count,
     const double* weights, double* gradient, unsigned long long* counters, cudaStream_t stream,
-    bool full_domain, unsigned variant, DfDerivativePairs pairs, bool triangle);
+    bool full_domain, unsigned variant, DfDerivativePairs pairs, bool triangle,
+    DfShellDiagnostics* diagnostics = nullptr);
 /** Batch homogeneous block ranges in bounded kernel parameters.
  * The host spans contain disjoint signature slices sharing each basis and AO
  * offsets. Each block belongs to one signature; full/symmetric/packed coverage
@@ -66,6 +69,7 @@ cudaError_t launch_df_shell_derivative_packets(std::span<const DfShellBasisView>
                                                std::size_t count, const double* weights,
                                                double* gradient, unsigned long long* counters,
                                                cudaStream_t stream, bool full_domain,
-                                               unsigned variant, DfDerivativePairs pairs);
+                                               unsigned variant, DfDerivativePairs pairs,
+                                               DfShellDiagnostics* diagnostics = nullptr);
 
 }  // namespace vibeqc::scf

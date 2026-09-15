@@ -15,6 +15,56 @@ namespace generated = generated_df_shell;
 namespace scalar = generated_df_derivatives;
 constexpr unsigned term_capacity = molecule::kMaximumAoExpansionTerms;
 
+/** Publish one aggregated owner count; normal kernels receive a null sink. */
+__device__ __forceinline__ void record_work(unsigned long long* work, DfShellWork kind,
+                                            unsigned long long value) {
+  if (work && value) atomicAdd(work + static_cast<unsigned>(kind), value);
+}
+
+cudaError_t clear_work(DfShellDiagnostics* diagnostics, unsigned rows, cudaStream_t stream) {
+  if (!diagnostics) return cudaSuccess;
+  if (!diagnostics->device || !diagnostics->host || rows > DfShellDiagnostics::packet_capacity)
+    return cudaErrorInvalidValue;
+  return cudaMemsetAsync(diagnostics->device, 0,
+                         rows * DfShellDiagnostics::row_elements * sizeof(unsigned long long),
+                         stream);
+}
+
+/** Read back only in explicitly intrusive diagnostics; no clean-path drain. */
+cudaError_t read_work(DfShellDiagnostics* diagnostics, unsigned rows, cudaStream_t stream) {
+  if (!diagnostics) return cudaSuccess;
+  const auto bytes = rows * DfShellDiagnostics::row_elements * sizeof(unsigned long long);
+  auto error = cudaMemcpyAsync(diagnostics->host, diagnostics->device, bytes,
+                               cudaMemcpyDeviceToHost, stream);
+  if (error == cudaSuccess) error = cudaStreamSynchronize(stream);
+  if (error == cudaSuccess) {
+    diagnostics->readback_bytes += bytes;
+    ++diagnostics->stream_drains;
+  }
+  return error;
+}
+
+template <unsigned A, unsigned B, unsigned C>
+void report_work(DfShellDiagnostics* diagnostics, unsigned row, std::size_t pa, std::size_t pb,
+                 std::size_t pc) {
+  if (!diagnostics) return;
+  std::array<unsigned long long, DfShellDiagnostics::metrics> totals{};
+  for (unsigned shard = 0; shard < DfShellDiagnostics::shards; ++shard)
+    for (unsigned metric = 0; metric < totals.size(); ++metric)
+      totals[metric] += diagnostics->host[row * DfShellDiagnostics::row_elements +
+                                          shard * DfShellDiagnostics::metrics + metric];
+  for (unsigned metric = 0; metric < totals.size(); ++metric) {
+    char name[160];
+    std::snprintf(name, sizeof(name), "shell_%u%u%u_work_%s", A, B, C, df_shell_work_names[metric]);
+    runtime::cuda_trace::trace_counter(name, totals[metric]);
+    std::snprintf(name, sizeof(name), "shell_%u%u%u_p%zu_%zu_%zu_work_%s", A, B, C, pa, pb, pc,
+                  df_shell_work_names[metric]);
+    runtime::cuda_trace::trace_counter(name, totals[metric]);
+  }
+  if (diagnostics->observer)
+    diagnostics->observer(A, B, C, pa, pb, pc, totals, diagnostics->observer_context);
+}
+
 /** One generated subgroup owns a shell triple and contracts its public weights.
  * Sparse normalized AO expansions are applied to weights once, before any
  * primitive work. Partial auxiliary shells contribute only in-panel weights.
@@ -28,7 +78,7 @@ __device__ __forceinline__ void contract_shell_task(
     DfShellBasisView first, DfShellBasisView second, DfShellBasisView auxiliary,
     const double* positions, std::size_t panel_begin, std::size_t panel_count,
     const double* weights, double* gradient, unsigned long long* counters, DfDerivativePairs pairs,
-    bool triangle, std::size_t task, std::size_t tasks) {
+    bool triangle, std::size_t task, std::size_t tasks, unsigned long long* work) {
   using Math = generated::Shell<A, B, C>;
   using Schedule = generated::Schedule<A, B, C, Variant>;
   constexpr auto lanes = Schedule::lanes, groups = Schedule::groups;
@@ -36,6 +86,7 @@ __device__ __forceinline__ void contract_shell_task(
   __shared__ scalar::Geometry all_geometry[groups];
   const unsigned lane = threadIdx.x % lanes, group = threadIdx.x / lanes;
   const unsigned mask = (0xffffffffU >> (32 - lanes)) << ((threadIdx.x % 32) / lanes * lanes);
+  if (work) work += (blockIdx.x % DfShellDiagnostics::shards) * DfShellDiagnostics::metrics;
   auto* cart_weights = all_weights[group];
   auto* cache = all_cache[group];
   auto& geometry = all_geometry[group];
@@ -53,6 +104,7 @@ __device__ __forceinline__ void contract_shell_task(
   const auto sb = second.shell_ids[second.begin[B] + ib_shell];
   const auto sa = first.shell_ids[first.begin[A] + ia_shell];
   if (lane == 0 && counters) atomicAdd(counters, 1ULL);
+  if (lane == 0) record_work(work, DfShellWork::shell_tasks, 1);
   const auto& o = first.basis;
   const auto& x = auxiliary.basis;
   const auto oa = first.ao_offsets[sa], ob = second.ao_offsets[sb];
@@ -64,6 +116,7 @@ __device__ __forceinline__ void contract_shell_task(
   for (unsigned i = lane; i < Math::components; i += lanes) cart_weights[i] = 0;
   __syncwarp(mask);
   unsigned public_work = 0, public_loads = 0;
+  unsigned long long expansion_work = 0, convolution_work = 0;
   for (auto i = std::int64_t{lane}; i < na * nb * nc; i += lanes) {
     const auto ai = oa + i / nb / nc, bi = ob + i / nc % nb, ci = oc + i % nc;
     if (ci < panel_begin || ci - panel_begin >= panel_count) continue;
@@ -88,6 +141,9 @@ __device__ __forceinline__ void contract_shell_task(
     }
     if (weight == 0) continue;
     ++public_work;
+    if (work)
+      expansion_work += static_cast<unsigned long long>(o.term_counts[ai]) * o.term_counts[bi] *
+                        x.term_counts[ci];
     for (unsigned at = 0; at < o.term_counts[ai]; ++at)
       for (unsigned bt = 0; bt < o.term_counts[bi]; ++bt)
         for (unsigned ct = 0; ct < x.term_counts[ci]; ++ct) {
@@ -103,16 +159,31 @@ __device__ __forceinline__ void contract_shell_task(
   }
   __syncwarp(mask);
   unsigned component_work = 0;
-  for (unsigned i = lane; i < Math::components; i += lanes) component_work += cart_weights[i] != 0;
+  for (unsigned i = lane; i < Math::components; i += lanes)
+    if (cart_weights[i] != 0) {
+      ++component_work;
+      if (work) convolution_work += Math::convolution_work(i);
+    }
   const bool active = __any_sync(mask, component_work != 0);
   for (unsigned delta = lanes / 2; delta; delta /= 2) {
     public_work += __shfl_down_sync(mask, public_work, delta, lanes);
     public_loads += __shfl_down_sync(mask, public_loads, delta, lanes);
     component_work += __shfl_down_sync(mask, component_work, delta, lanes);
+    if (work) {
+      expansion_work += __shfl_down_sync(mask, expansion_work, delta, lanes);
+      convolution_work += __shfl_down_sync(mask, convolution_work, delta, lanes);
+    }
   }
   if (lane == 0 && counters) {
     atomicAdd(counters + 2, static_cast<unsigned long long>(public_work));
     atomicAdd(counters + 5, static_cast<unsigned long long>(public_loads));
+  }
+  if (lane == 0) {
+    record_work(work, DfShellWork::public_weight_loads, public_loads);
+    record_work(work, DfShellWork::public_nonzero_weights, public_work);
+    record_work(work, DfShellWork::expansion_term_products, expansion_work);
+    record_work(work, DfShellWork::folding_shared_atomics, expansion_work);
+    record_work(work, DfShellWork::subgroup_rendezvous, 2);
   }
   if (!active) return;
   const auto atom_a = o.shell_atoms[sa], atom_b = o.shell_atoms[sb], atom_c = x.shell_atoms[sc];
@@ -123,6 +194,7 @@ __device__ __forceinline__ void contract_shell_task(
       center_c{rc[0], rc[1], rc[2]};
   double output[6]{};
   unsigned long long primitive_work = 0;
+  unsigned long long series_iterations = 0, series = 0, small_argument = 0, large_argument = 0;
   // Launch-uniform loop lengths keep compact subgroups on the same primitive
   // iteration. Bounds are runtime parameters; the generated math is unchanged.
   const auto pa0 = o.primitive_offsets[sa], pb0 = o.primitive_offsets[sb];
@@ -137,8 +209,17 @@ __device__ __forceinline__ void contract_shell_task(
         const auto pa = pa0 + ia, pb = pb0 + ib, pc = pc0 + ic;
         const double alpha = o.exponents[pa], beta = o.exponents[pb], gamma = x.exponents[pc];
         if (lane == 0) {
-          scalar::prepare_geometry(alpha, center_a, beta, center_b, gamma, center_c, A + B + C,
-                                   geometry);
+          if (work) {
+            scalar::BoysWork observed;
+            scalar::prepare_geometry(alpha, center_a, beta, center_b, gamma, center_c, A + B + C,
+                                     geometry, &observed);
+            series_iterations += observed.series_iterations;
+            series += observed.series;
+            small_argument += observed.small_argument;
+            large_argument += observed.large_argument;
+          } else
+            scalar::prepare_geometry(alpha, center_a, beta, center_b, gamma, center_c, A + B + C,
+                                     geometry);
           ++primitive_work;
         }
         __syncwarp(mask);
@@ -159,6 +240,34 @@ __device__ __forceinline__ void contract_shell_task(
   if (lane == 0) {
     const runtime::cuda_gaussian_products::Factor factors[3]{{o, oa}, {o, ob}, {x, oc}};
     runtime::cuda_gaussian_products::scatter(factors, Math::finish(output), 1.0, gradient);
+    if (work) {
+      record_work(work, DfShellWork::active_shell_tasks, 1);
+      record_work(work, DfShellWork::primitive_products, primitive_work);
+      record_work(work, DfShellWork::geometry_preparations, primitive_work);
+      record_work(work, DfShellWork::boys_evaluations, primitive_work);
+      record_work(work, DfShellWork::boys_order_sum, primitive_work * (A + B + C + 1));
+      record_work(work, DfShellWork::boys_series_iterations, series_iterations);
+      record_work(work, DfShellWork::boys_series, series);
+      record_work(work, DfShellWork::boys_small_argument, small_argument);
+      record_work(work, DfShellWork::boys_large_argument, large_argument);
+      record_work(work, DfShellWork::axis_polynomial_calls,
+                  primitive_work * Math::polynomial_calls);
+      record_work(work, DfShellWork::specialized_prepare_axis_calls,
+                  primitive_work * Math::specialized_axis_calls);
+      record_work(work, DfShellWork::cache_coefficient_values,
+                  primitive_work * 3 * Math::axis_size);
+      record_work(work, DfShellWork::convolution_iterations, primitive_work * convolution_work);
+      record_work(work, DfShellWork::active_component_products, primitive_work * component_work);
+      record_work(work, DfShellWork::gradient_atomics_a, 3);
+      record_work(work, DfShellWork::gradient_atomics_b, 3);
+      record_work(work, DfShellWork::gradient_atomics_c, 3);
+      const unsigned shared = 3 * (unsigned(atom_a == atom_b || atom_a == atom_c) +
+                                   unsigned(atom_b == atom_a || atom_b == atom_c) +
+                                   unsigned(atom_c == atom_a || atom_c == atom_b));
+      record_work(work, DfShellWork::gradient_atomics_shared_atom, shared);
+      record_work(work, DfShellWork::gradient_atomics_distinct_atom, 9 - shared);
+      record_work(work, DfShellWork::subgroup_rendezvous, 3 * primitive_work);
+    }
     if (counters) {
       atomicAdd(counters + 1, 1ULL);
       atomicAdd(counters + 3, primitive_work);
@@ -176,7 +285,7 @@ struct SignatureSlice {
   bool triangle{};
 };
 struct SignaturePacket {
-  static constexpr unsigned capacity = 24;
+  static constexpr unsigned capacity = DfShellDiagnostics::packet_capacity;
   SignatureSlice slices[capacity]{};
   unsigned count{}, blocks{};
 };
@@ -189,11 +298,11 @@ __global__ void shell_panel(DfShellBasisView first, DfShellBasisView second,
                             DfShellBasisView auxiliary, const double* positions, std::size_t begin,
                             std::size_t count, const double* weights, double* gradient,
                             unsigned long long* counters, DfDerivativePairs pairs, bool triangle,
-                            std::size_t tasks) {
+                            std::size_t tasks, unsigned long long* work) {
   using Schedule = generated::Schedule<A, B, C, Variant>;
   const auto task = std::size_t{blockIdx.x} * Schedule::groups + threadIdx.x / Schedule::lanes;
   contract_shell_task<A, B, C, Variant>(first, second, auxiliary, positions, begin, count, weights,
-                                        gradient, counters, pairs, triangle, task, tasks);
+                                        gradient, counters, pairs, triangle, task, tasks, work);
 }
 
 template <unsigned A, unsigned B, unsigned C, unsigned Variant>
@@ -201,7 +310,8 @@ __global__ void shell_packet(DfShellBasisView orbital, DfShellBasisView auxiliar
                              const double* positions, std::size_t begin, std::size_t count,
                              const double* weights, double* gradient, unsigned long long* counters,
                              DfDerivativePairs pairs,
-                             const __grid_constant__ SignaturePacket packet) {
+                             const __grid_constant__ SignaturePacket packet,
+                             unsigned long long* work) {
   using Schedule = generated::Schedule<A, B, C, Variant>;
   // A block owns only one signature. Prefixing block counts pools small slices
   // in a single grid without reintroducing mixed primitive lengths in a warp.
@@ -231,9 +341,10 @@ __global__ void shell_packet(DfShellBasisView orbital, DfShellBasisView auxiliar
   third.primitives = slice.c_primitives;
   const auto task = (std::size_t{blockIdx.x} - slice.first_block) * Schedule::groups +
                     threadIdx.x / Schedule::lanes;
-  contract_shell_task<A, B, C, Variant>(first, second, third, positions, begin, count, weights,
-                                        gradient, counters, pairs, slice.triangle, task,
-                                        slice.tasks);
+  contract_shell_task<A, B, C, Variant>(
+      first, second, third, positions, begin, count, weights, gradient, counters, pairs,
+      slice.triangle, task, slice.tasks,
+      work ? work + low * DfShellDiagnostics::row_elements : nullptr);
 }
 
 /** Resource values are maxima within an operation, not sums over its launches. */
@@ -271,7 +382,7 @@ cudaError_t launch_packets(std::span<const DfShellBasisView> orbital,
                            std::span<const DfShellBasisView> auxiliary, const double* positions,
                            std::size_t begin, std::size_t count, const double* weights,
                            double* gradient, unsigned long long* counters, cudaStream_t stream,
-                           DfDerivativePairs pairs) {
+                           DfDerivativePairs pairs, DfShellDiagnostics* diagnostics) {
   if (pairs != DfDerivativePairs::full && A < B) return cudaSuccess;
   using Schedule = generated::Schedule<A, B, C, Variant>;
   constexpr auto maximum = static_cast<std::size_t>(std::numeric_limits<int>::max());
@@ -308,14 +419,23 @@ cudaError_t launch_packets(std::span<const DfShellBasisView> orbital,
     }
     char name[64]{};
     if (profiling) std::snprintf(name, sizeof(name), "shell_%u%u%u_packet", A, B, C);
+    auto error = clear_work(diagnostics, packet.count, stream);
+    if (error != cudaSuccess) return error;
     {
       runtime::cuda_trace::TraceRegion region(name, stream);
       shell_packet<A, B, C, Variant>
           <<<packet.blocks, Schedule::lanes * Schedule::groups, 0, stream>>>(
               orbital.front(), auxiliary.front(), positions, begin, count, weights, gradient,
-              counters, pairs, packet);
+              counters, pairs, packet, diagnostics ? diagnostics->device : nullptr);
     }
-    const auto error = cudaPeekAtLastError();
+    error = cudaPeekAtLastError();
+    if (error == cudaSuccess) error = read_work(diagnostics, packet.count, stream);
+    if (error != cudaSuccess) return error;
+    for (unsigned row = 0; diagnostics && row < packet.count; ++row) {
+      const auto& slice = packet.slices[row];
+      report_work<A, B, C>(diagnostics, row, slice.a_primitives, slice.b_primitives,
+                           slice.c_primitives);
+    }
     runtime::cuda_trace::trace_counter("three_center_signature_packet_launches", 1);
     runtime::cuda_trace::trace_counter("signature_packet_slices", packet.count);
     runtime::cuda_trace::trace_counter("signature_packet_argument_bytes", sizeof(packet));
@@ -370,7 +490,8 @@ template <unsigned A, unsigned B, unsigned C, unsigned Variant>
 cudaError_t launch_group(DfShellBasisView first, DfShellBasisView second, DfShellBasisView x,
                          const double* positions, std::size_t begin, std::size_t count,
                          const double* weights, double* gradient, unsigned long long* counters,
-                         cudaStream_t stream, DfDerivativePairs pairs, bool triangle) {
+                         cudaStream_t stream, DfDerivativePairs pairs, bool triangle,
+                         DfShellDiagnostics* diagnostics) {
   if (!first.count[A] || !second.count[B] || !x.count[C]) return cudaSuccess;
   if (triangle &&
       (pairs == DfDerivativePairs::full || A != B || first.count[A] != second.count[B] ||
@@ -396,24 +517,32 @@ cudaError_t launch_group(DfShellBasisView first, DfShellBasisView second, DfShel
     const auto error = profile_resources<A, B, C, Variant>(shell_panel<A, B, C, Variant>);
     if (error != cudaSuccess) return error;
   }
+  auto error = clear_work(diagnostics, 1, stream);
+  if (error != cudaSuccess) return error;
   runtime::cuda_trace::TraceRegion profile(profile_name, stream);
   if (tasks)
     shell_panel<A, B, C, Variant>
         <<<static_cast<unsigned>((tasks + Schedule::groups - 1) / Schedule::groups),
-           Schedule::lanes * Schedule::groups, 0, stream>>>(first, second, x, positions, begin,
-                                                            count, weights, gradient, counters,
-                                                            pairs, triangle, tasks);
-  return cudaPeekAtLastError();
+           Schedule::lanes * Schedule::groups, 0, stream>>>(
+            first, second, x, positions, begin, count, weights, gradient, counters, pairs, triangle,
+            tasks, diagnostics ? diagnostics->device : nullptr);
+  error = cudaPeekAtLastError();
+  profile.finish();
+  if (error == cudaSuccess) error = read_work(diagnostics, 1, stream);
+  if (error == cudaSuccess)
+    report_work<A, B, C>(diagnostics, 0, first.primitives, second.primitives, x.primitives);
+  return error;
 }
 
 template <unsigned A, unsigned B, unsigned C, unsigned Variant>
 cudaError_t launch(DfShellBasisView o, DfShellBasisView x, const double* positions,
                    std::size_t begin, std::size_t count, const double* weights, double* gradient,
-                   unsigned long long* counters, cudaStream_t stream, DfDerivativePairs pairs) {
+                   unsigned long long* counters, cudaStream_t stream, DfDerivativePairs pairs,
+                   DfShellDiagnostics* diagnostics) {
   if (pairs != DfDerivativePairs::full && A < B) return cudaSuccess;
   return launch_group<A, B, C, Variant>(o, o, x, positions, begin, count, weights, gradient,
                                         counters, stream, pairs,
-                                        pairs != DfDerivativePairs::full && A == B);
+                                        pairs != DfDerivativePairs::full && A == B, diagnostics);
 }
 }  // namespace
 
@@ -422,7 +551,8 @@ cudaError_t launch_df_shell_derivative_panel(DfShellBasisView o, DfShellBasisVie
                                              std::size_t count, const double* weights,
                                              double* gradient, unsigned long long* counters,
                                              cudaStream_t stream, bool full_domain,
-                                             unsigned variant, DfDerivativePairs pairs) {
+                                             unsigned variant, DfDerivativePairs pairs,
+                                             DfShellDiagnostics* diagnostics) {
   if (variant > 2) return cudaErrorInvalidValue;
   cudaError_t status = cudaSuccess;
   generated::for_each_class([&]<unsigned A, unsigned B, unsigned C>() {
@@ -430,24 +560,22 @@ cudaError_t launch_df_shell_derivative_panel(DfShellBasisView o, DfShellBasisVie
       return;
     if (variant == 0)
       status = launch<A, B, C, 0>(o, x, positions, begin, count, weights, gradient, counters,
-                                  stream, pairs);
+                                  stream, pairs, diagnostics);
     else if (variant == 1)
       status = launch<A, B, C, 1>(o, x, positions, begin, count, weights, gradient, counters,
-                                  stream, pairs);
+                                  stream, pairs, diagnostics);
     else
       status = launch<A, B, C, 2>(o, x, positions, begin, count, weights, gradient, counters,
-                                  stream, pairs);
+                                  stream, pairs, diagnostics);
   });
   return status;
 }
 
-cudaError_t launch_df_shell_derivative_group(DfShellBasisView first, DfShellBasisView second,
-                                             DfShellBasisView x, const double* positions,
-                                             std::size_t begin, std::size_t count,
-                                             const double* weights, double* gradient,
-                                             unsigned long long* counters, cudaStream_t stream,
-                                             bool full_domain, unsigned variant,
-                                             DfDerivativePairs pairs, bool triangle) {
+cudaError_t launch_df_shell_derivative_group(
+    DfShellBasisView first, DfShellBasisView second, DfShellBasisView x, const double* positions,
+    std::size_t begin, std::size_t count, const double* weights, double* gradient,
+    unsigned long long* counters, cudaStream_t stream, bool full_domain, unsigned variant,
+    DfDerivativePairs pairs, bool triangle, DfShellDiagnostics* diagnostics) {
   if (variant > 2) return cudaErrorInvalidValue;
   cudaError_t status = cudaSuccess;
   generated::for_each_class([&]<unsigned A, unsigned B, unsigned C>() {
@@ -455,24 +583,22 @@ cudaError_t launch_df_shell_derivative_group(DfShellBasisView first, DfShellBasi
       return;
     if (variant == 0)
       status = launch_group<A, B, C, 0>(first, second, x, positions, begin, count, weights,
-                                        gradient, counters, stream, pairs, triangle);
+                                        gradient, counters, stream, pairs, triangle, diagnostics);
     else if (variant == 1)
       status = launch_group<A, B, C, 1>(first, second, x, positions, begin, count, weights,
-                                        gradient, counters, stream, pairs, triangle);
+                                        gradient, counters, stream, pairs, triangle, diagnostics);
     else
       status = launch_group<A, B, C, 2>(first, second, x, positions, begin, count, weights,
-                                        gradient, counters, stream, pairs, triangle);
+                                        gradient, counters, stream, pairs, triangle, diagnostics);
   });
   return status;
 }
 
-cudaError_t launch_df_shell_derivative_packets(std::span<const DfShellBasisView> orbital,
-                                               std::span<const DfShellBasisView> auxiliary,
-                                               const double* positions, std::size_t begin,
-                                               std::size_t count, const double* weights,
-                                               double* gradient, unsigned long long* counters,
-                                               cudaStream_t stream, bool full_domain,
-                                               unsigned variant, DfDerivativePairs pairs) {
+cudaError_t launch_df_shell_derivative_packets(
+    std::span<const DfShellBasisView> orbital, std::span<const DfShellBasisView> auxiliary,
+    const double* positions, std::size_t begin, std::size_t count, const double* weights,
+    double* gradient, unsigned long long* counters, cudaStream_t stream, bool full_domain,
+    unsigned variant, DfDerivativePairs pairs, DfShellDiagnostics* diagnostics) {
   if (variant > 2) return cudaErrorInvalidValue;
   if (orbital.empty() || auxiliary.empty()) return cudaSuccess;
   cudaError_t status = cudaSuccess;
@@ -481,13 +607,13 @@ cudaError_t launch_df_shell_derivative_packets(std::span<const DfShellBasisView>
       return;
     if (variant == 0)
       status = launch_packets<A, B, C, 0>(orbital, auxiliary, positions, begin, count, weights,
-                                          gradient, counters, stream, pairs);
+                                          gradient, counters, stream, pairs, diagnostics);
     else if (variant == 1)
       status = launch_packets<A, B, C, 1>(orbital, auxiliary, positions, begin, count, weights,
-                                          gradient, counters, stream, pairs);
+                                          gradient, counters, stream, pairs, diagnostics);
     else
       status = launch_packets<A, B, C, 2>(orbital, auxiliary, positions, begin, count, weights,
-                                          gradient, counters, stream, pairs);
+                                          gradient, counters, stream, pairs, diagnostics);
   });
   return status;
 }

@@ -612,6 +612,9 @@ vibeqc_status execute_cuda_df_hf_gradient(
     PinnedResponsePanels raw_panels;
     // The host destination must outlive Arena's exceptional-path stream drain.
     std::array<unsigned long long, 6> observed_shell_work{};
+    std::vector<unsigned long long> detailed_shell_work_host;
+    DfShellDiagnostics detailed_shell_work;
+    DfShellDiagnostics* shell_diagnostics = nullptr;
     unsigned long long* shell_counters = nullptr;
     Arena arena(maximum_bytes);
     arena.stream = reinterpret_cast<cudaStream_t>(stream_handle);
@@ -767,6 +770,21 @@ vibeqc_status execute_cuda_df_hf_gradient(
             static_cast<unsigned long long*>(arena.allocate(sizeof(observed_shell_work)));
         check(cudaMemsetAsync(shell_counters, 0, sizeof(observed_shell_work), arena.stream));
         arena.stats.host_bytes += sizeof(observed_shell_work);
+      }
+      const char* work_control = std::getenv("VIBEQC_DF_SHELL_WORK");
+      if (work_control && std::string_view(work_control) == "1") {
+        // One fixed packet buffer is reused after each explicitly intrusive
+        // readback. Keep its host destination alive through exceptional drains.
+        detailed_shell_work_host.resize(DfShellDiagnostics::elements);
+        const auto bytes = detailed_shell_work_host.size() * sizeof(unsigned long long);
+        detailed_shell_work.device = static_cast<unsigned long long*>(arena.allocate(bytes));
+        detailed_shell_work.host = detailed_shell_work_host.data();
+        shell_diagnostics = &detailed_shell_work;
+        arena.stats.host_bytes += bytes;
+        runtime::cuda_trace::trace_counter("shell_work_diagnostic_bytes", bytes);
+        runtime::cuda_trace::trace_counter("shell_work_diagnostics_enabled", 1);
+        runtime::cuda_trace::trace_counter("shell_work_pair_mode",
+                                           static_cast<unsigned>(derivative_pairs));
       }
     }
     const auto* r = arena.upload(positions);
@@ -971,6 +989,12 @@ vibeqc_status execute_cuda_df_hf_gradient(
                                                count * sizeof(double));
             if (shell_execution && !metric_weights) {
               const auto panel_count = count / stride;
+              if (shell_diagnostics) {
+                char panel_name[96];
+                std::snprintf(panel_name, sizeof(panel_name), "shell_work_panel_%zu_%zu",
+                              range.offset, panel_count);
+                runtime::cuda_trace::trace_counter(panel_name, 1);
+              }
               if (primitive_buckets) {
                 runtime::host_trace::Region grouping("df_shell_signature_dispatch", n);
                 // Products of compact shell slices are implicit task queues: no
@@ -992,7 +1016,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
                   check(launch_df_shell_derivative_packets(
                       orbital_groups, auxiliary_groups, r, range.offset, panel_count, weights,
                       derivative_output, shell_counters, arena.stream, full_shell_domain,
-                      shell_variant, derivative_pairs));
+                      shell_variant, derivative_pairs, shell_diagnostics));
                 } else {
                   std::size_t signature_launches = 0;
                   for (std::size_t ga = 0; ga < shell_o->signature_groups.size(); ++ga) {
@@ -1016,7 +1040,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
                             first, second, auxiliary_groups[gc], r, range.offset, panel_count,
                             weights, derivative_output, shell_counters, arena.stream,
                             full_shell_domain, shell_variant, derivative_pairs,
-                            derivative_pairs != DfDerivativePairs::full && ga == gb));
+                            derivative_pairs != DfDerivativePairs::full && ga == gb,
+                            shell_diagnostics));
                         ++signature_launches;
                       }
                     }
@@ -1028,7 +1053,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
                 check(launch_df_shell_derivative_panel(
                     shell_o->view, shell_x->panel(range.offset, panel_count), r, range.offset,
                     panel_count, weights, derivative_output, shell_counters, arena.stream,
-                    full_shell_domain, shell_variant, derivative_pairs));
+                    full_shell_domain, shell_variant, derivative_pairs, shell_diagnostics));
               }
               runtime::cuda_trace::trace_counter("three_center_shell_panels", 1);
             }
@@ -1113,6 +1138,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
     }
     runtime::cuda_trace::TraceRegion output_transfer("response_output_and_synchronization",
                                                      arena.stream);
+    arena.stats.device_to_host_bytes += detailed_shell_work.readback_bytes;
+    arena.stats.stream_synchronizations += detailed_shell_work.stream_drains;
     if (shell_counters) {
       check(cudaMemcpyAsync(observed_shell_work.data(), shell_counters, sizeof(observed_shell_work),
                             cudaMemcpyDeviceToHost, arena.stream));
