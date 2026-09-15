@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 11812,
+  "all_handwritten_scientific_lines": 12023,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "delta": {
     "added_files": [
@@ -160,8 +160,8 @@
       "fallback": 0,
       "oracle": 10,
       "performance_exception": 66,
-      "runtime": -5789,
-      "scientific": 1544
+      "runtime": -6000,
+      "scientific": 1755
     },
     "reclassified_files": [
       "src/dft/cuda_grid.cu",
@@ -3138,13 +3138,32 @@
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 245,
-        "scientific": 0
+        "runtime": 34,
+        "scientific": 211
       },
       "path": "src/scf/cuda/scf_diis_kernels.cu",
       "physical_lines": 281,
-      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
-      "regions": [],
+      "reason": "Native launch wrappers select DIIS schedules; method-specific residual Gram construction, history retirement, solve and Fock extrapolation are classified below.",
+      "regions": [
+        {
+          "code_lines": 35,
+          "first_line": 11,
+          "last_line": 50,
+          "reason": "DIIS-specific circular live-history selection and deterministic residual Gram partials, including substitution of the pending current residual. This is not a generic reduction API.",
+          "role": "scientific",
+          "start": "__global__ void diis_dot_partials_kernel",
+          "stop": "void launch_diis_dot_partials("
+        },
+        {
+          "code_lines": 176,
+          "first_line": 61,
+          "last_line": 259,
+          "reason": "Native DIIS Gram assembly, normalization, augmented solve, dependent-history retirement and Fock extrapolation, including local state glue. Conservatively includes pre-existing arithmetic reclassified from runtime; this is not physical code growth or retirement.",
+          "role": "scientific",
+          "start": "template <bool CooperativeDots>",
+          "stop": "void launch_update_diis_kernel("
+        }
+      ],
       "role": "runtime",
       "sha256": "32c327d1aec829f9874ae0b426c31fc2b849eff3847f545c09e3bf3539ba5793",
       "subsystem": "scf_tensor"
@@ -3160,7 +3179,7 @@
       },
       "path": "src/scf/cuda/scf_diis_kernels.hpp",
       "physical_lines": 37,
-      "reason": "Separate SCF matrix/state/launch owner; existing arithmetic and launch forwarding preserved.",
+      "reason": "DIIS launch declarations and scratch/schedule interface; numerical implementation is classified in scf_diis_kernels.cu.",
       "regions": [],
       "role": "runtime",
       "sha256": "33ffbaffe16497471db9866dd5b28ae89c230763ad6cfa53f41ef0905cbe32c9",
@@ -3684,8 +3703,8 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 156,
-    "runtime": 9784,
-    "scientific": 11646
+    "runtime": 9573,
+    "scientific": 11857
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3834,14 +3853,15 @@
       "status": "retained"
     },
     "scf_tensor": {
-      "current_default": "native RHF/UHF/DF density, J/K, energy and force contractions; direct J/K host adapters in cuda/direct_jk.cpp remain native after leaving the CUDA-only source census",
+      "current_default": "native RHF/UHF/DF density, J/K, energy and force contractions and DIIS Gram/solve/extrapolation; direct J/K host adapters in cuda/direct_jk.cpp remain native after leaving the CUDA-only source census",
       "evidence": [
-        "docs/architecture.md"
+        "docs/architecture.md",
+        "benchmarks/results/issues388-391-df/README.md"
       ],
       "generated_capability": "TensorIR owns general contractions/AD; current native SCF bridges remain concrete",
-      "missing_capability": "integration of method equations into shared generated tensor execution",
+      "missing_capability": "integration of method equations into shared generated tensor execution, including DIIS circular-history Gram construction, normalization, dependent-history retirement and Fock extrapolation",
       "owner": "scf_tensor",
-      "retirement_condition": "retain native scientific adapters until generated method endpoint passes; preserve generic solver/BLAS runtime",
+      "retirement_condition": "retain native scientific adapters until generated method endpoint passes; preserve generic solver/BLAS runtime. Retire native DIIS numerical regions only after a compiler-owned replacement passes independent RHF/UHF, inactive/wrapped/retired/ragged history, scratch-capacity, convergence and complete-endpoint gates. Serial DIIS remains the Direct/KS schedule and an explicit DF control; cooperative DF retains a bounded warp fallback when partial scratch is unavailable.",
       "status": "native_baseline"
     },
     "xc": {
@@ -3940,8 +3960,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 2134,
-      "scientific": 427
+      "runtime": 1923,
+      "scientific": 638
     },
     "xc": {
       "fallback": 0,

@@ -48,6 +48,8 @@ was loosened.
   tied to the final diagnostic trace hash.
 - [builds.json](builds.json): measured binary/object sizes and hashes.
 - [validation.json](validation.json): validation counts and original log hashes.
+- [ownership.json](ownership.json): physical CUDA additions/removals and
+  unchanged lines reclassified by the reviewed semantic inventory.
 - `rejected/`: incomplete or unmatched experiments and rejection reasons.
 - `reproduction/`: measured runtime patches, exact run scripts and reducers.
 
@@ -218,6 +220,24 @@ traces. Source-backed generation remains the production alternative. This PR
 retains correctness coverage for these paths and makes no constrained-memory
 speed claim; pinned/double-buffered compatibility staging needs its own
 accounting and endpoint qualification.
+
+## CUDA ownership accounting
+
+The DIIS partial-dot and update kernels are method-specific scientific code;
+launch wrappers remain runtime. Against `b29649f`, physical edits add/remove
+172/23 scientific lines and 61/23 runtime lines. Another 151 unchanged lines
+move from runtime to scientific classification. The resulting semantic deltas
+are **+300 scientific** (11,723 → 12,023 including retained oracle/exception
+code) and **−113 runtime** (9,686 → 9,573). Total maintained growth is 187 lines;
+reclassification is not physical retirement. Derivative equations remain
+compiler-owned. The `scf_tensor` ownership ledger records the generated DIIS
+replacement and numerical/resource/endpoint gates needed for retirement.
+
+Reproduce [ownership.json](ownership.json) using
+`tools/compare_cuda_ownership.py` with an unchanged checkout of `b29649f` and
+its `docs/cuda_ownership_current.json` as the baseline, and this checkout and
+its regenerated inventory as the candidate. This accounting correction leaves
+the qualified runtime source and binary unchanged.
 
 ## Reproduction
 

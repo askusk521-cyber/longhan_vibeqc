@@ -159,6 +159,17 @@ independent long-double regression poisons unused slots and checks RHF/UHF,
 wrapped, retired, inactive and ragged histories. The earlier faulty candidate
 is excluded from promotion evidence.
 
+The semantic ownership ledger counts both DIIS numerical kernels as scientific:
+history selection and Gram assembly are method-specific even when their inner
+sum is a reduction. The update region also includes the existing normalized
+solve, dependent-history retirement and Fock extrapolation; wrappers remain
+runtime. Of the resulting +300 scientific / -113 runtime line deltas against
+`b29649f`, 151 unchanged lines move categories. The retained ownership record
+separates this correction from physical edits (+172/-23 scientific and +61/-23
+runtime). No numerical code is retired by reclassification. A generated DIIS
+replacement needs the same independent history, capacity, convergence and full
+endpoint gates before the native regions can be removed.
+
 cuSOLVER selection and retained workspaces do not change. Host-only provider
 regions and separate Nsight captures distinguish queued DIIS work waited on
 inside the provider from actual eigensolver GPU work. Component tracing adds
