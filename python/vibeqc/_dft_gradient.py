@@ -248,6 +248,7 @@ class GeneratedXcGeometry:
     grid_identity: str
     topology_identity: str
     functional_identity: str
+    regularization_identity: str
     density_generation: int
     partials: GeometryPartials
     force_capability: str = field(init=False, default="unsupported")
@@ -261,6 +262,7 @@ class GeneratedXcGeometry:
             "grid_identity": self.state_identity.grid_identity,
             "topology_identity": self.state_identity.topology_identity,
             "functional_identity": self.state_identity.functional_identity,
+            "regularization_identity": self.state_identity.regularization_identity,
             "density_generation": self.state_identity.density_generation,
         }
         for name, value in expected.items():
@@ -361,6 +363,8 @@ def xc_geometry_topology_identity(basis, grid):
     """Hash stable AO ownership and explicit grid membership, excluding motion."""
     if not isinstance(basis, NativeAO) or not isinstance(grid, ExplicitGrid):
         raise TypeError("XC topology identity requires NativeAO and ExplicitGrid")
+    if any(owner >= basis.natom for owner in grid.owners):
+        raise ValueError("grid owner is outside the molecular atom topology")
     return canonical_hash(
         {
             "schema": "vibeqc.stationary-xc-topology/v1",
@@ -369,6 +373,21 @@ def xc_geometry_topology_identity(basis, grid):
             "ao_atoms": _native_ao_atoms(basis).tolist(),
             "grid_owners": list(grid.owners),
             "npoint": len(grid.points),
+        }
+    )
+
+
+def xc_regularization_identity(functional):
+    """Identify the generated functional's exact fixed numerical domain."""
+    if not isinstance(functional, FunctionalSpec):
+        raise TypeError("XC regularization identity requires a typed functional")
+    payload = functional.to_payload()
+    return canonical_hash(
+        {
+            "schema": "vibeqc.stationary-xc-regularization/v1",
+            "functional": functional.identity,
+            "version": functional.version,
+            "domain": payload["domain"],
         }
     )
 
@@ -401,6 +420,8 @@ def bind_generated_xc_geometry(
         raise ValueError(
             f"stationary {contract.family.upper()} requires canonical {expected_identifier}"
         )
+    if state.identity.regularization_identity != xc_regularization_identity(functional):
+        raise ValueError("stationary regularization identity mismatch")
     for name, actual in (
         ("basis_identity", basis.identity),
         ("geometry_identity", native_ao_geometry_identity(basis)),
@@ -427,6 +448,7 @@ def bind_generated_xc_geometry(
         grid_identity=grid.identity,
         topology_identity=xc_geometry_topology_identity(basis, grid),
         functional_identity=functional.identity,
+        regularization_identity=xc_regularization_identity(functional),
         density_generation=state.identity.density_generation,
         partials=partials,
     )

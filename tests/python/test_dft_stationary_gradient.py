@@ -10,6 +10,7 @@ from vibeqc._dft_gradient import (
     bind_generated_xc_geometry,
     native_ao_geometry_identity,
     xc_geometry_topology_identity,
+    xc_regularization_identity,
 )
 from vibeqc_compiler.dft import NativeAO
 from vibeqc_compiler.dft.fixtures import basis_arguments
@@ -95,6 +96,7 @@ def bound_h2(method, name, spin, *, occupations=None):
                 grid_identity=grid.identity,
                 topology_identity=xc_geometry_topology_identity(basis, grid),
                 functional_identity=spec.identity,
+                regularization_identity=xc_regularization_identity(spec),
             ),
         )
         bound = bind_generated_xc_geometry(
@@ -246,6 +248,21 @@ def test_generated_xc_binding_rejects_actual_source_or_method_mismatch():
                 StationaryDerivativeContract(stale.identity), stale, spec, basis, grid
             )
 
+        stale_regularization = dc_replace(
+            value,
+            identity=dc_replace(
+                value.identity, regularization_identity="clipped-density-v1"
+            ),
+        )
+        with pytest.raises(ValueError, match="regularization identity"):
+            bind_generated_xc_geometry(
+                StationaryDerivativeContract(stale_regularization.identity),
+                stale_regularization,
+                spec,
+                basis,
+                grid,
+            )
+
     wrong = dc_replace(spec, components=(("GGA_X_PBE", Fraction(1)),))
     with NativeAO(**args) as basis:
         relabeled = dc_replace(
@@ -259,6 +276,35 @@ def test_generated_xc_binding_rejects_actual_source_or_method_mismatch():
                 wrong,
                 basis,
                 grid,
+            )
+
+
+def test_generated_xc_binding_rejects_out_of_range_grid_owner():
+    from vibeqc_compiler.dft import ExplicitGrid
+
+    spec, value, args, grid, _, _, _ = bound_h2("pbe-rks", "PBE", "unpolarized")
+    invalid = ExplicitGrid(
+        grid.points,
+        grid.weights,
+        (2,) + grid.owners[1:],
+        {"test": "invalid owner"},
+    )
+    with NativeAO(**args) as basis:
+        relabeled = replace(
+            value,
+            identity=replace(
+                value.identity,
+                grid_identity=invalid.identity,
+                topology_identity="invalid-owner-topology",
+            ),
+        )
+        with pytest.raises(ValueError, match="grid owner"):
+            bind_generated_xc_geometry(
+                StationaryDerivativeContract(relabeled.identity),
+                relabeled,
+                spec,
+                basis,
+                invalid,
             )
 
 
@@ -326,6 +372,7 @@ def test_generated_xc_geometry_rejects_stale_invalid_or_changing_motion(
         grid_identity=value.identity.grid_identity,
         topology_identity=value.identity.topology_identity,
         functional_identity=value.identity.functional_identity,
+        regularization_identity=value.identity.regularization_identity,
         density_generation=value.identity.density_generation,
         partials=partials,
     )
@@ -355,6 +402,7 @@ def test_generated_xc_geometry_owns_read_only_partial_arrays():
         grid_identity=value.identity.grid_identity,
         topology_identity=value.identity.topology_identity,
         functional_identity=value.identity.functional_identity,
+        regularization_identity=value.identity.regularization_identity,
         density_generation=value.identity.density_generation,
         partials=GeometryPartials(centers, np.zeros((3, 3)), np.zeros(3)),
     )
