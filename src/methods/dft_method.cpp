@@ -292,6 +292,20 @@ class KsPreparedCalculation final : public PreparedCalculation {
     return VIBEQC_STATUS_NOT_IMPLEMENTED;
   }
 
+  vibeqc_status read_derivative_state(const dft::CudaKsFinalStateToken& expected,
+                                      KsDerivativeSnapshot& output, std::string& detail) {
+    output = {};
+    dft::VerifiedKsFinalState state;
+    const auto status = read_final_state(expected, true, state, detail);
+    if (status != VIBEQC_STATUS_SUCCESS) return status;
+    // These are the provider's actual metric and the collocation/grid sources
+    // used by this immutable KS owner, not caller-supplied identity labels.
+    output = {std::move(state), system_,        fock_.one_electron().overlap,
+              basis_.packed,    grid_.points(), grid_.weights(),
+              grid_.owners()};
+    return VIBEQC_STATUS_SUCCESS;
+  }
+
   Result execute(bool compute_forces) override {
     invalidate_final_state();
     const char* method_name =
@@ -636,6 +650,15 @@ class KsPreparedBatch final : public PreparedBatch {
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
 
+  vibeqc_status read_derivative_state(std::size_t index, const dft::CudaKsFinalStateToken& expected,
+                                      KsDerivativeSnapshot& output, std::string& detail) {
+    if (index < items_.size() && items_[index].plan)
+      return items_[index].plan->read_derivative_state(expected, output, detail);
+    output = {};
+    detail = "KS batch item has no prepared final-state owner";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+
   // These profiles describe HF graph/provider layouts, not this method's
   // ordinary-stream schedule. Absence is explicit at the common interface.
   std::optional<std::vector<DirectShellClassProfileEntry>> last_direct_shell_class_profile()
@@ -739,6 +762,16 @@ vibeqc_status read_dft_final_state(PreparedBatch& batch, std::size_t index,
   auto* ks = dynamic_cast<KsPreparedBatch*>(&batch);
   if (ks) return ks->read_final_state(index, expected, compute_weighted_density, state, detail);
   state = {};
+  detail = "prepared batch is not a KS final-state owner";
+  return VIBEQC_STATUS_INVALID_ARGUMENT;
+}
+
+vibeqc_status read_dft_derivative_state(PreparedBatch& batch, std::size_t index,
+                                        const dft::CudaKsFinalStateToken& expected,
+                                        KsDerivativeSnapshot& output, std::string& detail) {
+  auto* ks = dynamic_cast<KsPreparedBatch*>(&batch);
+  if (ks) return ks->read_derivative_state(index, expected, output, detail);
+  output = {};
   detail = "prepared batch is not a KS final-state owner";
   return VIBEQC_STATUS_INVALID_ARGUMENT;
 }

@@ -145,6 +145,7 @@ endif()
 add_library(vibeqc SHARED
   src/api/c_api_batch.cpp
   src/api/c_api_calculation.cpp
+  src/api/c_api_ks_snapshot.cpp
   src/api/c_api_fock.cpp
   src/api/c_api_one_electron_gradient.cpp
   src/api/c_api_projection.cpp

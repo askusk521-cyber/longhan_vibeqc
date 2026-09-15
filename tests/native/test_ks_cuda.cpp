@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "api/handles.hpp"
+#include "api/ks_snapshot.hpp"
 #include "dft/cuda_ks.hpp"
 #include "dft/xc.hpp"
 #include "methods/dft_method.hpp"
@@ -435,10 +436,31 @@ void rejected_api_requests_revoke_tokens() {
       require(methods::detail::dft_final_state_token(*batch->plan, i, tokens[i], detail) ==
                   VIBEQC_STATUS_SUCCESS,
               "KS batch failed to publish current token");
+    std::uint64_t metadata[16]{};
+    vibeqc_ks_snapshot* raw_snapshot{};
+    require(vibeqc_ks_snapshot_create_v1(batch.get(), 0, &raw_snapshot, metadata, 16) ==
+                VIBEQC_STATUS_SUCCESS,
+            "stationary bridge did not consume the native #162 handoff");
+    std::unique_ptr<vibeqc_ks_snapshot, decltype(&vibeqc_ks_snapshot_destroy_v1)> proof(
+        raw_snapshot, vibeqc_ks_snapshot_destroy_v1);
+    std::vector<double> values(metadata[15], 79.0);
+    require(metadata[0] == 1 && metadata[1] == 2 && metadata[2] == 1 &&
+                vibeqc_ks_snapshot_copy_v1(batch.get(), proof.get(), values.data(),
+                                           values.size()) == VIBEQC_STATUS_SUCCESS,
+            "stationary bridge failed to export the native sources");
+    require(vibeqc_ks_snapshot_check_v1(batch.get(), proof.get()) == VIBEQC_STATUS_SUCCESS,
+            "current stationary proof failed validation");
     if (rejected == 2) ++outputs[1].abi_version;
     require(vibeqc_batch_execute(batch.get(), nullptr, 0, rejected == 0 ? nullptr : outputs,
                                  rejected == 1 ? 1 : 2) != VIBEQC_STATUS_SUCCESS,
             "malformed KS batch unexpectedly executed");
+    std::fill(values.begin(), values.end(), 79.0);
+    require(
+        vibeqc_ks_snapshot_check_v1(batch.get(), proof.get()) == VIBEQC_STATUS_INVALID_ARGUMENT &&
+            vibeqc_ks_snapshot_copy_v1(batch.get(), proof.get(), values.data(), values.size()) ==
+                VIBEQC_STATUS_INVALID_ARGUMENT &&
+            std::all_of(values.begin(), values.end(), [](double v) { return v == 79.0; }),
+        "revoked stationary proof validated or copied stale arrays");
     for (std::size_t i = 0; i < 2; ++i)
       require(methods::detail::read_dft_final_state(*batch->plan, i, tokens[i], false, snapshot,
                                                     detail) == VIBEQC_STATUS_INVALID_ARGUMENT,
