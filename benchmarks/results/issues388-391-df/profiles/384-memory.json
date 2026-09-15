@@ -1,9 +1,0 @@
-{
-  "scope": "100 ms nvidia-smi process sampling during separate profiled cold and warm runs; sampled lower-bound high-water includes opaque runtime/module storage, not an exact allocation peak.",
-  "sampler_sha256": "61b83f969b48ed8a5577e6021a25e840a296554bdb62aad09572a52117294d42",
-  "readings": 348,
-  "maximum_bytes_per_pid": {
-    "1908012": 8770289664,
-    "1908189": 8770289664
-  }
-}

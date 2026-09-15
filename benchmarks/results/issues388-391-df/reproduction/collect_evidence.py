@@ -232,8 +232,21 @@ for aos in (384, 768):
             "density_sha256": json.loads(densities.pop()),
         }
 write("timings.json", timings)
-for name, record in component_records.items():
-    write(f"components/{name}.json", record)
+for aos in (384, 768):
+    write(
+        f"components/{aos}.json",
+        {
+            "scope": "Component records grouped by workload; original logical paths are preserved as keys.",
+            "records": {
+                f"{name}.json": record
+                for name, record in component_records.items()
+                if str(aos) in name
+            },
+        },
+    )
+for name in component_records:
+    # Retire only the superseded layout after the complete bundle is written.
+    (destination / f"components/{name}.json").unlink(missing_ok=True)
 
 for name in ("final", "derivative-legacy", "derivative-shared", "derivative-center"):
     retain(root / name / "source.patch", f"reproduction/{name}-source.patch")
@@ -249,8 +262,24 @@ for script in (
     "generated_work.py",
 ):
     retain(root / script, f"reproduction/{script}")
-for profile in sorted((root / "profile-reduced").glob("*.json")):
-    retain(profile, f"profiles/{profile.name}")
+profiles = sorted((root / "profile-reduced").glob("*.json"))
+for aos in (384, 768):
+    write(
+        f"profiles/{aos}.json",
+        {
+            "scope": "Reduced profiles grouped by workload; original logical paths are preserved as keys.",
+            "records": {
+                profile.name: json.loads(profile.read_text())
+                for profile in profiles
+                if profile.name.startswith(f"{aos}-")
+            },
+        },
+    )
+for profile in profiles:
+    if profile.name.startswith(("384-", "768-")):
+        (destination / f"profiles/{profile.name}").unlink(missing_ok=True)
+    else:
+        retain(profile, f"profiles/{profile.name}")
 
 builds = {}
 for name in (

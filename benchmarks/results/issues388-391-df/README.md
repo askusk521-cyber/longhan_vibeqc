@@ -51,6 +51,11 @@ was loosened.
 - `rejected/`: incomplete or unmatched experiments and rejection reasons.
 - `reproduction/`: measured runtime patches, exact run scripts and reducers.
 
+Component and workload profile records are bundled in `384.json` and
+`768.json` under their respective directories. Each bundle's `records` keys
+preserve the original logical record paths. Bundling changes only storage
+layout; all values and ordering within each record are retained.
+
 The [Agent Note](../../../.agents/notes/implemented/performance/2026-09-16-resident-df-dataflow.md)
 explains the ownership contract, algebra, fallback boundaries and rejected
 designs. [Current documentation](../../../docs/df_occupied_cuda.md) describes
