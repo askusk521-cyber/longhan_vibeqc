@@ -125,6 +125,8 @@ void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) 
     // The independent full-domain oracle detects dropped/reused packet tails.
     orbital.shells.clear();
     for (unsigned nprim = 1; nprim <= 7; ++nprim) {
+      // Shell fields are atom index, angular momentum, then primitives: all
+      // seven signatures are S shells, spread across three physical atoms.
       core::Shell shell{nprim % 3, 0, {}};
       for (unsigned p = 0; p < nprim; ++p) shell.primitives.push_back({.6 + .2 * p, 1.0 / (p + 1)});
       orbital.shells.push_back(shell);
@@ -190,6 +192,15 @@ void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) 
   // rectangles, full ordered traversal, sparse nonsymmetric weights, and split
   // auxiliary panels. No production grouping helper is used by this oracle.
   const auto os = storage.groups(o, orbital), xs = storage.groups(x, auxiliary);
+  if (many_signatures) {
+    require(os.size() == 7 && xs.size() == 2, "packet-flush fixture lost primitive signatures");
+    for (const auto& group : os) require(group.count[0] == 1, "orbital signature must be S");
+    for (const auto& group : xs) require(group.count[0] == 1, "auxiliary signature must be S");
+    // Even triangular modes submit 28*2=56 SSS slices; full mode submits
+    // 49*2=98. Both must reuse the 24-row diagnostic buffer within a panel.
+    require(os.size() * (os.size() + 1) / 2 * xs.size() > scf::DfShellDiagnostics::packet_capacity,
+            "every pair mode must exceed the diagnostic packet capacity");
+  }
   using Work = scf::DfShellWork;
   using Counts = std::array<unsigned long long, scf::DfShellDiagnostics::metrics>;
   using Signature = std::array<std::size_t, 6>;

@@ -1,6 +1,6 @@
 """Publish complete #395 measurements and reconcile disabled/enabled work.
 
-Usage: python collect-work-evidence.py ARTIFACT_ROOT OUTPUT
+Usage: python collect_evidence.py ARTIFACT_ROOT OUTPUT
 Inputs must be complete before any output is created. Logs, checkpoints,
 libraries and profiler databases remain outside Git.
 """
