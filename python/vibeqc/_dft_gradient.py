@@ -9,8 +9,11 @@ from dataclasses import dataclass, field
 import numpy as np
 from vibeqc_compiler.common.arrays import immutable
 from vibeqc_compiler.common.provenance import canonical_hash
+from vibeqc_compiler.dft.ao import NativeAO
+from vibeqc_compiler.dft.grid import ExplicitGrid
 from vibeqc_compiler.xc.contractions import ContractionProgram, GeometryPartials
 from vibeqc_compiler.xc.spec import FunctionalSpec
+from vibeqc_compiler.xc.spec import functional as canonical_functional
 
 _METHODS = ("lda-rks", "pbe-rks", "lda-uks", "pbe-uks")
 _ARRAY_TOLERANCE = 2e-10
@@ -86,6 +89,20 @@ class StationaryKsState:
     successful: bool
     converged: bool
     physical: bool
+
+    def __post_init__(self):
+        if not isinstance(self.identity, StationaryKsIdentity):
+            raise TypeError("stationary state requires a typed identity")
+        for name in (
+            "density",
+            "fock",
+            "coefficients",
+            "orbital_energies",
+            "occupations",
+            "weighted_density",
+            "overlap",
+        ):
+            object.__setattr__(self, name, immutable(getattr(self, name)))
 
 
 @dataclass(frozen=True)
@@ -267,6 +284,11 @@ class GeneratedXcGeometry:
             raise ValueError("generated XC weights require one value per point")
         if not all(np.isfinite(value).all() for value in (centers, points, weights)):
             raise ValueError("generated XC partials must be finite")
+        object.__setattr__(
+            self,
+            "partials",
+            GeometryPartials(centers=centers, points=points, weights=weights),
+        )
 
     def directional(self, motion):
         """Contract each generated source exactly once, preserving gradient sign."""
@@ -289,26 +311,74 @@ class GeneratedXcGeometry:
                 raise ValueError(f"nonfinite {name}")
             values.append(array)
         centers, points, weights = values
-        return XcDirectionalComponents(
-            center=float(np.sum(self.partials.centers * centers)),
-            point=float(np.sum(self.partials.points * points)),
-            weight=float(np.sum(self.partials.weights * weights)),
-        )
+        with np.errstate(over="ignore", invalid="ignore"):
+            components = tuple(
+                float(np.sum(partial * direction))
+                for partial, direction in zip(
+                    (
+                        self.partials.centers,
+                        self.partials.points,
+                        self.partials.weights,
+                    ),
+                    (centers, points, weights),
+                    strict=True,
+                )
+            )
+        if not np.isfinite(components).all():
+            raise ArithmeticError("nonfinite XC directional component")
+        return XcDirectionalComponents(*components)
+
+
+def native_ao_geometry_identity(basis):
+    """Hash the nuclear geometry owned by one exact native AO basis."""
+    if not isinstance(basis, NativeAO):
+        raise TypeError("geometry identity requires NativeAO")
+    return canonical_hash(
+        {
+            "schema": "vibeqc.stationary-geometry/v1",
+            "atoms": [
+                [atom.atomic_number, *map(float, atom.position)] for atom in basis.atoms
+            ],
+            "units": "Bohr",
+        }
+    )
+
+
+def _native_ao_atoms(basis):
+    counts = [
+        2 * shell.angular_momentum + 1
+        if basis.representation == "real_spherical"
+        else (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
+        for shell in basis.shells
+    ]
+    atoms = np.repeat([shell.atom_index for shell in basis.shells], counts)
+    if atoms.shape != (basis.nao,):
+        raise ValueError("native AO ownership is inconsistent with the basis")
+    return atoms
+
+
+def xc_geometry_topology_identity(basis, grid):
+    """Hash stable AO ownership and explicit grid membership, excluding motion."""
+    if not isinstance(basis, NativeAO) or not isinstance(grid, ExplicitGrid):
+        raise TypeError("XC topology identity requires NativeAO and ExplicitGrid")
+    return canonical_hash(
+        {
+            "schema": "vibeqc.stationary-xc-topology/v1",
+            "natom": basis.natom,
+            "nao": basis.nao,
+            "ao_atoms": _native_ao_atoms(basis).tolist(),
+            "grid_owners": list(grid.owners),
+            "npoint": len(grid.points),
+        }
+    )
 
 
 def bind_generated_xc_geometry(
     contract,
     state,
     functional,
-    jets,
-    weights,
-    *,
-    ao_atoms,
-    natom,
-    basis_identity,
-    geometry_identity,
-    grid_identity,
-    topology_identity,
+    basis,
+    grid,
 ):
     """Evaluate Issue #236 geometry pullbacks and bind them to method state."""
     if not isinstance(contract, StationaryDerivativeContract):
@@ -316,6 +386,8 @@ def bind_generated_xc_geometry(
     state = contract.validate(state)
     if not isinstance(functional, FunctionalSpec):
         raise TypeError("expected a typed XC functional")
+    if not isinstance(basis, NativeAO) or not isinstance(grid, ExplicitGrid):
+        raise TypeError("stationary XC geometry requires NativeAO and ExplicitGrid")
     if functional.identity != state.identity.functional_identity:
         raise ValueError("stationary functional identity mismatch")
     if functional.spin != contract.spin:
@@ -323,11 +395,17 @@ def bind_generated_xc_geometry(
     family = "lda" if functional.ingredients == ("rho",) else "gga"
     if family != contract.family:
         raise ValueError("stationary functional family mismatch")
+    expected_identifier = "LDA_XC_PW" if contract.family == "lda" else "PBE"
+    expected_functional = canonical_functional(expected_identifier, spin=contract.spin)
+    if functional.identity != expected_functional.identity:
+        raise ValueError(
+            f"stationary {contract.family.upper()} requires canonical {expected_identifier}"
+        )
     for name, actual in (
-        ("basis_identity", basis_identity),
-        ("geometry_identity", geometry_identity),
-        ("grid_identity", grid_identity),
-        ("topology_identity", topology_identity),
+        ("basis_identity", basis.identity),
+        ("geometry_identity", native_ao_geometry_identity(basis)),
+        ("grid_identity", grid.identity),
+        ("topology_identity", xc_geometry_topology_identity(basis, grid)),
     ):
         if actual != getattr(state.identity, name):
             raise ValueError(f"stationary {name.replace('_', ' ')} mismatch")
@@ -335,19 +413,19 @@ def bind_generated_xc_geometry(
     program = ContractionProgram(functional, "geometry")
     density = state.density[0] if contract.spin == "unpolarized" else state.density
     partials = program.evaluate(
-        jets,
+        basis.evaluate(grid.points, program.contract.ao_order),
         density,
-        weights,
-        ao_atoms=ao_atoms,
-        natom=natom,
+        grid.weights,
+        ao_atoms=_native_ao_atoms(basis),
+        natom=basis.natom,
     )["geometry"]
     return GeneratedXcGeometry(
         state_identity=state.identity,
         discrete_contract_identity=program.contract.identity,
-        basis_identity=basis_identity,
-        geometry_identity=geometry_identity,
-        grid_identity=grid_identity,
-        topology_identity=topology_identity,
+        basis_identity=basis.identity,
+        geometry_identity=native_ao_geometry_identity(basis),
+        grid_identity=grid.identity,
+        topology_identity=xc_geometry_topology_identity(basis, grid),
         functional_identity=functional.identity,
         density_generation=state.identity.density_generation,
         partials=partials,

@@ -8,6 +8,8 @@ from vibeqc._dft_gradient import (
     StationaryKsIdentity,
     StationaryKsState,
     bind_generated_xc_geometry,
+    native_ao_geometry_identity,
+    xc_geometry_topology_identity,
 )
 from vibeqc_compiler.dft import NativeAO
 from vibeqc_compiler.dft.fixtures import basis_arguments
@@ -76,6 +78,31 @@ def state(method="pbe-rks", occupations=None):
         converged=True,
         physical=True,
     )
+
+
+def bound_h2(method, name, spin, *, occupations=None):
+    spec = functional(name, spin=spin)
+    value = state(method, occupations=occupations)
+    meta, _, grid = load_integration_fixture("h2")
+    args = basis_arguments(meta)
+    with NativeAO(**args) as basis:
+        value = replace(
+            value,
+            identity=replace(
+                value.identity,
+                basis_identity=basis.identity,
+                geometry_identity=native_ao_geometry_identity(basis),
+                grid_identity=grid.identity,
+                topology_identity=xc_geometry_topology_identity(basis, grid),
+                functional_identity=spec.identity,
+            ),
+        )
+        bound = bind_generated_xc_geometry(
+            StationaryDerivativeContract(value.identity), value, spec, basis, grid
+        )
+        natom = basis.natom
+    density = value.density[0] if spin == "unpolarized" else value.density
+    return spec, value, args, grid, density, bound, natom
 
 
 @pytest.mark.parametrize("method", ["lda-rks", "pbe-rks", "lda-uks", "pbe-uks"])
@@ -162,6 +189,16 @@ def test_stationary_contract_requires_weighted_density_and_true_residual():
         )
 
 
+def test_stationary_state_owns_read_only_snapshot_arrays():
+    density = np.array(state().density, copy=True)
+    value = replace(state(), density=density)
+    density[:] = 99.0
+
+    assert not np.any(value.density == 99.0)
+    with pytest.raises(ValueError, match="read-only"):
+        value.density[0, 0, 0] = 1.0
+
+
 @pytest.mark.parametrize("method", ["b3lyp-rks", "pbe0-rks", "pbe-rhf"])
 def test_stationary_contract_rejects_unsupported_method_domain(method):
     with pytest.raises(ValueError, match="LDA/PBE RKS/UKS"):
@@ -178,76 +215,55 @@ def test_stationary_contract_rejects_unsupported_method_domain(method):
     ],
 )
 def test_generated_xc_geometry_is_bound_to_stationary_identity(method, name, spin):
-    spec = functional(name, spin=spin)
-    value = state(
+    spec, value, _, grid, _, bound, natom = bound_h2(
         method,
+        name,
+        spin,
         occupations=([[1.0, 0.0], [0.7, 0.2]] if method == "pbe-uks" else None),
     )
-    value = replace(
-        value,
-        identity=replace(value.identity, functional_identity=spec.identity),
-    )
-    meta, _, grid = load_integration_fixture("h2")
-    with NativeAO(**basis_arguments(meta)) as basis:
-        ao_atoms = np.repeat(
-            [shell.atom_index for shell in basis.shells],
-            [
-                (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
-                for shell in basis.shells
-            ],
-        )
-        bound = bind_generated_xc_geometry(
-            StationaryDerivativeContract(value.identity),
-            value,
-            spec,
-            basis.evaluate(grid.points, 2 if name == "PBE" else 1),
-            grid.weights,
-            ao_atoms=ao_atoms,
-            natom=basis.natom,
-            basis_identity=value.identity.basis_identity,
-            geometry_identity=value.identity.geometry_identity,
-            grid_identity=value.identity.grid_identity,
-            topology_identity=value.identity.topology_identity,
-        )
 
     assert bound.state_identity == value.identity
     assert bound.functional_identity == spec.identity
     assert bound.density_generation == value.identity.density_generation
-    assert bound.partials.centers.shape == (basis.natom, 3)
+    assert bound.partials.centers.shape == (natom, 3)
     assert bound.partials.points.shape == grid.points.shape
     assert bound.partials.weights.shape == grid.weights.shape
     assert bound.force_capability == "unsupported"
 
 
-def test_stable_motion_reports_each_xc_component_once_and_translation():
-    spec = functional("PBE", spin="unpolarized")
-    value = state("pbe-rks")
-    value = replace(
-        value,
-        identity=replace(value.identity, functional_identity=spec.identity),
-    )
-    meta, _, grid = load_integration_fixture("h2")
-    with NativeAO(**basis_arguments(meta)) as basis:
-        ao_atoms = np.repeat(
-            [shell.atom_index for shell in basis.shells],
-            [
-                (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
-                for shell in basis.shells
-            ],
-        )
-        bound = bind_generated_xc_geometry(
-            StationaryDerivativeContract(value.identity),
+def test_generated_xc_binding_rejects_actual_source_or_method_mismatch():
+    from dataclasses import replace as dc_replace
+    from fractions import Fraction
+
+    spec, value, args, grid, _, _, _ = bound_h2("pbe-rks", "PBE", "unpolarized")
+    with NativeAO(**args) as basis:
+        stale = dc_replace(
             value,
-            spec,
-            basis.evaluate(grid.points, 2),
-            grid.weights,
-            ao_atoms=ao_atoms,
-            natom=basis.natom,
-            basis_identity=value.identity.basis_identity,
-            geometry_identity=value.identity.geometry_identity,
-            grid_identity=value.identity.grid_identity,
-            topology_identity=value.identity.topology_identity,
+            identity=dc_replace(value.identity, basis_identity="stale-basis"),
         )
+        with pytest.raises(ValueError, match="basis identity"):
+            bind_generated_xc_geometry(
+                StationaryDerivativeContract(stale.identity), stale, spec, basis, grid
+            )
+
+    wrong = dc_replace(spec, components=(("GGA_X_PBE", Fraction(1)),))
+    with NativeAO(**args) as basis:
+        relabeled = dc_replace(
+            value,
+            identity=dc_replace(value.identity, functional_identity=wrong.identity),
+        )
+        with pytest.raises(ValueError, match="canonical PBE"):
+            bind_generated_xc_geometry(
+                StationaryDerivativeContract(relabeled.identity),
+                relabeled,
+                wrong,
+                basis,
+                grid,
+            )
+
+
+def test_stable_motion_reports_each_xc_component_once_and_translation():
+    _, value, _, _, _, bound, _ = bound_h2("pbe-rks", "PBE", "unpolarized")
     rng = np.random.default_rng(163)
     centers = rng.normal(size=bound.partials.centers.shape)
     points = rng.normal(size=bound.partials.points.shape)
@@ -325,6 +341,30 @@ def test_generated_xc_geometry_rejects_stale_invalid_or_changing_motion(
         bound.directional(StableGridMotion(**values))
 
 
+def test_generated_xc_geometry_owns_read_only_partial_arrays():
+    from vibeqc._dft_gradient import GeneratedXcGeometry
+    from vibeqc_compiler.xc.contractions import GeometryPartials
+
+    value = state()
+    centers = np.zeros((2, 3))
+    bound = GeneratedXcGeometry(
+        state_identity=value.identity,
+        discrete_contract_identity="generated-contract",
+        basis_identity=value.identity.basis_identity,
+        geometry_identity=value.identity.geometry_identity,
+        grid_identity=value.identity.grid_identity,
+        topology_identity=value.identity.topology_identity,
+        functional_identity=value.identity.functional_identity,
+        density_generation=value.identity.density_generation,
+        partials=GeometryPartials(centers, np.zeros((3, 3)), np.zeros(3)),
+    )
+    centers[:] = np.inf
+
+    assert np.isfinite(bound.partials.centers).all()
+    with pytest.raises(ValueError, match="read-only"):
+        bound.partials.centers[0, 0] = 1.0
+
+
 @pytest.mark.parametrize(
     "method,name,spin",
     [
@@ -337,43 +377,16 @@ def test_generated_xc_geometry_rejects_stale_invalid_or_changing_motion(
 def test_stationary_xc_directions_match_independent_multistep_oracle(
     method, name, spin
 ):
-    spec = functional(name, spin=spin)
-    value = state(
+    spec, value, args, grid, density, bound, _ = bound_h2(
         method,
+        name,
+        spin,
         occupations=([[1.0, 0.0], [0.7, 0.2]] if spin == "polarized" else None),
     )
-    value = replace(
-        value,
-        identity=replace(value.identity, functional_identity=spec.identity),
-    )
-    meta, _, grid = load_integration_fixture("h2")
-    args = basis_arguments(meta)
     rng = np.random.default_rng(1634)
     centers = rng.normal(size=(len(args["atoms"]), 3)) * 0.07
     points = rng.normal(size=grid.points.shape) * 0.04
     weights = rng.normal(size=grid.weights.shape) * 0.001
-    density = value.density[0] if spin == "unpolarized" else value.density
-    with NativeAO(**args) as basis:
-        ao_atoms = np.repeat(
-            [shell.atom_index for shell in basis.shells],
-            [
-                (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
-                for shell in basis.shells
-            ],
-        )
-        bound = bind_generated_xc_geometry(
-            StationaryDerivativeContract(value.identity),
-            value,
-            spec,
-            basis.evaluate(grid.points, 2 if name == "PBE" else 1),
-            grid.weights,
-            ao_atoms=ao_atoms,
-            natom=basis.natom,
-            basis_identity=value.identity.basis_identity,
-            geometry_identity=value.identity.geometry_identity,
-            grid_identity=value.identity.grid_identity,
-            topology_identity=value.identity.topology_identity,
-        )
 
     zero_centers = np.zeros_like(centers)
     zero_points = np.zeros_like(points)
@@ -406,14 +419,9 @@ def test_stationary_xc_directions_match_independent_multistep_oracle(
 
 
 def test_stationary_xc_oracle_detects_omission_and_sign_reversal():
-    spec = functional("PBE", spin="unpolarized")
-    value = state("pbe-rks")
-    value = replace(
-        value,
-        identity=replace(value.identity, functional_identity=spec.identity),
+    spec, value, args, grid, density, bound, _ = bound_h2(
+        "pbe-rks", "PBE", "unpolarized"
     )
-    meta, _, grid = load_integration_fixture("h2")
-    args = basis_arguments(meta)
     rng = np.random.default_rng(1635)
     motion = StableGridMotion(
         topology_identity=value.identity.topology_identity,
@@ -421,34 +429,13 @@ def test_stationary_xc_oracle_detects_omission_and_sign_reversal():
         points=rng.normal(size=grid.points.shape) * 0.04,
         weights=rng.normal(size=grid.weights.shape) * 0.001,
     )
-    with NativeAO(**args) as basis:
-        ao_atoms = np.repeat(
-            [shell.atom_index for shell in basis.shells],
-            [
-                (shell.angular_momentum + 1) * (shell.angular_momentum + 2) // 2
-                for shell in basis.shells
-            ],
-        )
-        bound = bind_generated_xc_geometry(
-            StationaryDerivativeContract(value.identity),
-            value,
-            spec,
-            basis.evaluate(grid.points, 2),
-            grid.weights,
-            ao_atoms=ao_atoms,
-            natom=basis.natom,
-            basis_identity=value.identity.basis_identity,
-            geometry_identity=value.identity.geometry_identity,
-            grid_identity=value.identity.grid_identity,
-            topology_identity=value.identity.topology_identity,
-        )
     components = bound.directional(motion)
     oracle = finite_difference_xc_directional(
         spec,
         args,
         grid.points,
         grid.weights,
-        value.density[0],
+        density,
         motion,
     )
     assert abs(oracle.stable_estimate - components.total) < 3e-9
