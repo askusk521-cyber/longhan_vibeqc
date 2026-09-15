@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 10953,
+  "all_handwritten_scientific_lines": 11032,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -564,24 +564,24 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 6089,
+      "bytes": 7145,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 97,
+        "runtime": 111,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_derivatives.cu",
-      "physical_lines": 106,
+      "physical_lines": 122,
       "reason": "Full dense weight indexing and bounded launch adapter to the shared generated response policy and generic normalized-basis traversal. The explicit distributed-sink diagnostic changes only destination addressing; both specializations call the same generated derivative policy.",
       "regions": [],
       "role": "runtime",
-      "sha256": "64a67d213d9833b4a9b607c4a80ef629d8fe98380c9d5779ec0353a8c256a582",
+      "sha256": "6a24630826b42778442e17c8c560c3ec2da80a0130230611de6872581000ce84",
       "subsystem": "df_derivatives"
     },
     {
-      "bytes": 2164,
+      "bytes": 2193,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
@@ -594,24 +594,24 @@
       "reason": "Stable derivative view and launch ABI declarations.",
       "regions": [],
       "role": "runtime",
-      "sha256": "168664a696e2e0d310a57fa10e3d7cd73b56b6b73bfcc34a02cc1957536836bd",
+      "sha256": "88657c343f8a83998a0e49ce2b515139b6deafe4953664881272fcdd3a783474",
       "subsystem": "runtime"
     },
     {
-      "bytes": 37189,
+      "bytes": 41691,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 635
+        "scientific": 714
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 666,
+      "physical_lines": 751,
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in stream-drain, pinned-gather and bounded gradient-copy probes retain full weighted response; the latter uses the existing BLAS provider for final output reduction. Probe allocation/timing/layout glue remains in this conservative classification and is not a new derivative implementation.",
       "regions": [],
       "role": "scientific",
-      "sha256": "f9d5a9bac7c81b5a5a086b138fb59e56c27d98cc9602b8b964e2ed6e8b7c6903",
+      "sha256": "24574a60bcd9afe6a8930d178481281c0908068b6dd4d5558d317ffa963e3bb9",
       "subsystem": "df_derivatives"
     },
     {
@@ -813,6 +813,40 @@
       "role": "runtime",
       "sha256": "f0919afebde95f1de7e43fda9451f8d193fb28b7f57ef14bcec97137f417ad3e",
       "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 7250,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 129,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_shell_derivatives.cu",
+      "physical_lines": 141,
+      "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "3a5fb32d14c36d6083bb97de9d6f74339155059ac1c43ca54c96d3cecb6291a8",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "bytes": 1359,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 15,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_shell_derivatives.cuh",
+      "physical_lines": 28,
+      "reason": "Borrowed compact shell-class lists, panel and optional execution-counter launch contract.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "e3893753ddc89635a98ec68703adfd810b79321eb7541c0ca2854ab77f971531",
+      "subsystem": "runtime"
     },
     {
       "bytes": 2383,
@@ -3236,6 +3270,15 @@
     {
       "files": [],
       "measurement": "not materialized",
+      "name": "df_shell_derivatives",
+      "outputs": [
+        "generated/generated_df_shell_derivatives.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_shell_derivatives.py"
+    },
+    {
+      "files": [],
+      "measurement": "not materialized",
       "name": "weighted_eri",
       "outputs": [
         "generated/weighted_eri.cuh"
@@ -3312,8 +3355,8 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 156,
-    "runtime": 9180,
-    "scientific": 10787
+    "runtime": 9338,
+    "scientific": 10866
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3493,8 +3536,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 97,
-      "scientific": 635
+      "runtime": 240,
+      "scientific": 714
     },
     "df_response_weights": {
       "fallback": 0,
@@ -3549,7 +3592,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4220,
+      "runtime": 4235,
       "scientific": 5
     },
     "scf_tensor": {
