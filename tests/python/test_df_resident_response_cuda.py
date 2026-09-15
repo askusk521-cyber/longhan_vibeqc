@@ -219,6 +219,7 @@ def test_jk_scratch_rejects_partial_source_plan(monkeypatch):
         ("VIBEQC_DF_RESPONSE_STORAGE", "invalid"),
         ("VIBEQC_DF_DERIVATIVE_PAIRS", "invalid"),
         ("VIBEQC_DF_PACKED_AO_BLOCK_ROWS", "0"),
+        ("VIBEQC_DF_PRIMITIVE_BUCKETS", "invalid"),
         ("VIBEQC_DF_RESPONSE_ALGEBRA", "scalar"),
         ("VIBEQC_DF_SERIAL_RESPONSE_DOT", "1"),
         ("VIBEQC_DF_RESPONSE_UPLOAD_PROBE", "packed"),

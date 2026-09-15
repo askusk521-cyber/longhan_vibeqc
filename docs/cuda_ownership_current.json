@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 11576,
+  "all_handwritten_scientific_lines": 11723,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -333,20 +333,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 3331,
+      "bytes": 3654,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 50,
+        "runtime": 52,
         "scientific": 0
       },
       "path": "src/runtime/cuda_component_trace.hpp",
-      "physical_lines": 87,
+      "physical_lines": 92,
       "reason": "Opt-in CUDA event/NVTX profiling and logical work accounting; no scientific equations or provider ownership.",
       "regions": [],
       "role": "runtime",
-      "sha256": "2ea1dcfb29eb9279d357f87872583b7da838215f266d688dc9c28b45db7e0529",
+      "sha256": "e792cc4e84a3d85b2112d8dde70e32bc1dbaa21b6ffa85ea2e71888f3c0b66a6",
       "subsystem": "runtime"
     },
     {
@@ -598,20 +598,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 56422,
+      "bytes": 65821,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 924
+        "scientific": 1071
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 996,
-      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink.",
+      "physical_lines": 1151,
+      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink. Primitive-signature metadata, exact measured-profile selection and bounded packet dispatch remain conservatively counted in this method-glue owner; they do not introduce derivative equations.",
       "regions": [],
       "role": "scientific",
-      "sha256": "f9b9124a3230be14f74cb7f4336279c98c74dd15a12d1468695ed266220d3d62",
+      "sha256": "fd2d4395d15efd99f40d040443d794440333452b85aa01f16d95d411ae8f51b2",
       "subsystem": "df_derivatives"
     },
     {
@@ -815,37 +815,37 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 10737,
+      "bytes": 26396,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 186,
+        "runtime": 451,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cu",
-      "physical_lines": 205,
-      "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator. Unordered shell-pair traversal folds dense adjoints or consumes folded public AO pairs; the full ordered diagnostic remains available.",
+      "physical_lines": 495,
+      "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator. Unordered shell-pair traversal folds dense adjoints or consumes folded public AO pairs; the full ordered diagnostic remains available. Individual and bounded signature-packet entrypoints share one contraction helper and unchanged generated equations; block-prefix lookup and homogeneous primitive bounds change scheduling only.",
       "regions": [],
       "role": "runtime",
-      "sha256": "7e23bb374403b6544c6de3b5bdc9fc18d8e17d05979e0a07755c57ca484830fb",
+      "sha256": "f544343a541c5913fa69c5f34fd5b236d05113ec0d699075064041cff6b5822c",
       "subsystem": "df_derivatives"
     },
     {
-      "bytes": 2141,
+      "bytes": 4142,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 18,
+        "runtime": 32,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cuh",
-      "physical_lines": 40,
+      "physical_lines": 71,
       "reason": "Borrowed compact shell-class lists, panel and optional execution-counter launch contract.",
       "regions": [],
       "role": "runtime",
-      "sha256": "ba85c4f6eed7bf3d279d41e94ea521a945f201b06136baabe6ff4b0be721bff6",
+      "sha256": "e9c542a6ee7f40279f4d86da09af29ae934f14d9b0eaf3cda1df3aa2dcaa0259",
       "subsystem": "runtime"
     },
     {
@@ -3364,8 +3364,8 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 156,
-    "runtime": 9405,
-    "scientific": 11410
+    "runtime": 9686,
+    "scientific": 11557
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3557,8 +3557,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 297,
-      "scientific": 924
+      "runtime": 562,
+      "scientific": 1071
     },
     "df_response_weights": {
       "fallback": 0,
@@ -3613,7 +3613,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4238,
+      "runtime": 4254,
       "scientific": 5
     },
     "scf_tensor": {

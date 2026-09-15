@@ -4,7 +4,8 @@
 derivatives across all 64 s/p/d/f shell classes. `shell-sp` retains the original
 seven non-SSS s/p classes as a comparison subset. Clean endpoints qualify the
 combined `shell` / `compact` / `blas` / `pinned-panels` default for resident
-192--384-AO sm_120 device-metric execution. Other sizes, backends, source-backed
+192--384-AO sm_120 device-metric execution and the qualified 768-AO occupied
+response. Other sizes, backends, source-backed
 values, serial mappings and attribution probes retain the previous defaults.
 In particular, small UHF remains generic because pinned allocations and shell
 launches regress its complete endpoint. The initial s/p-only prototype did not
@@ -50,6 +51,47 @@ after the corresponding shell launches have been submitted successfully.
 | `packed` | 32 lanes per shell | Up to 4, bounded by shared storage |
 | `compact` | 4, 8, 16 or 32 lanes according to component count | Up to 128 threads, bounded by shared storage |
 
+`VIBEQC_DF_PRIMITIVE_BUCKETS=on` splits each angular list by exact primitive
+count and launches homogeneous `(la, lb, lc, nprim_a, nprim_b, nprim_c)` products.
+`packet` batches up to 24 signature ranges into each angular-class launch;
+every block still belongs to one homogeneous signature. `off` retains the
+angular-only traversal. Primitive counts are uniform runtime parameters; the
+generated derivative equations and component schedule are unchanged. The
+control is recorded in prepared replay metadata.
+
+The default `auto` selects packets only on RTX 5090 for the measured spherical
+384/384-AO dense symmetric response or the already qualified 768/768-AO packed
+occupied response, with one density term and the full `shell` / `compact`
+schedule. Both bases must match the measured six-bin water def2-SVP shell
+histogram: `(l,nprim) = (0,1),(0,3),(0,5),(1,1),(1,3),(2,1)` with counts
+`N/6,N/12,N/24,N/8,N/24,N/24`. Other shapes, signatures, representations,
+backends and diagnostic schedules retain angular-only execution. Explicit
+`on` and `packet` remain available for comparisons outside this profile.
+The decision and rejected alternatives are retained in the
+[signature scheduling note](../.agents/notes/implemented/performance/2026-09-15-df-signature-packets.md).
+
+Each signature preserves the original shell order, so auxiliary-panel clipping
+still uses the same public AO offsets. A symmetric or packed same-signature
+orbital product is triangular; different signatures use a rectangle once. Full
+mode traverses both orbital orientations and keeps same-signature rectangles.
+Grouping applies to the selected shell subset only; generic, dense, metric and
+unsupported-state consumers preserve their existing contracts.
+
+These products are implicit task queues. Additional device storage is one
+shell-ID array per basis, charged to the response budget. The host retains
+compact signature ranges; no shell-triple descriptors or device count/prefix/
+scatter buffers are materialized. Metadata is rebuilt within each complete
+force call, so its construction and launch-dispatch cost belong to the endpoint.
+
+A packet stores only bounded product ranges and block-count prefixes in kernel
+parameters (at most 4 KiB including all arguments). Descending primitive-product
+order lets expensive small ranges overlap cheaper ranges in the same grid.
+`grid_constant` keeps the read-only packet in parameter storage when a block
+selects its range. Full packets flush before additional ranges are admitted.
+This adds neither a device allocation nor a synchronization; storage grows
+with shells/signatures and never with the shell-triple domain. It does not use
+a persistent worker or import Direct J/K screening mathematics.
+
 Large component blocks cycle across the same lanes. Distinct shell groups use
 disjoint shared arrays and subgroup masks, so ragged primitive counts and
 clipped panels never require an unrelated group to reach a barrier. The
@@ -75,6 +117,31 @@ timing:
 | `shell_public_weights_nonzero` | Nonzero public weights consumed before projection |
 | `shell_primitive_products` | Actually executed primitive geometry/Boys evaluations |
 | `shell_cartesian_component_products` | Nonzero Cartesian contributions served by those evaluations |
+
+With `VIBEQC_DF_TRACE` enabled, `shell_ABC_pNA_NB_NC` regions retain per-signature
+stream-event intervals and their counters retain submitted tasks. Packets retain
+`shell_ABC_packet` intervals; their individual
+signature task counters remain available, but a shared kernel duration cannot
+be attributed to each signature separately. Zero primitive
+counts identify heterogeneous angular-only launches. Read the class resource
+counters from **counter maxima**, since repeated launches make their sums
+meaningless. `shell_resource_values_are_maxima=1` identifies per-operation
+resource maxima: registers, static/dynamic shared bytes, resident block/thread limits,
+and the device SM thread limit come from CUDA function/occupancy APIs. Their
+ratio is theoretical occupancy, not measured achieved occupancy. Nsight kernel
+activity and clean complete endpoints remain separate measurements.
+
+`df_shell_metadata` and `df_shell_signature_dispatch` host regions identify
+metadata preparation and grouped submission. `shell_signature_id_bytes` and
+`shell_signature_groups` describe the added lists/ranges. Submission intervals
+can include host waiting and overlap GPU work; do not add them to GPU intervals.
+`signature_packet_preparation_ns` measures diagnostic host packet construction,
+excluding driver submission; instrumentation contributes to this interval.
+Packet counters retain submitted slices, launch count, cumulative argument bytes,
+maximum packet payload, and simultaneous host view capacity. The shell signature
+counters also retain ID upload bytes and host range capacity. Parameter-copy bytes
+are reported separately from explicit H2D copies. Clean timings disable all traces
+and counters, and include preparation and submission in the complete endpoint.
 
 Panel-boundary revisits count as separate executions. Counts describe the shell
 consumer only; the full `three_center_derivative_weights` and

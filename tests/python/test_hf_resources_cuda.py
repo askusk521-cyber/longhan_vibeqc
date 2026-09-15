@@ -156,6 +156,11 @@ def test_cuda_df_common_ledger_preserves_factor_differential(
     # both the plan and cold-retry owner. Resident setup releases those same
     # 80 bytes; source setup instead removes the former 32-byte inverse copy.
     peak += 2 * 80 - 80 if mode == "resident" else -32
+    if mode == "recomputed":
+        # The compact source introduced in #381 reserves five sparse rows
+        # (orbital, auxiliary and dummy), each bounded by 4 + 3*12 + 7 bytes,
+        # instead of eight dense-transform doubles. Both source owners pay it.
+        peak += 2 * (5 * (4 + 3 * 12 + 7) - 8 * 8)
     assert selected.peak_bytes["device"] == peak
     # The source route needs a host cap to force its selection over resident.
     budget = ResourceBudget(host_bytes=selected.peak_bytes["host"], device_bytes=peak)

@@ -518,6 +518,12 @@ if(VIBEQC_ENABLE_CUDA)
     # for release performance/resource measurements.
     target_compile_options(vibeqc PRIVATE
       $<$<COMPILE_LANGUAGE:CUDA>:--Ofast-compile=max>)
+    # NVCC 12.9 fast mode over-allocates shared storage for the derivative
+    # entrypoints sharing contract_shell_task (even sss exceeds 48 KiB).
+    # Compile this unit with the normal optimizer so its per-kernel scratch
+    # remains within the launch limit. Release builds already use this mode.
+    set_property(SOURCE src/scf/cuda/df_shell_derivatives.cu
+                 APPEND PROPERTY COMPILE_OPTIONS "--Ofast-compile=0")
   endif()
   if(NOT VIBEQC_CUDA_SPLIT_COMPILE_THREADS STREQUAL "1")
     # Split compilation is useful for syntax/resource experiments on native
