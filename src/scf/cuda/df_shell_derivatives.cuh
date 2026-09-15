@@ -1,5 +1,7 @@
 #pragma once
 
+#include <span>
+
 #include "scf/cuda/df_derivatives.cuh"
 
 namespace vibeqc::scf {
@@ -12,6 +14,9 @@ struct DfShellBasisView {
   const std::int32_t* shell_ids{};
   const std::int64_t* ao_offsets{};
   std::size_t begin[4]{}, count[4]{};
+  // Zero keeps heterogeneous per-shell bounds. A positive count is a caller
+  // invariant for a homogeneous signature slice, passed uniformly at launch.
+  std::size_t primitives{};
 };
 
 /** Ordered dense reference, folded dense shell pairs, or folded packed AOs.
@@ -37,4 +42,30 @@ cudaError_t launch_df_shell_derivative_panel(DfShellBasisView orbital, DfShellBa
                                              cudaStream_t stream, bool full_domain = false,
                                              unsigned variant = 0,
                                              DfDerivativePairs pairs = DfDerivativePairs::full);
+
+/** Launch one primitive-signature shell-group product.
+ * The first/second orbital views each contain exactly one angular/signature
+ * slice; the auxiliary view may be clipped to one response panel. ``triangle``
+ * is valid only when both orbital views name the same shell slice. This keeps
+ * compact subgroups homogeneous without materializing an O(N^3) task list.
+ */
+cudaError_t launch_df_shell_derivative_group(
+    DfShellBasisView first, DfShellBasisView second, DfShellBasisView auxiliary,
+    const double* positions, std::size_t auxiliary_begin, std::size_t auxiliary_count,
+    const double* weights, double* gradient, unsigned long long* counters, cudaStream_t stream,
+    bool full_domain, unsigned variant, DfDerivativePairs pairs, bool triangle);
+/** Batch homogeneous block ranges in bounded kernel parameters.
+ * The host spans contain disjoint signature slices sharing each basis and AO
+ * offsets. Each block belongs to one signature; full/symmetric/packed coverage
+ * matches the individual-group launcher. No per-triple task list or additional
+ * device allocation is created. Larger signature domains flush bounded packets.
+ */
+cudaError_t launch_df_shell_derivative_packets(std::span<const DfShellBasisView> orbital_groups,
+                                               std::span<const DfShellBasisView> auxiliary_groups,
+                                               const double* positions, std::size_t begin,
+                                               std::size_t count, const double* weights,
+                                               double* gradient, unsigned long long* counters,
+                                               cudaStream_t stream, bool full_domain,
+                                               unsigned variant, DfDerivativePairs pairs);
+
 }  // namespace vibeqc::scf

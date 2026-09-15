@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -81,9 +82,29 @@ struct Storage {
     result.ao_offsets = upload(aos);
     return result;
   }
+  /** Build actual multi-shell signatures independently of production metadata. */
+  std::vector<scf::DfShellBasisView> groups(const scf::DfShellBasisView& base,
+                                            const core::System& system) {
+    std::map<std::pair<unsigned, std::size_t>, std::vector<std::int32_t>> ids;
+    for (std::size_t i = 0; i < system.shells.size(); ++i) {
+      const auto& shell = system.shells[i];
+      ids[{shell.angular_momentum, shell.primitives.size()}].push_back(i);
+    }
+    std::vector<scf::DfShellBasisView> result;
+    for (const auto& [signature, shells] : ids) {
+      scf::DfShellBasisView view;
+      view.basis = base.basis;
+      view.shell_ids = upload(shells);
+      view.ao_offsets = base.ao_offsets;
+      view.count[signature.first] = shells.size();
+      view.primitives = signature.second;
+      result.push_back(view);
+    }
+    return result;
+  }
 };
 
-void exercise(bool spherical_o, bool spherical_x) {
+void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) {
   core::System orbital;
   orbital.atoms = {{2, {.1, -.2, -.7}}, {1, {.3, .1, .8}}, {1, {-.5, .4, .2}}};
   // Equal angular classes need their own triangular indexing; different
@@ -92,12 +113,24 @@ void exercise(bool spherical_o, bool spherical_x) {
                     {1, 0, {{1.2, 1}}},
                     {1, 3, {{.7, 1}}},
                     {0, 2, {{.9, 1}}},
-                    {1, 1, {{.6, .7}, {1.7, -.1}, {2.3, .1}}}};
+                    {1, 1, {{.6, .7}, {1.7, -.1}, {2.3, .1}}},
+                    {2, 0, {{.75, 1}}}};
   orbital.basis_representation = spherical_o ? VIBEQC_BASIS_SPHERICAL : VIBEQC_BASIS_CARTESIAN;
   auto auxiliary = orbital;
   auxiliary.basis_representation = spherical_x ? VIBEQC_BASIS_SPHERICAL : VIBEQC_BASIS_CARTESIAN;
   auxiliary.shells = {
       {2, 3, {{.8, 1}}}, {0, 0, {{1.1, .8}, {2.1, -.2}}}, {2, 2, {{.9, 1}}}, {1, 1, {{1.2, 1}}}};
+  if (many_signatures) {
+    // More than 24 same-class signatures must flush multiple bounded packets.
+    // The independent full-domain oracle detects dropped/reused packet tails.
+    orbital.shells.clear();
+    for (unsigned nprim = 1; nprim <= 7; ++nprim) {
+      core::Shell shell{nprim % 3, 0, {}};
+      for (unsigned p = 0; p < nprim; ++p) shell.primitives.push_back({.6 + .2 * p, 1.0 / (p + 1)});
+      orbital.shells.push_back(shell);
+    }
+    auxiliary.shells = {{0, 0, {{.8, 1}}}, {2, 0, {{.7, .7}, {1.3, .3}}}};
+  }
   std::string detail;
   for (auto* system : {&orbital, &auxiliary})
     require(molecule::validate_and_normalize(*system, detail) == VIBEQC_STATUS_SUCCESS,
@@ -152,6 +185,53 @@ void exercise(bool spherical_o, bool spherical_x) {
           require(counters[0] == count * auxiliary.shells.size(), "incorrect shell-triple domain");
         }
       }
+
+  // Multi-shell signature slices exercise same-group triangles, cross-group
+  // rectangles, full ordered traversal, sparse nonsymmetric weights, and split
+  // auxiliary panels. No production grouping helper is used by this oracle.
+  const auto os = storage.groups(o, orbital), xs = storage.groups(x, auxiliary);
+  for (bool packet : {false, true})
+    for (unsigned variant = 0; variant < 3; ++variant)
+      for (const auto cap : {std::size_t{1}, std::size_t{7}, a})
+        for (const auto pairs : {scf::DfDerivativePairs::full, scf::DfDerivativePairs::symmetric,
+                                 scf::DfDerivativePairs::packed}) {
+          check(cudaMemset(output, 0, 9 * sizeof(double)));
+          check(cudaMemset(work, 0, 6 * sizeof(unsigned long long)));
+          const bool compressed = pairs == scf::DfDerivativePairs::packed;
+          const auto stride = compressed ? packed_size : n * n;
+          if (packet) {
+            for (std::size_t begin = 0; begin < a; begin += cap)
+              check(scf::launch_df_shell_derivative_packets(
+                  os, xs, r, begin, std::min(cap, a - begin),
+                  (compressed ? wp : w) + begin * stride, output, work, nullptr, true, variant,
+                  pairs));
+          } else {
+            for (std::size_t begin = 0; begin < a; begin += cap)
+              for (std::size_t ia = 0; ia < os.size(); ++ia)
+                for (std::size_t ib = 0; ib < os.size(); ++ib) {
+                  if (pairs != scf::DfDerivativePairs::full && ia < ib) continue;
+                  for (const auto& third : xs)
+                    check(scf::launch_df_shell_derivative_group(
+                        os[ia], os[ib], third, r, begin, std::min(cap, a - begin),
+                        (compressed ? wp : w) + begin * stride, output, work, nullptr, true,
+                        variant, pairs, pairs != scf::DfDerivativePairs::full && ia == ib));
+                }
+          }
+          std::vector<double> actual(9);
+          std::array<unsigned long long, 6> counters;
+          check(cudaMemcpy(actual.data(), output, 9 * sizeof(double), cudaMemcpyDeviceToHost));
+          check(cudaMemcpy(counters.data(), work, sizeof(counters), cudaMemcpyDeviceToHost));
+          for (std::size_t c = 0; c < actual.size(); ++c)
+            require(std::abs(actual[c] - expected[c]) < 2e-9,
+                    "primitive-signature derivative oracle mismatch");
+          require(counters[5] == a * stride, "incorrect grouped public weight load count");
+          if (cap == a) {
+            const auto ns = orbital.shells.size();
+            const auto count = pairs == scf::DfDerivativePairs::full ? ns * ns : ns * (ns + 1) / 2;
+            require(counters[0] == count * auxiliary.shells.size(),
+                    "incorrect grouped task domain");
+          }
+        }
 }
 }  // namespace
 
@@ -160,6 +240,7 @@ int main() {
   try {
     for (bool spherical_o : {false, true})
       for (bool spherical_x : {false, true}) exercise(spherical_o, spherical_x);
+    exercise(false, false, true);
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

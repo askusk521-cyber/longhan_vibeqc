@@ -34,6 +34,7 @@ def test_occupied_response_replay_and_zero_rank_spin(
         "VIBEQC_DF_WEIGHTED_EXECUTION", "generic" if pairs == "generic" else "shell"
     )
     monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", "compact")
+    monkeypatch.setenv("VIBEQC_DF_PRIMITIVE_BUCKETS", "packet")
     monkeypatch.setenv(
         "VIBEQC_DF_DERIVATIVE_PAIRS", "full" if pairs == "generic" else pairs
     )
@@ -148,6 +149,7 @@ def test_packed_response_crosses_ao_blocks_and_auxiliary_panels(monkeypatch, tmp
     monkeypatch.setenv("VIBEQC_DF_RESPONSE_SPACE", "occupied")
     monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", "shell")
     monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", "compact")
+    monkeypatch.setenv("VIBEQC_DF_PRIMITIVE_BUCKETS", "packet")
     monkeypatch.setenv("VIBEQC_DF_DERIVATIVE_PAIRS", "packed")
     monkeypatch.setenv("VIBEQC_DF_PACKED_AO_BLOCK_ROWS", "64")
     monkeypatch.setenv("VIBEQC_DF_SHELL_COUNTERS", "1")
