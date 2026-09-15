@@ -230,6 +230,13 @@
       "subsystem": "runtime"
     },
     {
+      "path": "src/scf/cuda/df_shell_diagnostics.cuh",
+      "reason": "Bounded optional diagnostic counter storage, observer and operation labels; scientific operation counts are defined by the generated lowering.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
       "path": "src/scf/cuda/df_gradient_bridge.cu",
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink. Primitive-signature metadata, exact measured-profile selection and bounded packet dispatch remain conservatively counted in this method-glue owner; they do not introduce derivative equations.",
       "regions": [],

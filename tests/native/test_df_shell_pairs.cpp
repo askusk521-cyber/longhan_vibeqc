@@ -190,6 +190,21 @@ void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) 
   // rectangles, full ordered traversal, sparse nonsymmetric weights, and split
   // auxiliary panels. No production grouping helper is used by this oracle.
   const auto os = storage.groups(o, orbital), xs = storage.groups(x, auxiliary);
+  using Work = scf::DfShellWork;
+  using Counts = std::array<unsigned long long, scf::DfShellDiagnostics::metrics>;
+  using Signature = std::array<std::size_t, 6>;
+  std::map<Signature, Counts> detailed;
+  std::vector<unsigned long long> diagnostic_host(scf::DfShellDiagnostics::elements);
+  scf::DfShellDiagnostics diagnostics{
+      storage.upload(diagnostic_host), diagnostic_host.data(),
+      [](unsigned la, unsigned lb, unsigned lc, std::size_t pa, std::size_t pb, std::size_t pc,
+         std::span<const unsigned long long> values, void* context) {
+        auto& records = *static_cast<std::map<Signature, Counts>*>(context);
+        auto& counts = records[{la, lb, lc, pa, pb, pc}];
+        for (unsigned metric = 0; metric < values.size(); ++metric)
+          counts[metric] += values[metric];
+      },
+      &detailed};
   for (bool packet : {false, true})
     for (unsigned variant = 0; variant < 3; ++variant)
       for (const auto cap : {std::size_t{1}, std::size_t{7}, a})
@@ -199,12 +214,17 @@ void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) 
           check(cudaMemset(work, 0, 6 * sizeof(unsigned long long)));
           const bool compressed = pairs == scf::DfDerivativePairs::packed;
           const auto stride = compressed ? packed_size : n * n;
+          // Exercise actual counters on both launchers, sparse weights, split
+          // auxiliary shells, all pair modes and both public representations.
+          const bool inspect_work = variant == 2 && cap == 7;
+          detailed.clear();
+          auto* sink = inspect_work ? &diagnostics : nullptr;
           if (packet) {
             for (std::size_t begin = 0; begin < a; begin += cap)
               check(scf::launch_df_shell_derivative_packets(
                   os, xs, r, begin, std::min(cap, a - begin),
                   (compressed ? wp : w) + begin * stride, output, work, nullptr, true, variant,
-                  pairs));
+                  pairs, sink));
           } else {
             for (std::size_t begin = 0; begin < a; begin += cap)
               for (std::size_t ia = 0; ia < os.size(); ++ia)
@@ -214,7 +234,7 @@ void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) 
                     check(scf::launch_df_shell_derivative_group(
                         os[ia], os[ib], third, r, begin, std::min(cap, a - begin),
                         (compressed ? wp : w) + begin * stride, output, work, nullptr, true,
-                        variant, pairs, pairs != scf::DfDerivativePairs::full && ia == ib));
+                        variant, pairs, pairs != scf::DfDerivativePairs::full && ia == ib, sink));
                 }
           }
           std::vector<double> actual(9);
@@ -225,6 +245,64 @@ void exercise(bool spherical_o, bool spherical_x, bool many_signatures = false) 
             require(std::abs(actual[c] - expected[c]) < 2e-9,
                     "primitive-signature derivative oracle mismatch");
           require(counters[5] == a * stride, "incorrect grouped public weight load count");
+          if (inspect_work) {
+            std::map<Signature, unsigned long long> expected_visits;
+            // Reconstruct the signature domain from host shells, independently
+            // of device packet indexing and the diagnostic observer.
+            for (std::size_t sa = 0; sa < orbital.shells.size(); ++sa)
+              for (std::size_t sb = 0; sb < orbital.shells.size(); ++sb) {
+                const auto& first = orbital.shells[sa];
+                const auto& second = orbital.shells[sb];
+                const auto ka = std::pair(first.angular_momentum, first.primitives.size());
+                const auto kb = std::pair(second.angular_momentum, second.primitives.size());
+                if (pairs != scf::DfDerivativePairs::full && (ka < kb || (ka == kb && sa < sb)))
+                  continue;
+                for (const auto& third : auxiliary.shells)
+                  expected_visits[{first.angular_momentum, second.angular_momentum,
+                                   third.angular_momentum, first.primitives.size(),
+                                   second.primitives.size(), third.primitives.size()}] +=
+                      (a + cap - 1) / cap;
+              }
+            Counts totals{};
+            for (const auto& [signature, observed] : detailed) {
+              const auto get = [&](Work kind) { return observed[static_cast<unsigned>(kind)]; };
+              require(get(Work::shell_tasks) == expected_visits.at(signature),
+                      "diagnostic signature task domain differs from independent host shells");
+              const auto primitive_count = get(Work::primitive_products);
+              require(primitive_count == get(Work::active_shell_tasks) * signature[3] *
+                                             signature[4] * signature[5],
+                      "diagnostic primitive count differs from independent host signatures");
+              require(
+                  primitive_count == get(Work::boys_evaluations) &&
+                      primitive_count == get(Work::boys_series) + get(Work::boys_large_argument),
+                  "Boys branch counts do not conserve primitive work");
+              require(get(Work::boys_small_argument) <= get(Work::boys_series) &&
+                          get(Work::boys_series_iterations) >= get(Work::boys_series) &&
+                          get(Work::boys_series_iterations) <= 179 * get(Work::boys_series),
+                      "Boys dynamic series counters are outside their exact loop bounds");
+              require(get(Work::gradient_atomics_a) == 3 * get(Work::active_shell_tasks) &&
+                          get(Work::gradient_atomics_b) == 3 * get(Work::active_shell_tasks) &&
+                          get(Work::gradient_atomics_c) == 3 * get(Work::active_shell_tasks) &&
+                          get(Work::gradient_atomics_shared_atom) +
+                                  get(Work::gradient_atomics_distinct_atom) ==
+                              9 * get(Work::active_shell_tasks),
+                      "gradient atomic channels or shared-atom classification differ");
+              require(get(Work::expansion_term_products) == get(Work::folding_shared_atomics),
+                      "legacy folding must count one shared atomic per expansion product");
+              for (unsigned metric = 0; metric < totals.size(); ++metric)
+                totals[metric] += observed[metric];
+            }
+            require(detailed.size() == expected_visits.size(), "missing diagnostic signature");
+            const std::array mapping{Work::shell_tasks,
+                                     Work::active_shell_tasks,
+                                     Work::public_nonzero_weights,
+                                     Work::primitive_products,
+                                     Work::active_component_products,
+                                     Work::public_weight_loads};
+            for (unsigned metric = 0; metric < mapping.size(); ++metric)
+              require(totals[static_cast<unsigned>(mapping[metric])] == counters[metric],
+                      "detailed work differs from the existing executed-work counters");
+          }
           if (cap == a) {
             const auto ns = orbital.shells.size();
             const auto count = pairs == scf::DfDerivativePairs::full ? ns * ns : ns * (ns + 1) / 2;

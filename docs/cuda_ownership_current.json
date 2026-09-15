@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 12023,
+  "all_handwritten_scientific_lines": 12048,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "delta": {
     "added_files": [
@@ -33,6 +33,7 @@
       "src/scf/cuda/df_scf_kernels.hpp",
       "src/scf/cuda/df_shell_derivatives.cu",
       "src/scf/cuda/df_shell_derivatives.cuh",
+      "src/scf/cuda/df_shell_diagnostics.cuh",
       "src/scf/cuda/df_source_internal.hpp",
       "src/scf/cuda/df_source_kernels.cu",
       "src/scf/cuda/df_source_kernels.hpp",
@@ -160,8 +161,8 @@
       "fallback": 0,
       "oracle": 10,
       "performance_exception": 66,
-      "runtime": -6000,
-      "scientific": 1755
+      "runtime": -5797,
+      "scientific": 1780
     },
     "reclassified_files": [
       "src/dft/cuda_grid.cu",
@@ -775,20 +776,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 67035,
+      "bytes": 68771,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 1091
+        "scientific": 1116
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 1171,
+      "physical_lines": 1198,
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink. Primitive-signature metadata, exact measured-profile selection and bounded packet dispatch remain conservatively counted in this method-glue owner; they do not introduce derivative equations.",
       "regions": [],
       "role": "scientific",
-      "sha256": "d2d3a137bec1f69bb14f6da1ab104c112f4da1273dfd384df0362056ed4d5093",
+      "sha256": "05de3474686acc3a49706ad2bc3d8fd6175306df251255aba3787fc460e7beb2",
       "subsystem": "df_derivatives"
     },
     {
@@ -992,37 +993,54 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 26396,
+      "bytes": 33300,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 451,
+        "runtime": 571,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cu",
-      "physical_lines": 495,
+      "physical_lines": 621,
       "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator. Unordered shell-pair traversal folds dense adjoints or consumes folded public AO pairs; the full ordered diagnostic remains available. Individual and bounded signature-packet entrypoints share one contraction helper and unchanged generated equations; block-prefix lookup and homogeneous primitive bounds change scheduling only.",
       "regions": [],
       "role": "runtime",
-      "sha256": "f544343a541c5913fa69c5f34fd5b236d05113ec0d699075064041cff6b5822c",
+      "sha256": "16499c2abcb55f00a84193e3435627464a8851c8ada3c34458111e285ac003f8",
       "subsystem": "df_derivatives"
     },
     {
-      "bytes": 4142,
+      "bytes": 4412,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 32,
+        "runtime": 36,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cuh",
-      "physical_lines": 71,
+      "physical_lines": 75,
       "reason": "Borrowed compact shell-class lists, panel and optional execution-counter launch contract.",
       "regions": [],
       "role": "runtime",
-      "sha256": "e9c542a6ee7f40279f4d86da09af29ae934f14d9b0eaf3cda1df3aa2dcaa0259",
+      "sha256": "5cafb58483c7ab57953578f326cba3b1d1c0f2625536f92c803b14c07e50bda0",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 3507,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 79,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_shell_diagnostics.cuh",
+      "physical_lines": 92,
+      "reason": "Bounded optional diagnostic counter storage, observer and operation labels; scientific operation counts are defined by the generated lowering.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "a259f55a9a95bb9c334d2495895151b6bdbbebfa0e6dddb47cd1351eca1cb458",
       "subsystem": "runtime"
     },
     {
@@ -3485,10 +3503,10 @@
     {
       "files": [
         {
-          "bytes": 716288,
-          "code_lines": 21990,
+          "bytes": 716954,
+          "code_lines": 21998,
           "path": "generated/generated_df_derivatives.cuh",
-          "sha256": "9db748e379aa5a1646ba7c51ab3da47fbcb72a9f88f033bebace477b16f730db"
+          "sha256": "77ca66e9fcef8892fa706e2cd7a1f07708906bf2ac8d5dbde3597a2dee9bb1dd"
         }
       ],
       "measurement": "explicit build",
@@ -3501,10 +3519,10 @@
     {
       "files": [
         {
-          "bytes": 56155,
-          "code_lines": 1749,
+          "bytes": 56942,
+          "code_lines": 1761,
           "path": "generated/generated_df_shell_derivatives.cuh",
-          "sha256": "f6dc235664057ff15186bdc1b051167bc97a1a8209eeb79f1cd9d0fe5e27f3ef"
+          "sha256": "e29856d48b92371c98e70aaf094888442db3f9f911d2dd18c2cd327bdf04df18"
         }
       ],
       "measurement": "explicit build",
@@ -3698,13 +3716,13 @@
       "owner": "python/vibeqc_compiler/integral/ecp_projector.py"
     }
   ],
-  "generated_bytes": 27152743,
+  "generated_bytes": 27154196,
   "maintained_code_lines": {
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 156,
-    "runtime": 9573,
-    "scientific": 11857
+    "runtime": 9776,
+    "scientific": 11882
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3897,8 +3915,8 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 562,
-      "scientific": 1091
+      "runtime": 682,
+      "scientific": 1116
     },
     "df_response_weights": {
       "fallback": 0,
@@ -3953,7 +3971,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4254,
+      "runtime": 4337,
       "scientific": 5
     },
     "scf_tensor": {

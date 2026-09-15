@@ -109,7 +109,9 @@ qualification compares these bounds with every compiled kernel's actual use.
 Metadata allocation grows with shell count and is charged before choosing the
 response tile from the remaining budget. Static shared storage is bounded by
 the generated angular class. The launcher borrows the response owner's stream
-and adds no synchronization or allocation of its own. Selecting the sharded
+and adds no synchronization or allocation of its own during normal execution.
+The explicit detailed-work diagnostic below adds readbacks and stream drains.
+Selecting the sharded
 gradient diagnostic together with shell execution is rejected because that
 diagnostic specifically controls the original AO-element sink layout.
 
@@ -124,6 +126,65 @@ timing:
 | `shell_public_weights_nonzero` | Nonzero public weights consumed before projection |
 | `shell_primitive_products` | Actually executed primitive geometry/Boys evaluations |
 | `shell_cartesian_component_products` | Nonzero Cartesian contributions served by those evaluations |
+| `shell_public_weights_consumed` | Public response-weight loads, including both off-diagonal orientations in symmetric mode |
+
+Set `VIBEQC_DF_SHELL_WORK=1` alongside `VIBEQC_DF_SHELL_COUNTERS=1` and
+`VIBEQC_DF_TRACE` for the detailed mathematical work ledger. It records actual
+Boys positive-series iterations and aggregates fixed generated loop counts per
+active primitive/component. Counters are named `shell_ABC_work_FIELD` and
+`shell_ABC_pNA_NB_NC_work_FIELD`, preserving both angular class and primitive
+signature. A zero primitive signature denotes a heterogeneous angular-only
+launch and cannot be used for homogeneous host-domain reconstruction.
+
+The detailed fields include geometry/Boys calls, requested Boys-order sum,
+positive-series iterations, polynomial preparation calls, emitted cache
+coefficients, convolution iterations, active component products, public weight
+loads, expansion products, weight-fold shared atomics/direct stores, A/B/C
+gradient atomics and subgroup rendezvous. `boys_small_argument` counts arguments
+below `1e-8` within the series branch; it is a subset of `boys_series`, not a
+third numerical branch. `boys_large_argument` is the branch at arguments at
+least 30. A gradient update counts as shared-atom work when that mathematical
+center has the same physical atom as either other center; shared and distinct
+counts partition the A/B/C updates. Counts describe emitted source operations,
+not hardware instructions, memory transactions, or elapsed-time fractions.
+`public_nonzero_weights` counts nonzero logical weights after pair folding:
+one symmetric off-diagonal weight consumes two public loads but contributes
+at most one such nonzero weight before Cartesian expansion.
+
+Detailed diagnostics borrow a fixed buffer of 24 packet rows, 16 shards and 27
+unsigned 64-bit counters: 82,944 device bytes and the same host readback size.
+The force-response owner charges both allocations before selecting its panel.
+Each packet/group readback drains the stream before reusing that buffer; bytes
+and drains enter the response resource statistics. `shell_work_panel_BEGIN_COUNT`
+records actual panel repetitions for independent domain reconstruction. All
+these allocations, diagnostic atomics and readbacks are disabled when the
+control is absent or zero. Intrusive diagnostic times must remain separate
+from clean endpoint medians.
+
+For the 384/768 AO headline cases, reduce a single force-call trace with:
+
+```bash
+PYTHONPATH=python:. python -m benchmarks.df_shell_work_ledger \
+  --trace detailed.jsonl --measurement measured.json \
+  --generated-header build/cuda-release-sm120/generated/generated_df_shell_derivatives.cuh \
+  --nsys measured.sqlite --output work.json
+```
+
+The reducer validates executed shell/signature counts against public basis
+metadata and recorded panels, checks generated work and counter conservation,
+and retains reconstruction/source/library hashes. It groups pure s/p,
+d-containing and the seven Rys-prototype classes separately. The optional
+Nsight SQLite export must cover the same capture: its per-class kernel launch
+counts must match the component trace. Nsight kernel durations and resource
+rows remain separate from CUDA event intervals. A packet shares one duration;
+individual signature timing cannot be inferred from its work proportions.
+The class record also identifies the selected generated schedule's component
+lanes and shell tasks per block, checked against the actual kernel variant and
+Nsight block size.
+
+The [work-diagnostic rationale](../.agents/notes/implemented/performance/2026-09-16-df-shell-work-diagnostics.md)
+records aggregation choices, counter semantics, measured overhead and the
+conditions for reconsidering the disabled-path implementation.
 
 With `VIBEQC_DF_TRACE` enabled, `shell_ABC_pNA_NB_NC` regions retain per-signature
 stream-event intervals and their counters retain submitted tasks. Packets retain

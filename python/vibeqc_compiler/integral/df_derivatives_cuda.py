@@ -46,18 +46,31 @@ struct Response { double value; Vec3 first,second,third; };
 __device__ __forceinline__ unsigned order(Angular a) { return a.x+a.y+a.z; }
 __device__ __forceinline__ double component(Vec3 a,unsigned i) { return i==0?a.x:i==1?a.y:a.z; }
 __device__ __forceinline__ unsigned power(Angular a,unsigned i) { return i==0?a.x:i==1?a.y:a.z; }
+/** Diagnostic metadata describes the actual positive-series branch, not FLOPs.
+ * A null sink is a compile-time constant in the normal inlined callers.
+ * Zero arguments still execute the series; small_argument is a subdomain of
+ * that branch, never a claim that a separate asymptotic formula was used.
+ */
+struct BoysWork {
+  unsigned series_iterations{},series{},large_argument{},small_argument{};
+};
 /** Positive-term series/downward recurrence avoids small-T cancellation. */
-__device__ __forceinline__ void boys_values(unsigned order,double argument,double* f) {
+__device__ __forceinline__ void boys_values(unsigned order,double argument,double* f,
+                                           BoysWork* work=nullptr) {
+  if(work) *work={};
   const double decay=exp(-argument);
   if (argument<30.0) {
+    if(work) {work->series=1;work->small_argument=argument<1e-8;}
     double term=1.0/(2*order+1),sum=term;
     for(unsigned k=1;k<180;++k) {
       term*=2*argument/(2*order+2*k+1); sum+=term;
+      if(work) ++work->series_iterations;
       if(term<1e-17*sum) break;
     }
     f[order]=decay*sum;
     for(unsigned n=order;n>0;--n) f[n-1]=(2*argument*f[n]+decay)/(2*n-1);
   } else {
+    if(work) work->large_argument=1;
     f[0]=0.88622692545275801365*erf(sqrt(argument))/sqrt(argument);
     for(unsigned n=1;n<=order;++n) f[n]=((2*n-1)*f[n-1]-decay)/(2*argument);
   }
@@ -98,7 +111,7 @@ struct Geometry {
   double pa[3],pb[3],dx[3],sx,sy,ip,iq,prefactor,f[11];
 };
 __device__ __forceinline__ void prepare_geometry(double alpha,Vec3 A,double beta,Vec3 B,
-    double gamma,Vec3 C,unsigned total,Geometry& g) {
+    double gamma,Vec3 C,unsigned total,Geometry& g,BoysWork* work=nullptr) {
   const double p=alpha+beta,q=gamma,rho=p*q/(p+q);
   g.sx=q/(p+q);g.sy=p/(p+q);g.ip=0.5/p;g.iq=0.5/q;
   double distance=0,ab2=0;
@@ -108,7 +121,7 @@ __device__ __forceinline__ void prepare_geometry(double alpha,Vec3 A,double beta
     g.dx[axis]=component(A,axis)-component(C,axis)+g.pa[axis];
     distance+=g.dx[axis]*g.dx[axis];ab2+=ab*ab;
   }
-  boys_values(total+1,rho*distance,g.f);
+  boys_values(total+1,rho*distance,g.f,work);
   g.prefactor=34.986836655249725694/(p*q*sqrt(p+q))*exp(-alpha*beta/p*ab2);
 }
 __device__ __noinline__ Response evaluate(bool metric,double alpha,Vec3 A,Angular a,
