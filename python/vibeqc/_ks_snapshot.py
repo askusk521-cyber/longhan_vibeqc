@@ -21,23 +21,28 @@ from .ks import SCF_DOMAIN
 class NativeKsSnapshot:
     """Own one native snapshot and check its current batch before consumption."""
 
-    _fixed = frozenset(
-        (
-            "_batch",
-            "_library",
-            "metadata",
-            "values",
-            "grid",
-            "_identity",
-            "_arrays",
-            "_residual",
-        )
+    __slots__ = (
+        "_arrays",
+        "_batch",
+        "_handle",
+        "_identity",
+        "_library",
+        "_residual",
+        "grid",
+        "metadata",
+        "values",
     )
+    _fixed = frozenset(__slots__)
 
     def __setattr__(self, name, value):
-        if name in self._fixed and name in self.__dict__:
+        if name in self._fixed and hasattr(self, name):
             raise AttributeError("native KS snapshot provenance is immutable")
         super().__setattr__(name, value)
+
+    def __delattr__(self, name):
+        if name in self._fixed:
+            raise AttributeError("native KS snapshot provenance is immutable")
+        super().__delattr__(name)
 
     def __init__(self, batch, index):
         if not isinstance(batch, PreparedBatch):
@@ -47,7 +52,9 @@ class NativeKsSnapshot:
         batch._ensure_open()
         self._batch = batch
         self._library = lib = batch._library
-        self._handle = ct.c_void_p()
+        # Keep the pointer as an immutable integer. Exposing a c_void_p here
+        # would permit callers to mutate .value even if assignment is blocked.
+        self._handle = 0
         try:
             create = lib.vibeqc_ks_snapshot_create_v1
         except AttributeError as error:
@@ -71,10 +78,12 @@ class NativeKsSnapshot:
         lib.vibeqc_ks_snapshot_destroy_v1.argtypes = [ct.c_void_p]
         lib.vibeqc_ks_snapshot_destroy_v1.restype = None
         metadata = (ct.c_uint64 * 16)()
+        handle = ct.c_void_p()
         try:
             _native.check(
-                lib, create(batch._batch, index, ct.byref(self._handle), metadata, 16)
+                lib, create(batch._batch, index, ct.byref(handle), metadata, 16)
             )
+            object.__setattr__(self, "_handle", handle.value)
             self.metadata = tuple(metadata)
             if metadata[0] != 1 or metadata[7] != 1:
                 raise NotImplementedError(
@@ -265,8 +274,11 @@ class NativeKsSnapshot:
 
     def close(self):
         if self._handle:
-            self._library.vibeqc_ks_snapshot_destroy_v1(self._handle)
-            self._handle = ct.c_void_p()
+            handle = self._handle
+            # Revocation may clear the binding internally; public assignment
+            # must never attach a fresh lease to this snapshot's old contents.
+            object.__setattr__(self, "_handle", 0)
+            self._library.vibeqc_ks_snapshot_destroy_v1(handle)
 
     def __del__(self):
         if hasattr(self, "_handle"):

@@ -21,6 +21,10 @@ Python factory checks these actual sources before deriving identity labels.
 The native snapshot retains no borrowed batch pointer: validation receives the
 live Python-owned batch and queries its current token under the native context
 lock. Copied arrays alone never authorize stationary consumption.
+The Python handle binding is an immutable integer in a slotted owner: ordinary
+assignment, deletion and mutation through a ctypes pointer alias cannot attach
+a fresh native token to stale cached arrays. Only internal creation/closure may
+set or clear the handle.
 
 Array algebra and generated fixed-density directional diagnostics remain
 separate from stationary authorization. Native SCF's scaled tail/spin domain
@@ -49,7 +53,8 @@ exists. This is groundwork, not completion of #163-A or public gradients.
 
 `test_dft_stationary_native.py` exercises real LDA/PBE RKS/UKS solves, replay,
 failed requests, closure, wrong same-size bases, a self-consistent metric
-transformation, and regularization relabeling. `test_ks_cuda.cpp` covers native
+transformation, regularization relabeling and attempted fresh-handle substitution
+after replay. `test_ks_cuda.cpp` covers native
 bridge invalidation and proves stale reads leave caller arrays untouched.
 The fixed-density multistep oracle uses the true analytically integrated H2
 overlap and checks separate/combined source motions and sign/omission controls.

@@ -141,6 +141,19 @@ def test_native_snapshot_rejects_relabeling_and_replay(method):
                 contract.validate(state)
             current = StationaryKsState.from_native(batch, basis)
             assert current.identity.solve_epoch > state.identity.solve_epoch
+            stale_handle = state._source._handle
+            assert type(stale_handle) is int  # No mutable ctypes .value alias.
+            with pytest.raises(AttributeError, match="provenance is immutable"):
+                state._source._handle = current._source._handle
+            with pytest.raises(AttributeError, match="provenance is immutable"):
+                del state._source._handle
+            assert state._source._handle == stale_handle
+            with pytest.raises(ValueError, match="stale"):
+                contract.validate(state)
+            assert (
+                StationaryDerivativeContract(current.identity).validate(current)
+                is current
+            )
 
             # A rejected geometry update revokes the next proof too, before a
             # new successful solve. This calls the actual native invalidation.
@@ -153,5 +166,10 @@ def test_native_snapshot_rejects_relabeling_and_replay(method):
             final = StationaryKsState.from_native(batch, basis)
         # Source AO lifetime does not own the native snapshot; batch lifetime does.
         assert StationaryDerivativeContract(final.identity).validate(final) is final
+        final._source.close()
+        assert final._source._handle == 0
+        final._source.close()  # Explicit lease closure is idempotent.
+        with pytest.raises(ValueError, match="stale"):
+            StationaryDerivativeContract(final.identity).validate(final)
     with pytest.raises(RuntimeError, match="closed"):
         StationaryDerivativeContract(final.identity).validate(final)
