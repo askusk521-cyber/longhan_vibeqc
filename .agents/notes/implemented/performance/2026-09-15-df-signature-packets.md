@@ -142,6 +142,23 @@ lines in the whole-file bridge classification and 281 runtime lines. Keep those
 counts visible; they are layout/selection/dispatch growth, not new equations or
 a reason to relabel the existing bridge as runtime.
 
+### NVCC fast-compile compatibility
+
+The CUDA CI configuration enables NVCC 12.9 `--Ofast-compile=max`, while all
+retained performance measurements use the ordinary Release optimizer. CI and
+a local reproduction found that both max and min fast levels exceed the 48-KiB static shared
+limit for all 384 derivative entrypoints, including sss, after sharing the
+contraction helper between individual and packet kernels. The ordinary optimizer
+produces the measured per-class shared footprints and compiles successfully.
+
+Keep the fast-build target option for other units, but override this source
+with `--Ofast-compile=0`. This is a build compatibility exception; it does not
+alter the measured Release options, CUDA source, generated equations or dispatch.
+The ordinary Release build and oracle/endpoint qualification above already
+validate this optimization mode. The generated fast-build CMake command is
+checked to contain the source override after the target's max option. Do not
+use fast-build outputs for production performance/resource claims.
+
 ## Revisit when
 
 New shell histograms, devices or response layouts have complete endpoint and
