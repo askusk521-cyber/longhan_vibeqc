@@ -40,6 +40,75 @@ struct PinnedResponseSlice {
     if (data) (void)cudaFreeHost(data);
   }
 };
+/** Two bounded pinned panels, each protected by its last queued H2D read.
+ * Declare before Arena: even an exceptional exit drains GPU reads before the
+ * host allocation is released. Events mark copies, rather than later response
+ * work, so recycling one panel need not drain the entire response stream.
+ */
+struct PinnedResponsePanels {
+  struct Slot {
+    cudaEvent_t last_read{};
+    std::size_t begin{}, count{};
+  } slots[2];
+  double* data{};
+  std::size_t matrix{}, auxiliary{}, columns{}, stride{}, next{};
+  ~PinnedResponsePanels() {
+    for (const auto& slot : slots)
+      if (slot.last_read) (void)cudaEventDestroy(slot.last_read);
+    if (data) (void)cudaFreeHost(data);
+  }
+  std::size_t initialize(std::size_t pairs, std::size_t naux, std::size_t available) {
+    matrix = pairs;
+    auxiliary = naux;
+    // Offset adjacent column cache sets by one line. An unpadded AO-square
+    // stride aliases cache sets for the 192/384 sentinels during the transpose.
+    stride = ((matrix + 511) / 512) * 512 + 8;
+    columns = std::min({std::size_t{16}, auxiliary, available / sizeof(double) / stride / 2});
+    if (!columns) throw std::bad_alloc();
+    const auto bytes = 2 * columns * stride * sizeof(double);
+    check(cudaMallocHost(reinterpret_cast<void**>(&data), bytes));
+    for (auto& slot : slots)
+      check(cudaEventCreateWithFlags(&slot.last_read, cudaEventDisableTiming));
+    return bytes;
+  }
+  unsigned prepare(std::size_t p, std::span<const double> raw, cudaStream_t stream,
+                   std::size_t nbf) {
+    for (unsigned i = 0; i < 2; ++i)
+      if (p >= slots[i].begin && p - slots[i].begin < slots[i].count) {
+        runtime::cuda_trace::trace_counter("raw_panel_host_cache_hits", 1);
+        return i;
+      }
+    const auto i = static_cast<unsigned>(next++ % 2);
+    auto& slot = slots[i];
+    if (slot.count) {
+      runtime::cuda_trace::TraceRegion reuse("raw_panel_host_reuse_wait", stream);
+      check(cudaEventSynchronize(slot.last_read));
+      runtime::cuda_trace::trace_counter("raw_panel_event_synchronizations", 1);
+    }
+    slot.begin = p / columns * columns;
+    slot.count = std::min(columns, auxiliary - slot.begin);
+    runtime::cuda_trace::TraceRegion gather("raw_panel_host_gather", stream);
+    runtime::host_trace::Region host_gather("df_raw_panel_host_gather", nbf);
+    auto* output = data + i * columns * stride;
+    // Traverse a bounded row group one output column at a time. Contiguous
+    // stores avoid cycling through sixteen distant destination pages for
+    // every AO pair, while the group's source cache lines stay reusable by
+    // the adjacent columns. This changes only byte-copy order, not storage.
+    constexpr std::size_t gather_rows = 128;
+    for (std::size_t first = 0; first < matrix; first += gather_rows)
+      for (std::size_t q = 0; q < slot.count; ++q)
+        for (std::size_t ij = first; ij < std::min(matrix, first + gather_rows); ++ij)
+          output[q * stride + ij] = raw[ij * auxiliary + slot.begin + q];
+    runtime::cuda_trace::trace_counter("raw_panel_host_gather_elements", matrix * slot.count);
+    return i;
+  }
+  const double* column(unsigned slot, std::size_t p) const {
+    return data + (slot * columns + p - slots[slot].begin) * stride;
+  }
+  void record(unsigned slot, cudaStream_t stream) {
+    check(cudaEventRecord(slots[slot].last_read, stream));
+  }
+};
 /** Compact metadata independent of Direct quartet queues and derivative tensors. */
 struct HostBasis {
   std::vector<std::int32_t> shell_atoms, ao_shells;
@@ -457,6 +526,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
     runtime::cuda_trace::TraceRegion preparation("response_allocation_and_uploads",
                                                  reinterpret_cast<cudaStream_t>(stream_handle));
     PinnedResponseSlice packed_slice;
+    PinnedResponsePanels raw_panels;
     // The host destination must outlive Arena's exceptional-path stream drain.
     std::array<unsigned long long, 5> observed_shell_work{};
     unsigned long long* shell_counters = nullptr;
@@ -464,11 +534,38 @@ vibeqc_status execute_cuda_df_hf_gradient(
     arena.stream = reinterpret_cast<cudaStream_t>(stream_handle);
     arena.owns_stream = false;
     const auto o = arena.upload(host_o), x = arena.upload(host_a);
+    // Clean complete-force endpoints qualify this combined default only for
+    // resident 192--384-AO sm_120 execution. Small UHF regresses from launch and
+    // pinned-allocation overhead; other backends and source-backed/larger
+    // regimes need their own endpoint evidence. Explicit selectors stay usable
+    // everywhere. Attribution probes retain the original comparison defaults.
+    bool promoted_default = false;
+    const char* upload_diagnostic = std::getenv("VIBEQC_DF_RESPONSE_UPLOAD_PROBE");
+    const char* scatter_diagnostic = std::getenv("VIBEQC_DF_RESPONSE_SCATTER_PROBE");
+    const char* serial_diagnostic = std::getenv("VIBEQC_DF_SERIAL_RESPONSE_DOT");
+    if (device_metric && schedule == 0 && !source && n >= 192 && n <= 384 &&
+        !(upload_diagnostic && *upload_diagnostic) &&
+        !(scatter_diagnostic && *scatter_diagnostic) &&
+        !(serial_diagnostic && std::string_view(serial_diagnostic) == "1")) {
+      cudaDeviceProp properties{};
+      check(cudaGetDeviceProperties(&properties, device));
+      promoted_default = properties.major == 12 && properties.minor == 0;
+    }
     const char* execution_control = std::getenv("VIBEQC_DF_WEIGHTED_EXECUTION");
-    const std::string_view execution = execution_control ? execution_control : "generic";
-    if (execution != "generic" && execution != "shell-sp")
-      throw std::invalid_argument("unknown DF weighted execution (use generic or shell-sp)");
-    const bool shell_execution = execution == "shell-sp" && device_metric && schedule == 0;
+    const std::string_view execution =
+        execution_control ? execution_control : (promoted_default ? "shell" : "generic");
+    if (execution != "generic" && execution != "shell-sp" && execution != "shell")
+      throw std::invalid_argument("unknown DF weighted execution (use generic, shell-sp or shell)");
+    const bool shell_execution = execution != "generic" && device_metric && schedule == 0;
+    const bool full_shell_domain = execution == "shell";
+    const char* shell_schedule_control = std::getenv("VIBEQC_DF_SHELL_SCHEDULE");
+    const std::string_view shell_schedule =
+        shell_schedule_control ? shell_schedule_control : (promoted_default ? "compact" : "warp");
+    if (shell_schedule != "warp" && shell_schedule != "packed" && shell_schedule != "compact")
+      throw std::invalid_argument("unknown DF shell schedule (use warp, packed or compact)");
+    const unsigned shell_variant = shell_schedule == "warp"     ? 0
+                                   : shell_schedule == "packed" ? 1
+                                                                : 2;
     std::unique_ptr<ShellMetadata> shell_o, shell_x;
     if (shell_execution) {
       shell_o = std::make_unique<ShellMetadata>(orbital, host_o, o, arena);
@@ -517,13 +614,26 @@ vibeqc_status execute_cuda_df_hf_gradient(
       // Causal attribution controls, not production schedule candidates. Both
       // drain prior work before a raw read; packed additionally exposes the
       // CPU gather and a contiguous pinned H2D copy as separate intervals.
-      // Default execution retains the original pageable strided submission.
+      // Probes retain the original pageable strided submission by default.
       const char* upload_probe = std::getenv("VIBEQC_DF_RESPONSE_UPLOAD_PROBE");
       const std::string_view probe = upload_probe ? upload_probe : "";
       if (!probe.empty() && probe != "drain" && probe != "packed")
         throw std::invalid_argument("unknown DF response upload probe (use drain or packed)");
       if (!probe.empty() && source)
         throw std::invalid_argument("DF response upload probe requires resident host raw values");
+      const char* staging_control = std::getenv("VIBEQC_DF_RAW_STAGING");
+      const std::string_view staging =
+          staging_control ? staging_control : (promoted_default ? "pinned-panels" : "pageable");
+      if (staging != "pageable" && staging != "pinned-panels")
+        throw std::invalid_argument("unknown DF raw staging (use pageable or pinned-panels)");
+      if (staging == "pinned-panels" && !source) {
+        if (!probe.empty())
+          throw std::invalid_argument("pinned panel staging cannot be combined with upload probes");
+        const auto bytes = raw_panels.initialize(n * n, a, maximum_bytes - arena.stats.host_bytes);
+        arena.stats.host_bytes += bytes;
+        runtime::cuda_trace::trace_counter("raw_panel_pinned_host_bytes", bytes);
+        runtime::cuda_trace::trace_counter("raw_panel_columns", raw_panels.columns);
+      }
       if (probe == "packed") {
         const auto bytes = n * n * sizeof(double);
         if (bytes > maximum_bytes - arena.stats.host_bytes) throw std::bad_alloc();
@@ -560,9 +670,14 @@ vibeqc_status execute_cuda_df_hf_gradient(
       runtime::cuda_trace::TraceRegion response_weights("response_weights", arena.stream);
       const char* dot_policy = std::getenv("VIBEQC_DF_SERIAL_RESPONSE_DOT");
       const bool serial_dot = dot_policy && dot_policy[0] == '1' && dot_policy[1] == '\0';
+      const char* algebra_control = std::getenv("VIBEQC_DF_RESPONSE_ALGEBRA");
+      const std::string_view algebra =
+          algebra_control ? algebra_control : (promoted_default ? "blas" : "scalar");
+      if (algebra != "scalar" && algebra != "blas")
+        throw std::invalid_argument("unknown DF response algebra (use scalar or blas)");
       check(contract_cuda_df_response_weights(
           n, a, terms, densities, *device_metric, tile, workspace, arena.stream,
-          reinterpret_cast<cublasHandle_t>(blas_handle), serial_dot,
+          reinterpret_cast<cublasHandle_t>(blas_handle), serial_dot, algebra == "blas",
           [&](std::size_t p, double* values) {
             if (source) {
               const auto status = generate_cuda_density_fitting_raw_tile(
@@ -571,6 +686,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
               if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
               arena.stats.recomputed_value_bytes += n * n * sizeof(double);
             } else {
+              const unsigned raw_panel =
+                  raw_panels.data ? raw_panels.prepare(p, raw_a, arena.stream, n) : 0;
               if (!probe.empty()) {
                 runtime::cuda_trace::TraceRegion wait("raw_value_prior_stream_wait", arena.stream);
                 check(cudaStreamSynchronize(arena.stream));
@@ -589,7 +706,12 @@ vibeqc_status execute_cuda_df_hf_gradient(
               // its stream. Gather a column directly into existing device
               // scratch; no host response matrix or full raw GPU copy is made.
               runtime::cuda_trace::TraceRegion upload("raw_value_slice_upload", arena.stream);
-              if (packed_slice.data)
+              if (raw_panels.data) {
+                check(cudaMemcpyAsync(values, raw_panels.column(raw_panel, p),
+                                      n * n * sizeof(double), cudaMemcpyHostToDevice,
+                                      arena.stream));
+                raw_panels.record(raw_panel, arena.stream);
+              } else if (packed_slice.data)
                 check(cudaMemcpyAsync(values, packed_slice.data, n * n * sizeof(double),
                                       cudaMemcpyHostToDevice, arena.stream));
               else
@@ -617,12 +739,14 @@ vibeqc_status execute_cuda_df_hf_gradient(
             if (shell_execution && !kind) {
               check(launch_df_shell_derivative_panel(
                   shell_o->view, shell_x->panel(range.offset, count / (n * n)), r, range.offset,
-                  count / (n * n), weights, derivative_output, shell_counters, arena.stream));
+                  count / (n * n), weights, derivative_output, shell_counters, arena.stream,
+                  full_shell_domain, shell_variant));
               runtime::cuda_trace::trace_counter("three_center_shell_panels", 1);
             }
-            check(launch_df_derivative_tile(o, x, r, kind, range, count, weights, schedule,
-                                            derivative_output, arena.stream, 0, result.size(),
-                                            gradient_copies, shell_execution && !kind));
+            if (kind || !shell_execution || !full_shell_domain)
+              check(launch_df_derivative_tile(o, x, r, kind, range, count, weights, schedule,
+                                              derivative_output, arena.stream, 0, result.size(),
+                                              gradient_copies, shell_execution && !kind));
             ++arena.stats.tiles;
             arena.stats.device_response_bytes += count * sizeof(double);
           }));

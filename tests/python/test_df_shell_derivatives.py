@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from vibeqc_compiler.integral.df_derivatives_cuda import emit_df_derivatives_cuda
 from vibeqc_compiler.integral.df_shell_derivatives import (
-    PROTOTYPE_CLASSES,
+    SHELL_CLASSES,
     emit_df_shell_derivatives_cuda,
 )
 
@@ -43,7 +43,7 @@ extern "C" void shell_derivative(unsigned code,const double* e,const double* r,
     generated_df_derivatives::prepare_geometry(e[0],{r[0],r[1],r[2]},e[1],{r[3],r[4],r[5]},
                                                e[2],{r[6],r[7],r[8]},A+B+C,g);
     double cache[3*Math::axis_size];
-    for(unsigned axis=0;axis<3;++axis) Math::prepare_axis(g,axis,cache+axis*Math::axis_size);
+    for(unsigned lane=0;lane<32;++lane) Math::prepare(g,cache,lane,32);
     const unsigned i=generated_df_shell::cartesian_index(A,powers);
     const unsigned j=generated_df_shell::cartesian_index(B,powers+3);
     const unsigned p=generated_df_shell::cartesian_index(C,powers+6);
@@ -86,7 +86,7 @@ extern "C" void shell_derivative(unsigned code,const double* e,const double* r,
     return library
 
 
-@pytest.mark.parametrize("angular", PROTOTYPE_CLASSES)
+@pytest.mark.parametrize("angular", SHELL_CLASSES)
 @pytest.mark.parametrize("variant", ["asymmetric", "coincident"])
 def test_shell_moments_match_independent_contracted_blocks(
     shell_library, angular, variant

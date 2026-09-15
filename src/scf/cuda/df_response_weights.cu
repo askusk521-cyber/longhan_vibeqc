@@ -141,7 +141,7 @@ std::size_t cuda_df_response_workspace_elements(std::size_t n, std::size_t a, st
 cudaError_t contract_cuda_df_response_weights(
     std::size_t n, std::size_t a, std::span<const DensityFittingDensityResponse> terms,
     const double* densities, CudaDfMetricView metric, std::size_t tile, double* workspace,
-    cudaStream_t stream, cublasHandle_t blas, bool serial_metric_dot,
+    cudaStream_t stream, cublasHandle_t blas, bool serial_metric_dot, bool blas_products,
     const std::function<void(std::size_t, double*)>& read_values,
     const std::function<void(unsigned, runtime::StridedRange, std::size_t, const double*)>&
         consume) {
@@ -171,8 +171,21 @@ cudaError_t contract_cuda_df_response_weights(
     auto* charge_values = q < tile ? raw + q * matrix : values;
     read_values(q, charge_values);
     runtime::cuda_trace::TraceRegion charge_dot("coulomb_response_charge_dot", stream);
-    charge_kernel<<<blocks(terms.size()), threads, 0, stream>>>(matrix, a, q, terms.size(),
-                                                                densities, charge_values, charges);
+    if (blas_products) {
+      // Packed D[t,ij] is column-major [ij,t]. Keep each spin/total charge
+      // in its existing auxiliary-strided destination without a host scalar.
+      const double alpha = 1.0, beta = 0.0;
+      const auto status =
+          cublasDgemv(blas, CUBLAS_OP_T, static_cast<int>(matrix), static_cast<int>(terms.size()),
+                      &alpha, densities, static_cast<int>(matrix), charge_values, 1, &beta,
+                      charges + q, static_cast<int>(a));
+      if (status != CUBLAS_STATUS_SUCCESS) throw CudaDfResponseBlasFailure{status};
+      runtime::cuda_trace::trace_counter("response_charge_blas_dots", terms.size());
+    } else {
+      charge_kernel<<<blocks(terms.size()), threads, 0, stream>>>(
+          matrix, a, q, terms.size(), densities, charge_values, charges);
+      runtime::cuda_trace::trace_counter("response_charge_scalar_dots", terms.size());
+    }
     runtime::cuda_trace::trace_counter("response_charge_dot_elements", terms.size() * matrix);
   }
   potential_kernel<<<blocks(terms.size() * a), threads, 0, stream>>>(a, terms.size(), inverse,
@@ -216,10 +229,28 @@ cudaError_t contract_cuda_df_response_weights(
         if (coefficient == 0) continue;
         runtime::cuda_trace::TraceRegion products("exchange_response_matrix_products", stream);
         runtime::cuda_trace::trace_counter("response_ao_matrix_products", 2);
-        right_density_kernel<<<blocks(matrix), threads, 0, stream>>>(
-            n, exchange_values, densities + t * matrix, temporary);
-        left_density_kernel<<<blocks(matrix), threads, 0, stream>>>(n, densities + t * matrix,
-                                                                    temporary, response);
+        if (blas_products) {
+          // Row-major T=A_Q D and R=D^T T become T^T=D^T A_Q^T and
+          // R^T=T^T D. Explicit transpose flags preserve the original index
+          // contract without depending on exact floating-point symmetry.
+          const auto dimension = static_cast<int>(n);
+          const double alpha = 1.0, beta = 0.0;
+          auto status = cublasDgemm(blas, CUBLAS_OP_N, CUBLAS_OP_N, dimension, dimension, dimension,
+                                    &alpha, densities + t * matrix, dimension, exchange_values,
+                                    dimension, &beta, temporary, dimension);
+          if (status != CUBLAS_STATUS_SUCCESS) throw CudaDfResponseBlasFailure{status};
+          status = cublasDgemm(blas, CUBLAS_OP_N, CUBLAS_OP_T, dimension, dimension, dimension,
+                               &alpha, temporary, dimension, densities + t * matrix, dimension,
+                               &beta, response, dimension);
+          if (status != CUBLAS_STATUS_SUCCESS) throw CudaDfResponseBlasFailure{status};
+          runtime::cuda_trace::trace_counter("response_density_blas_products", 2);
+        } else {
+          right_density_kernel<<<blocks(matrix), threads, 0, stream>>>(
+              n, exchange_values, densities + t * matrix, temporary);
+          left_density_kernel<<<blocks(matrix), threads, 0, stream>>>(n, densities + t * matrix,
+                                                                      temporary, response);
+          runtime::cuda_trace::trace_counter("response_density_scalar_products", 2);
+        }
         products.finish();
         runtime::cuda_trace::TraceRegion contractions("exchange_response_weights_and_metric",
                                                       stream);

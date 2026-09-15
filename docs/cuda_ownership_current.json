@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 11032,
+  "all_handwritten_scientific_lines": 11166,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "files": [
     {
@@ -598,20 +598,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 41691,
+      "bytes": 48769,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 714
+        "scientific": 822
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 751,
-      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response; conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in stream-drain, pinned-gather and bounded gradient-copy probes retain full weighted response; the latter uses the existing BLAS provider for final output reduction. Probe allocation/timing/layout glue remains in this conservative classification and is not a new derivative implementation.",
+      "physical_lines": 875,
+      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added.",
       "regions": [],
       "role": "scientific",
-      "sha256": "24574a60bcd9afe6a8930d178481281c0908068b6dd4d5558d317ffa963e3bb9",
+      "sha256": "7aa758c0e75cbd3f112fb9a59d8202433279917cd8d67025781228949eda2d56",
       "subsystem": "df_derivatives"
     },
     {
@@ -710,17 +710,17 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 14171,
+      "bytes": 16167,
       "code_lines": {
         "fallback": 0,
         "oracle": 10,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 222
+        "scientific": 248
       },
       "path": "src/scf/cuda/df_response_weights.cu",
-      "physical_lines": 268,
-      "reason": "Native HF density response and spectral Frechet method adapters. The default exchange metric AO-pair dot uses the existing plan-owned FP64 cuBLAS handle; provider/layout and accumulation glue remain conservatively scientific. Integral values and coordinate derivatives retain their generated owners.",
+      "physical_lines": 299,
+      "reason": "Native HF density response and spectral Frechet method adapters. Plan-owned FP64 cuBLAS supplies default exchange metric dots and opt-in charge GEMV/density GEMM. Provider, layout and accumulation glue remain conservatively scientific; scalar charge/density kernels remain the default comparison route until full endpoint promotion. Integral values and coordinate derivatives retain their generated owners.",
       "regions": [
         {
           "code_lines": 10,
@@ -733,11 +733,11 @@
         }
       ],
       "role": "scientific",
-      "sha256": "83cd9eda34200a9100f877fbb8d09fc5cc449befa35a604faa753b41fe683bed",
+      "sha256": "ed48f914cc09cac5cf36964a0bac5f1007bae09e7fcec56484332778848f1d54",
       "subsystem": "df_response_weights"
     },
     {
-      "bytes": 2436,
+      "bytes": 2689,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
@@ -746,11 +746,11 @@
         "scientific": 23
       },
       "path": "src/scf/cuda/df_response_weights.cuh",
-      "physical_lines": 52,
-      "reason": "Native HF density response and spectral Frechet method adapters. The default exchange metric AO-pair dot uses the existing plan-owned FP64 cuBLAS handle; provider/layout and accumulation glue remain conservatively scientific. Integral values and coordinate derivatives retain their generated owners.",
+      "physical_lines": 55,
+      "reason": "Native HF density response and spectral Frechet method adapters. Plan-owned FP64 cuBLAS supplies default exchange metric dots and opt-in charge GEMV/density GEMM. Provider, layout and accumulation glue remain conservatively scientific; scalar charge/density kernels remain the default comparison route until full endpoint promotion. Integral values and coordinate derivatives retain their generated owners.",
       "regions": [],
       "role": "scientific",
-      "sha256": "6ccb97436e83c80b07e2e760b1d86477d3eb05fc46b670f30488a6be19af2769",
+      "sha256": "d1873319f3e8e05b05d437706f322fbb4fe61fe16f4e5b98bb38cca21babc0fe",
       "subsystem": "df_response_weights"
     },
     {
@@ -815,37 +815,37 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 7250,
+      "bytes": 8842,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 129,
+        "runtime": 154,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cu",
-      "physical_lines": 141,
+      "physical_lines": 168,
       "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator.",
       "regions": [],
       "role": "runtime",
-      "sha256": "3a5fb32d14c36d6083bb97de9d6f74339155059ac1c43ca54c96d3cecb6291a8",
+      "sha256": "e7bd6a14b19da787afd22bb58c15b63b69c086efaf440509393a666da76f47a2",
       "subsystem": "df_derivatives"
     },
     {
-      "bytes": 1359,
+      "bytes": 1692,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 15,
+        "runtime": 16,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cuh",
-      "physical_lines": 28,
+      "physical_lines": 32,
       "reason": "Borrowed compact shell-class lists, panel and optional execution-counter launch contract.",
       "regions": [],
       "role": "runtime",
-      "sha256": "e3893753ddc89635a98ec68703adfd810b79321eb7541c0ca2854ab77f971531",
+      "sha256": "8a1ea6902567a38bfc0764f74439d8781892c34a052935782bf472d8a9244868",
       "subsystem": "runtime"
     },
     {
@@ -3355,8 +3355,8 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 156,
-    "runtime": 9338,
-    "scientific": 10866
+    "runtime": 9364,
+    "scientific": 11000
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3380,20 +3380,22 @@
         "benchmarks/results/cuda-ownership/df/publication.json",
         "benchmarks/results/cuda-ownership/df/validation.json",
         "benchmarks/results/cuda-ownership/df/raw-source.json",
-        "benchmarks/results/cuda-ownership/df/README.md"
+        "benchmarks/results/cuda-ownership/df/README.md",
+        "benchmarks/results/issue308-shell-schedules/summary.json"
       ],
-      "generated_capability": "Bulk and bounded raw coordinate derivatives and externally weighted responses share generated center channels. The compiler directs four-lane primitive partitions; generic runtime owns traversal, subgroup reduction, range mapping and physical-atom scatter.",
+      "generated_capability": "Bulk and bounded raw coordinate derivatives and externally weighted responses share generated center channels. The compiler directs four-lane primitive partitions; generic runtime owns traversal, subgroup reduction, range mapping and physical-atom scatter. Shell-block lowering shares primitive geometry/Boys/moments across all 64 s/p/d/f triples with generated warp, packed and compact subgroup schedules and immediate weighted contraction; compact scheduling defaults on for qualified resident 192--384-AO sm_120 endpoints.",
       "missing_capability": "None for the retired DF integral/coordinate-response duplicate. HF density-weight construction and the spectral inverse reverse map remain native method adapters; the separate df_response_weights entry owns their current device/GEMV path and opt-in control. An equivalent TensorIR method consumer is not integrated.",
       "owner": "df_derivatives",
       "retirement_condition": "Completed: removed coordinate-wise RHF/UHF production responses, their CUDA allocations and estimates, and the DF derivative selector after final numerical/resource/complete endpoint gates. Retain generated raw APIs and independent CPU/libcint oracles.",
       "status": "retired"
     },
     "df_response_weights": {
-      "current_default": "Plan-owned FP64 cuBLAS GEMV exchange metric dots on the existing stream and bounded raw-panel layout; native Coulomb/density response and spectral Frechet adapters remain. VIBEQC_DF_SERIAL_RESPONSE_DOT=1 explicitly selects the previous serial metric dot for ablation only.",
+      "current_default": "Plan-owned FP64 cuBLAS GEMV exchange metric dots on the existing stream and bounded raw-panel layout; native Coulomb/density response and spectral Frechet adapters remain. VIBEQC_DF_SERIAL_RESPONSE_DOT=1 explicitly selects the previous serial metric dot for ablation only. Charge GEMV/density GEMM and bounded pinned panels default on in the qualified resident 192--384-AO sm_120 regime; explicit scalar/pageable controls preserve the comparison route elsewhere.",
       "evidence": [
         "tests/python/test_df_response_weights_cuda.py",
         "benchmarks/results/issue206-metric-gemv/README.md",
-        "benchmarks/results/issue206-metric-gemv/summary.json"
+        "benchmarks/results/issue206-metric-gemv/summary.json",
+        "benchmarks/results/issue308-shell-schedules/summary.json"
       ],
       "generated_capability": "Existing generated two-/three-center values and coordinate-response consumers are reused unchanged. No new generated capability is introduced; a generic cuBLAS call does not constitute a generated method-equation migration.",
       "missing_capability": "An equivalent bounded compiler-owned HF density/spectral response method consumer is not integrated. Final #206 cold/warm/changed-geometry and resident/constrained-memory endpoint acceptance remains open.",
@@ -3536,15 +3538,15 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 240,
-      "scientific": 714
+      "runtime": 265,
+      "scientific": 822
     },
     "df_response_weights": {
       "fallback": 0,
       "oracle": 10,
       "performance_exception": 0,
       "runtime": 0,
-      "scientific": 245
+      "scientific": 271
     },
     "df_values": {
       "fallback": 0,
@@ -3592,7 +3594,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4235,
+      "runtime": 4236,
       "scientific": 5
     },
     "scf_tensor": {

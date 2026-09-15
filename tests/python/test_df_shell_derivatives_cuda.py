@@ -16,8 +16,12 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.parametrize("method", ["rhf", "uhf"])
 @pytest.mark.parametrize("representation", ["cartesian", "spherical"])
+@pytest.mark.parametrize("schedule", ["warp", "packed", "compact"])
+@pytest.mark.parametrize(
+    "algebra,staging", [("scalar", "pageable"), ("blas", "pinned-panels")]
+)
 def test_shell_execution_and_return_to_generic(
-    method, representation, monkeypatch, tmp_path
+    method, representation, schedule, algebra, staging, monkeypatch, tmp_path
 ):
     """Independent complete gradients and counters exclude a silent generic replay.
 
@@ -60,9 +64,12 @@ def test_shell_execution_and_return_to_generic(
         screening_tolerance=1e-14,
     )
     monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", "generic")
+    monkeypatch.setenv("VIBEQC_DF_SHELL_SCHEDULE", schedule)
+    monkeypatch.setenv("VIBEQC_DF_RESPONSE_ALGEBRA", algebra)
+    monkeypatch.setenv("VIBEQC_DF_RAW_STAGING", staging)
     with calc.prepare_batch([atoms], multiplicities=[spin + 1]) as owner:
         owner.execute(properties=("energy", "forces"), strict=True)
-        for index, route in enumerate(("generic", "shell-sp", "generic")):
+        for index, route in enumerate(("generic", "shell-sp", "shell", "generic")):
             monkeypatch.setenv("VIBEQC_DF_WEIGHTED_EXECUTION", route)
             monkeypatch.setenv("VIBEQC_DF_SHELL_COUNTERS", "1")
             trace = tmp_path / f"response-{index}.jsonl"
@@ -77,7 +84,14 @@ def test_shell_execution_and_return_to_generic(
                 r for r in read_trace(trace) if r["operation"] == "force_response"
             ]
             counters = record["counters"]
-            if route == "shell-sp":
+            assert (counters.get("response_charge_blas_dots", 0) > 0) == (
+                algebra == "blas"
+            )
+            if not record["source_backed"]:
+                assert (counters.get("raw_panel_pinned_host_bytes", 0) > 0) == (
+                    staging == "pinned-panels"
+                )
+            if route != "generic":
                 assert counters["three_center_shell_panels"] > 0
                 assert (
                     0
