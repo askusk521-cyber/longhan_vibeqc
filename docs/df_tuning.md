@@ -72,6 +72,15 @@ its existing source schedule remains independent. All these controls participate
 in checkpoint scheduling identity as optional extensions, preserving older
 checkpoint compatibility.
 
+An unqualified derivative campaign may embed a qualified `baseline` profile for
+each architecture. `auto` retains that baseline in the existing qualified size
+domain; `candidate` selects the proposed class mapping. Both arms share one
+prepared state and library, so the endpoint runner can interleave identical
+frozen-density replays without repeating large initialization or holding two
+DF arenas. Both profiles undergo the same mathematical/evidence validation.
+Promoted manifests omit the campaign baseline. See the
+[campaign baseline note](../.agents/notes/implemented/performance/2026-09-17-df-campaign-baseline.md).
+
 Mathematical lowering is selected only through the class manifest. Historical
 checkpoints may retain retired controls as source provenance; importing their
 density requires `allow_warm=True`, and re-export preserves those controls.

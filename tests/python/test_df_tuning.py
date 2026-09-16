@@ -165,6 +165,93 @@ def test_manifests_require_complete_independent_qualification(tmp_path):
             load(path)
 
 
+def campaign_manifest():
+    """Keep the already-promoted SSS choice in both synthetic comparison arms."""
+    baseline = {
+        "qualified": True,
+        "kernels": [
+            {"class": "000", "lowering": "rys", "schedule": "compact"},
+            {"class": "001", "lowering": "polynomial", "schedule": "compact"},
+        ],
+        "provenance": dict.fromkeys(
+            [
+                "generator_sha256",
+                "toolchain",
+                "profile_sha256",
+                "candidate_report",
+                "endpoint_384",
+                "endpoint_768",
+                "sanitizer",
+                "gradient_fixtures",
+            ],
+            "unit-test fixture",
+        ),
+    }
+    candidate = copy.deepcopy(baseline)
+    candidate["qualified"] = False
+    candidate["kernels"][1]["lowering"] = "rys"
+    candidate["baseline"] = baseline
+    return {"schema_version": 1, "architectures": {"sm_120": candidate}}
+
+
+def test_compiled_campaign_selection_preserves_qualified_baseline(tmp_path):
+    """Exercise emitted C++ choices, including unsupported targets/classes."""
+    import json
+    import shutil
+    import subprocess
+
+    from vibeqc_compiler.integral.df_tuning.manifest import emit_policy
+
+    compiler = shutil.which("c++")
+    if compiler is None:
+        pytest.skip("requires a host C++ compiler")
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(campaign_manifest()))
+    source = tmp_path / "policy.cpp"
+    source.write_text(
+        emit_policy(path)
+        + """
+using namespace vibeqc::scf::generated_df_shell;
+static_assert(DfProductionPolicy<0,0,0>::select(120).rys);
+static_assert(DfProductionPolicy<0,0,0>::select(120,true).rys);
+static_assert(!DfProductionPolicy<0,0,1>::select(120).rys);
+static_assert(DfProductionPolicy<0,0,1>::select(120).qualified);
+static_assert(DfProductionPolicy<0,0,1>::select(120,true).rys);
+static_assert(!DfProductionPolicy<0,0,1>::select(120,true).qualified);
+static_assert(!DfProductionPolicy<0,0,1>::select(80,true).available);
+static_assert(!DfProductionPolicy<1,1,1>::select(120,true).available);
+"""
+    )
+    subprocess.run([compiler, "-std=c++20", "-fsyntax-only", str(source)], check=True)
+
+
+@pytest.mark.parametrize(
+    "fault", ["baseline", "candidate", "nested", "evidence", "math"]
+)
+def test_campaign_baseline_requires_qualified_independent_evidence(tmp_path, fault):
+    import json
+
+    from vibeqc_compiler.integral.df_tuning.manifest import load_manifest
+
+    payload = campaign_manifest()
+    candidate = payload["architectures"]["sm_120"]
+    baseline = candidate["baseline"]
+    if fault == "baseline":
+        baseline["qualified"] = False
+    elif fault == "candidate":
+        candidate["qualified"] = True
+    elif fault == "nested":
+        baseline["baseline"] = copy.deepcopy(baseline)
+    elif fault == "evidence":
+        del baseline["provenance"]["endpoint_768"]
+    else:
+        baseline["kernels"][0]["class"] = "111"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        load_manifest(path)
+
+
 def test_value_identity_and_profile_disagreements():
     """Class scoring retains both workloads and excludes incomplete/changed work."""
     import copy
