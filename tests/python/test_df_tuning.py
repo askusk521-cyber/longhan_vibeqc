@@ -194,8 +194,9 @@ def campaign_manifest():
     return {"schema_version": 1, "architectures": {"sm_120": candidate}}
 
 
-def test_compiled_campaign_selection_preserves_qualified_baseline(tmp_path):
-    """Exercise emitted C++ choices, including unsupported targets/classes."""
+@pytest.mark.parametrize("promoted", [False, True])
+def test_compiled_campaign_selection_preserves_qualified_baseline(tmp_path, promoted):
+    """Promotion removes the comparison arm without changing candidate math."""
     import json
     import shutil
     import subprocess
@@ -206,7 +207,12 @@ def test_compiled_campaign_selection_preserves_qualified_baseline(tmp_path):
     if compiler is None:
         pytest.skip("requires a host C++ compiler")
     path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(campaign_manifest()))
+    manifest = campaign_manifest()
+    if promoted:
+        profile = manifest["architectures"]["sm_120"]
+        del profile["baseline"]
+        profile["qualified"] = True
+    path.write_text(json.dumps(manifest))
     source = tmp_path / "policy.cpp"
     source.write_text(
         emit_policy(path)
@@ -214,13 +220,13 @@ def test_compiled_campaign_selection_preserves_qualified_baseline(tmp_path):
 using namespace vibeqc::scf::generated_df_shell;
 static_assert(DfProductionPolicy<0,0,0>::select(120).rys);
 static_assert(DfProductionPolicy<0,0,0>::select(120,true).rys);
-static_assert(!DfProductionPolicy<0,0,1>::select(120).rys);
 static_assert(DfProductionPolicy<0,0,1>::select(120).qualified);
 static_assert(DfProductionPolicy<0,0,1>::select(120,true).rys);
-static_assert(!DfProductionPolicy<0,0,1>::select(120,true).qualified);
 static_assert(!DfProductionPolicy<0,0,1>::select(80,true).available);
 static_assert(!DfProductionPolicy<1,1,1>::select(120,true).available);
 """
+        + f"static_assert(DfProductionPolicy<0,0,1>::select(120).rys == {str(promoted).lower()});\n"
+        + f"static_assert(DfProductionPolicy<0,0,1>::select(120,true).qualified == {str(promoted).lower()});\n"
     )
     subprocess.run([compiler, "-std=c++20", "-fsyntax-only", str(source)], check=True)
 

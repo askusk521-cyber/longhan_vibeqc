@@ -44,3 +44,7 @@ Parser tests reject incomplete baseline evidence and unavailable mathematics.
 Full numerical, runtime and endpoint qualification remains required separately.
 
 References: #394, #404, #206; `docs/df_tuning.md`.
+
+The first campaign is complete. Its embedded baseline was removed when the
+[combined mapping was accepted](2026-09-17-combined-rys-promotion.md); the
+archived campaign manifest preserves both measured arms for reproduction.
