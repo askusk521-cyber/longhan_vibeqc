@@ -80,6 +80,12 @@ These NVIDIA process readings include context/modules and retained allocations;
 they are not allocator peaks. `control-resources/` separately records sampled
 process peaks and pinned-baseline equivalence controls. Its execution is
 intrusive, and **all** its timings are excluded from the clean campaign.
+At 768 AO both standalone processes reach the same sampled device peak of
+24,572,329,984 bytes including initialization. The 384 baseline/campaign peaks
+are 8,659,140,608/8,573,157,376 bytes; these sampled lower bounds do not establish
+an allocation reduction. Standalone baseline and campaign `auto` energies
+match exactly, complete-force differences are below 8e-14 Eh/Bohr, and frozen
+density, selected mathematics and executed operation counts match.
 
 ## Identity and reproduction
 
@@ -92,6 +98,10 @@ generated-header hashes, manifest hashes, flags and CUDA 12.9.1 toolchain.
 both measured arms; the final production manifest removes the embedded baseline
 and qualifies the same candidate math. Final-library validation is recorded
 separately, never relabeled as the measured campaign source.
+`promoted-build.json` binds the final library to the campaign source plus
+`promoted-source.patch`, whose native/compiler contents were committed unchanged
+at `8e3a19a73f83a723f87fbe6d4dd6240cb7ceb2dd`. The final library is 164,232,888
+bytes, a 223,440-byte (0.14%) increase over the standalone baseline.
 
 Build Release sm_120 with fast compile and AOT shells off before timing. On the
 measured campaign source, use the existing runner inside a finite allocation:
@@ -116,6 +126,8 @@ Checkpoint and density hashes are retained in every endpoint record. Exact
 historical checkpoint bytes remain local; a newly generated checkpoint is a
 new campaign and must pass the same convergence, work and numerical gates.
 The historical raw source/diagnostic file hashes are in `raw-files.json`.
+Retained endpoint records preserve every value and sample order; scalar arrays
+are formatted inline for review. Original run-byte hashes remain in that index.
 Routine logs, binaries, checkpoints and complete profiler traces remain local.
 
 Recompute statistics and gates from the retained records without a GPU:
@@ -126,5 +138,23 @@ python benchmarks/results/issue404-combined-rys/analyze.py > /tmp/issue404-summa
 
 The full candidate holdouts, independent oracles and sanitizer coverage remain
 in #394's [qualification record](../issue394-batch-rys/qualification.json).
+The [final-library validation](validation.json) additionally records one native
+shell-pair suite, 22 complete-force oracle cases with forced candidate selection,
+two failed-neighbor cases, five checkpoint cases, and automatic 96/192/384/768
+endpoints. Memcheck with leak checking and initcheck report zero errors for the
+native automatic-fallback suite; the 42 mathematical candidates retain their
+separate #394 sanitizer qualification. All final automatic endpoint energies
+match the measured comparison arm exactly, force differences are below 8e-14
+Eh/Bohr, and observed mathematical/resource/operator counters match. Small
+domains select no Rys classes; both target domains select the five promoted
+classes. These final-build checks are not extra samples in the clean campaign.
+
+An initial validation wrapper forced `candidate` into the native fixture that
+explicitly asserts the small-domain `auto` fallback. Its assertion failure is
+retained in [validation-harness-failure.json](validation-harness-failure.json).
+The corrected wrapper separates those policies. Two derivative-tier neighbor
+cases initially skipped for a missing test-enable variable were then run with
+that variable enabled; their passing Slurm follow-up is retained separately.
+
 #206 owns fresh stock GPU4PySCF comparisons and any combination with #412;
 independent savings must not be added without measuring the combined endpoint.

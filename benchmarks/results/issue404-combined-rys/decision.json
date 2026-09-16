@@ -8,5 +8,16 @@
     "meaning": "Accept the observed 2.5%/2.6% complete-force benefit despite the original 3% magnitude requirement, conditional on the unchanged independent numerical, work, stability, resource and regression checks."
   },
   "no_retroactive_gate_change": "protocol.json retains the original threshold. This is an explicit user acceptance of the observed benefit, not a claim that the predeclared 3% gate passed.",
-  "remaining_qualification": "complete final-energy, resource/control and promoted-library checks before merging"
+  "status": "accepted with explicit user override of magnitude requirement only",
+  "unchanged_gates_passed": [
+    "independent energy and complete force",
+    "paired stability",
+    "actual operator work",
+    "energy-only regression",
+    "small-domain fallback",
+    "resource and standalone baseline control",
+    "final library regression and sanitizers"
+  ],
+  "final_validation": "validation.json",
+  "resource_control": "control-resources/control-check.json"
 }
