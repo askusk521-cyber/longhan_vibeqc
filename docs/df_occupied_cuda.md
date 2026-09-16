@@ -31,6 +31,9 @@ resident full-Gram K, resident flattened dense K, or the default panel-dense
 and triangular occupied route. The plan freezes this policy; changing it
 rebuilds captured SCF work.
 
+The [split Gram decision](../.agents/notes/rejected/2026-09-17-split-occupied-gram.md)
+records the endpoint qualification behind retaining this single-Gram policy.
+
 The same plan supports resident tensors, generated panels and compatibility
 host-backed tiles. Full AO panels follow #282's capacity rebalance and reuse
 the diagonal T before any column replacement. Tight row traversal retains
