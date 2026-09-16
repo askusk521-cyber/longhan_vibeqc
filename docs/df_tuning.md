@@ -63,14 +63,26 @@ python tools/benchmark_df_values.py \
 | `VIBEQC_DF_FORCE_SCREEN_ABS` | Off | Nonnegative finite absolute force budget, or `off` |
 | `VIBEQC_DF_FINAL_PROJECTION` | Reuse only in the qualified resident 768-AO RHF domain | `off`, `reuse` |
 
-The derivative manifest chooses Rys/compact for 000 and polynomial/compact for
-the other six classes. Value candidates remain unqualified after complete cold
+The derivative manifest chooses Rys/compact for 000/001/002/100/200 and
+polynomial/compact for 101/110. The automatic sm_120 domain remains 384/768 AO
+with equal auxiliary dimension; the manifest does not broaden that domain.
+See the [combined endpoint qualification note](../.agents/notes/implemented/performance/2026-09-17-combined-rys-promotion.md).
+Value candidates remain unqualified after complete cold
 endpoint regressions. The raw `candidate` schedule applies its generated lane
 count only to total angular degree at most two; metric and higher classes retain
 scalar work. Source-backed value math is frozen when its owner is constructed;
 its existing source schedule remains independent. All these controls participate
 in checkpoint scheduling identity as optional extensions, preserving older
 checkpoint compatibility.
+
+An unqualified derivative campaign may embed a qualified `baseline` profile for
+each architecture. `auto` retains that baseline in the existing qualified size
+domain; `candidate` selects the proposed class mapping. Both arms share one
+prepared state and library, so the endpoint runner can interleave identical
+frozen-density replays without repeating large initialization or holding two
+DF arenas. Both profiles undergo the same mathematical/evidence validation.
+Promoted manifests omit the campaign baseline. See the
+[campaign baseline note](../.agents/notes/implemented/performance/2026-09-17-df-campaign-baseline.md).
 
 Mathematical lowering is selected only through the class manifest. Historical
 checkpoints may retain retired controls as source provenance; importing their
