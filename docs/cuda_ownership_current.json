@@ -3716,7 +3716,7 @@
       "owner": "python/vibeqc_compiler/integral/ecp_projector.py"
     }
   ],
-  "generated_bytes": 0,
+  "generated_bytes": 27156339,
   "maintained_code_lines": {
     "fallback": 0,
     "oracle": 10,
