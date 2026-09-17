@@ -40,10 +40,9 @@ inline int transfer(void* pointer, const Span* spans, size_t count, size_t slot,
         bytes > ctx.metrics.owned_device_bytes - span.offset)
       throw std::invalid_argument("resident span exceeds allocation");
     if (bytes) {
-      cuda_check(cudaMemcpyAsync(upload ? ctx.arena + span.offset : host,
-                                 upload ? host : ctx.arena + span.offset, bytes,
-                                 upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost,
-                                 ctx.stream));
+      cuda_check(cudaMemcpyAsync(
+          upload ? ctx.arena + span.offset : host, upload ? host : ctx.arena + span.offset, bytes,
+          upload ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToHost, ctx.stream));
     }
     cuda_check(cudaStreamSynchronize(ctx.stream));
     return 0;
