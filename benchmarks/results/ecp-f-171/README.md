@@ -22,6 +22,11 @@ counts and planned/observed resources. `raw-evidence.zip` and its manifest retai
 build/test logs, generated headers, kernel resource usage, source identities and
 reproduction scripts. The initial failed native test build is retained; it
 used a nonexistent CPU enum, subsequently corrected to `CPU_REFERENCE`.
+An initial baseline finished measurement/provenance but its mutable driver
+encountered a trailing parse error; the queued candidate correctly refused
+that nonzero prerequisite. Both failures and the completed measurements are
+retained. Baseline and candidate qualification subsequently use `f-run-v2.sh`
+as an immutable script; no scientific acceptance gate is weakened.
 
 ## Gates and scope
 
@@ -50,12 +55,21 @@ Four matched f endpoint cases per backend cover Cartesian/spherical RHF/UHF
 with f on Na; CUDA also measures a larger Cartesian RHF case with f on both
 atoms. Each has a warmup, then one CPU or three CUDA complete synchronous
 `singlepoint` timing samples, followed by an explicitly budgeted prepared
-calculation. Larger CPU two-f-center behavior is covered by the spherical
-prepared-replay regression rather than repeated Cartesian reference timings.
+calculation. The larger two-f-center CPU replay remains explicitly opt-in; its initial
+incomplete run is retained below rather than repeated in endpoint timing.
 These small samples are diagnostics, not a CPU/GPU speed comparison. Records include actual shells,
 primitives, AO/pair counts, iterations, energies, forces and resource diagnostics.
 The former baseline cannot execute f, so it supplies only an existing-domain
 regression comparison; its timings must not be reported as f speedups.
+
+The original two-f-center CPU prepared replay was still computing after a
+30-minute suite run; it and its duplicate in the CUDA-linked suite were
+interrupted, with logs and the exact earlier overlay retained. This is incomplete
+large-CPU qualification, not a numerical failure or a passing performance gate.
+The default CPU replay uses f on the all-electron H atom, complementing the
+independent complete-HF checks with f on Na. CUDA keeps both f centers; raw
+matrices/all-center derivatives retain both centers on both backends. Set
+`VIBEQC_ECP_LARGE_CPU_TEST=1` to reproduce the expensive original CPU replay.
 
 ## Reproduction
 
@@ -85,6 +99,16 @@ including its own quadrature and normalization, remains separate from generated
 production arithmetic. Generated header growth is recorded independently and
 does not offset handwritten code. Other generated-family measurements remain
 preserved in the current ownership report.
+The ECP header grows from 21,910 to 34,335 bytes (+12,425), with 1,196 nonblank
+noncomment generated lines. Its SHA-256 is
+`1393e2f010da000407100a12d2cc8c0da650163f5fb4c54d4b36892507247334`.
+The final branch also integrates upstream `9af9e08`; its unrelated DF-generated
+measurements are retained when reconciling the report, whose aggregate is
+27,541,945 bytes. The qualification snapshot above remains explicit rather than
+being relabeled as a clean build of the later merge commit.
+All five ECP kernels retain their register, stack, shared-memory and local-memory
+counts. The AO kernel's second constant-memory bank grows from 184 to 248 bytes;
+it retains 56 registers, 64 stack bytes and zero reported local-memory bytes.
 
 See the [current contract](../../../docs/ecp.md) and
 [decision](../../../.agents/notes/implemented/numerics/2026-09-17-ecp-orbital-f.md).

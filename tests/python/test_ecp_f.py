@@ -125,7 +125,11 @@ def test_f_cuda_complete_energy_directional_finite_difference():
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_f_prepared_replay_with_planned_budget(device):
     require_device(device)
-    atoms, basis, _ = fixture(f_shell=True, f_on_h=True)
+    # Complete HF above covers f on the ECP atom. This replay gate covers f
+    # on the all-electron atom too, without repeating the very expensive
+    # two-f-center CPU reference on every PR. Keep that larger case opt-in.
+    both_centers = device == "cuda" or os.getenv("VIBEQC_ECP_LARGE_CPU_TEST") == "1"
+    atoms, basis, _ = fixture(f_shell=both_centers, f_on_h=True)
     calculator = Calculator(basis=basis, device=device)
     plan = calculator.estimate_resources([atoms]).require_feasible()
     bounded = Calculator(
