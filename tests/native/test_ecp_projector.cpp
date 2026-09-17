@@ -98,9 +98,9 @@ void check_grid() {
           throw std::runtime_error("generated radial Jacobian/moment failed");
       }
   }
-  for (unsigned x = 0; x <= 2; ++x)
-    for (unsigned y = 0; x + y <= 2; ++y)
-      for (unsigned z = 0; x + y + z <= 2; ++z) {
+  for (unsigned x = 0; x <= 3; ++x)
+    for (unsigned y = 0; x + y <= 3; ++y)
+      for (unsigned z = 0; x + y + z <= 3; ++z) {
         // Gaussian even moments independently recover the normalization ratio.
         long double ratio = 1;
         for (unsigned p : {x, y, z})
@@ -126,7 +126,7 @@ void check_grid() {
   }
   bool rejected = false;
   try {
-    (void)ecp_component_coefficient(1, 1, 1, 1.0);
+    (void)ecp_component_coefficient(1, 1, 2, 1.0);
   } catch (const std::invalid_argument&) {
     rejected = true;
   }
@@ -169,9 +169,9 @@ void check_ao_consumer() {
   const Primitive primitives[] = {{9, 1234}, {0.13, 0.73}, {1.1, -0.61}, {3.7, 0.29}};
   const Point point{0.36, -0.48, 0.8, 0, {}};
   const std::array<double, 3> center{0.31, -0.22, 0.17};
-  for (unsigned lx = 0; lx <= 2; ++lx)
-    for (unsigned ly = 0; lx + ly <= 2; ++ly)
-      for (unsigned lz = 0; lx + ly + lz <= 2; ++lz)
+  for (unsigned lx = 0; lx <= 3; ++lx)
+    for (unsigned ly = 0; lx + ly <= 3; ++ly)
+      for (unsigned lz = 0; lx + ly + lz <= 3; ++lz)
         for (int count : {1, 3})
           for (double radius : {0.0, 1e-7, 0.73, 4.1}) {
             // Three terms exercise spherical-d-like signed mixtures; offset 1
@@ -216,6 +216,13 @@ void check_ao_consumer() {
               }
             }
           }
+  // g powers must not alias a supported component in the base-4 dispatch key.
+  for (const auto powers : {std::array<unsigned, 3>{0, 0, 4}, {0, 4, 0}, {4, 0, 0}, {2, 1, 1}}) {
+    double jet[4];
+    vibeqc::generated::ecp_ao(powers[0], powers[1], powers[2], 0.2, -0.3, 0.4, 0.7, jet);
+    for (double value : jet)
+      if (std::isfinite(value)) throw std::runtime_error("unsupported ECP AO silently aliased");
+  }
 }
 
 void check_weighted_consumer() {

@@ -73,6 +73,10 @@ raw derivatives, complete method endpoints and bounded-resource evidence.
 
 ## References
 
+The orbital-domain boundary is subsequently extended through f by the
+[orbital-f decision](../numerics/2026-09-17-ecp-orbital-f.md); the grid ownership
+and independent oracle rationale above remain applicable.
+
 - Issue #171; PRs #371 and #400.
 - [Current ECP contract](../../../../docs/ecp.md).
 - [Prior AO/weight decision](2026-09-16-ecp-ao-weight-consumers.md).
