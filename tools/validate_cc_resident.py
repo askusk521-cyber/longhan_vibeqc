@@ -99,9 +99,7 @@ def run(output, compiler, cache, *, compile_only=False):
                 "binary_sha256": artifact.metadata["binary_sha256"],
             }
             if manifest["runtime_device"] is None:
-                manifest["runtime_device"] = getattr(
-                    ordinary.executor, "device", None
-                )
+                manifest["runtime_device"] = getattr(ordinary.executor, "device", None)
             record["runtime_device"] = manifest["runtime_device"]
             parity = []
             with PreparedResident(p, artifact) as resident:
