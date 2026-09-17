@@ -1,12 +1,8 @@
-"""Run the component-wise analytic RHF Hessian evidence (issue #180, PR A2).
+"""Validate the independent semi-numerical RHF Hessian oracle for #180.
 
-Self-contained: integrals and their coordinate derivatives are re-derived by
-fresh-molecule finite differences (see tools.vibeqc_hessian.assemble), so the
-record does not depend on the #178 generated second-integral providers. The
-evidence is printed as a JSON record: analytic-vs-FD, symmetry, translation,
-per-component magnitudes, and the frozen-density negative case, for each case.
-
-CPU-only; no GPU, Slurm or performance claim.
+Retain analytic-PySCF, energy-difference and three gradient-difference
+comparisons, basis/geometry provenance, component gates and raw symmetry.
+This CPU reference does not qualify the production analytic-provider chain.
 """
 
 from __future__ import annotations
@@ -20,22 +16,25 @@ _compiler_sys.path.insert(0, str(_root / "python"))
 _compiler_sys.path.insert(0, str(_root))
 
 import argparse
+import hashlib
 import json
 import platform
 import time
 from pathlib import Path
 
 import numpy as np
+import pyscf
 
-from tools.vibeqc_hessian.assemble import (
+from tools.vibeqc_hessian.reference import (
     System,
+    _converged_rhf,
     build_mol,
     fd_hessian,
     hessian_components,
     hessian_total,
 )
 
-# STO-3G primitives (Bohr) for the two default cases.
+# H uses STO-3G. Oxygen uses a custom Cartesian s/p/d stress basis.
 _S = [
     [
         0,
@@ -65,10 +64,12 @@ _O = [
 
 CASES = {
     "h2": {
+        "basis_label": "STO-3G",
         "atoms": [(1, [0.0, 0.0, 0.0]), (1, [0.1, 0.2, 1.4])],
         "basis": {"H0": _S, "H1": _S},
     },
     "water": {
+        "basis_label": "custom O(s,p,d) + H/STO-3G, 12 Cartesian AOs",
         "atoms": [
             (8, [0.0, 0.0, 0.0]),
             (1, [0.0, 0.958, 0.587]),
@@ -101,21 +102,46 @@ def _evidence_case(args, name):
 
     H = hessian_total(s)
     H_fd = fd_hessian(mol, h=args.fd_h)
+    H_analytic = _converged_rhf(mol).Hessian().kernel()
+    from tools.vibeqc_hessian.numerical import numerical_hessian
+
+    def gradient(coords, settings):
+        moved = mol.copy().set_geom_(coords, unit="Bohr")
+        return _converged_rhf(moved).nuc_grad_method().kernel()
+
+    gradient_curve = numerical_hessian(
+        gradient,
+        mol.atom_coords(),
+        settings={"method": "RHF", "conv_tol": 1e-13, "conv_tol_grad": 1e-10},
+        steps=(2e-3, 7e-4, 2e-4),
+    )
+    for sample in gradient_curve["samples"]:
+        # numerical_hessian stores displacement first, gradient second.
+        numerical = np.asarray(sample["hessian"]).transpose(2, 0, 3, 1)
+        sample["reference_error"] = float(np.max(np.abs(H - numerical)))
+        sample["passed"] = sample["reference_error"] < 2e-4
     nd = 3 * mol.natm
     H6 = H.transpose(0, 2, 1, 3).reshape(nd, nd)
 
     comps = hessian_components(s)
     H_frozen = hessian_total(s, with_relax=False)
 
-    return {
+    record = {
         "case": name,
+        "basis_label": spec["basis_label"],
+        "basis": spec["basis"],
+        "atoms_bohr": spec["atoms"],
+        "hessian_layout": "atom,xyz,atom,xyz flattened to 3N by 3N",
+        "units": "Eh/Bohr^2",
+        "reference_vs_analytic": float(np.max(np.abs(H - H_analytic))),
+        "gradient_difference_curve": gradient_curve,
         "nao": int(mol.nao),
         "nocc": int(s.nocc),
         "nvirt": int(s.nmo - s.nocc),
         "h2_step": float(args.h2),
         "fd_step": float(args.fd_h),
         "derive_seconds": float(derive_s),
-        "analytic_vs_fd": float(np.abs(H - H_fd).max()),
+        "reference_vs_energy_fd": float(np.abs(H - H_fd).max()),
         "symmetry": float(np.abs(H - H.transpose(1, 0, 3, 2)).max()),
         "translation_row": float(np.abs(H6.sum(axis=1)).max()),
         "translation_col": float(np.abs(H6.sum(axis=0)).max()),
@@ -135,15 +161,32 @@ def _evidence_case(args, name):
             ).max()
         ),
         "frozen_density_shift": float(np.abs(H - H_frozen).max()),
-        "analytic_hessian": _serializable(H6),
+        "reference_hessian": _serializable(H6),
     }
+    record["gates"] = {
+        "analytic_reference": record["reference_vs_analytic"] < 5e-6,
+        "energy_difference": record["reference_vs_energy_fd"] < 5e-4,
+        "gradient_difference": all(s["passed"] for s in gradient_curve["samples"]),
+        "raw_symmetry": record["symmetry"] < 1e-8,
+        "translation": max(record["translation_row"], record["translation_col"]) < 1e-4,
+        "component_sum": record["component_sum_vs_total"] < 1e-10,
+        "frozen_density_negative": record["frozen_density_shift"]
+        > 3 * record["reference_vs_energy_fd"],
+    }
+    record["passed"] = all(record["gates"].values())
+    return record
 
 
 def run(args):
     evidence = {
-        "title": "issue #180 slice A, PR A2: component-wise analytic RHF Hessian",
+        "title": "issue #180: independent semi-numerical RHF Hessian oracle",
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "pyscf": pyscf.__version__,
+        "source_sha256": {
+            str(p.relative_to(_root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in (_root / "tools/vibeqc_hessian/reference.py", Path(__file__))
+        },
         "cases": {},
     }
     for name in args.cases:
@@ -151,10 +194,13 @@ def run(args):
         evidence["cases"][name] = _evidence_case(args, name)
         evidence["cases"][name]["total_seconds"] = float(time.perf_counter() - t0)
         print(
-            f"[{name}] analytic-vs-FD = "
-            f"{evidence['cases'][name]['analytic_vs_fd']:.3e}",
+            f"[{name}] reference-vs-energy-FD = "
+            f"{evidence['cases'][name]['reference_vs_energy_fd']:.3e}",
             flush=True,
         )
+    evidence["passed"] = bool(evidence["cases"]) and all(
+        case["passed"] for case in evidence["cases"].values()
+    )
     return evidence
 
 
@@ -169,7 +215,9 @@ def main():
     parser.add_argument(
         "--fd-h", type=float, default=1e-4, help="total-energy FD oracle step (Bohr)"
     )
-    parser.add_argument("--output", default=Path("hessian_a2_evidence.json"), type=Path)
+    parser.add_argument(
+        "--output", default=Path("hessian_reference_evidence.json"), type=Path
+    )
     args = parser.parse_args()
     args.cases = [c.strip() for c in args.case.split(",") if c.strip()]
     for c in args.cases:
@@ -178,6 +226,8 @@ def main():
     evidence = run(args)
     args.output.write_text(json.dumps(_serializable(evidence), indent=2) + "\n")
     print(f"wrote {args.output}")
+    if not evidence["passed"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

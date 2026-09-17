@@ -231,78 +231,46 @@ tile bounds is rejected; an unimplemented DF/ECP/range-separated/meta-GGA
 Hessian is reported as unsupported rather than silently answered with an
 HF or energy-only quantity.
 
-## Analytic assembly (PR A2)
+## Independent semi-numerical reference
 
-Step 3 (RHS) and step 4 (assembly) are delivered in
-:mod:`tools.vibeqc_hessian.assemble`. It is a self-contained **reference
-implementation**: every integral value and its first and second coordinate
-derivatives are re-derived by fresh-molecule finite differences
-(`_d1`, `_d2` on a `_mol_at`-rebuilt geometry), so no intor-cache state and no
-convergence path leaks between cases. This makes it an independent oracle for
-the term map above — the assembly can be checked against A1's numerical
-oracle and against PySCF's analytic RHF Hessian without sharing code with the
-#178 generated second-integral providers.
+`tools.vibeqc_hessian.reference` supplies a tiny CPU oracle with an independent
+dense CPHF solve and finite-difference first/second integral derivatives. It
+requires optional PySCF, all-electron closed-shell RHF, Cartesian AOs, at most
+18 AOs and four atoms, and a nonzero occupied/virtual gap. Invalid steps,
+unsupported molecules, unconverged SCF references and failed response solves
+raise errors. It is imported explicitly; importing the Hessian weight/RHS
+helpers does not require PySCF.
 
-The assembly reproduces the term map exactly:
+This reference does **not** complete slice-A step 4 or qualify the analytic
+provider chain. That integration must consume #178 generated second-integral
+blocks and #179's shared response operator/solver. The dense reference stays
+independent so it can test that future implementation. The occupied CPHF block
+is fixed by the metric gauge, and its induced density contributes to the virtual
+response; a correctly constructed reduced occupied/virtual solve is equivalent.
 
-```text
-H = nuclear + core + pulay + two_electron + relaxation
-  = En2          Tr[P0 h2]  -2 Tr[W_e S2]  Tr[W2 ERI2]  Σ_ia≥ja (4 Tr[h1ao mo1 moccᵀ]
-                                                          - 4 Tr[s1ao mo1e moccᵀ]
-                                                          - 2 Tr[s1oo mo_e1])
+`System.derive()` differences fresh-molecule integrals. `hessian_components()`
+returns nuclear, core, overlap/Pulay, two-electron and relaxation contributions.
+With energy-weighted density `W = 2 sum_i eps_i C_i C_i^T`, the full-coordinate
+Pulay skeleton is `-Tr[W S_RR]`; the complete coordinate derivative already
+includes both AO slots. `hessian_total()` evaluates both atom orders without
+symmetrizing the result. Its layout is `(atom, atom, xyz, xyz)` (PySCF convention),
+and its units are Eh/Bohr². Transpose to `(atom, xyz, atom, xyz)` before using the
+existing skeleton/diagnostic helpers.
+
+Reproduce the reference gates with:
+
+```sh
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PYTHONPATH=python:. \
+  python tools/hessian_examples.py --case h2,water --output /tmp/hessian-reference.json
 ```
 
-where `W_e = 2 Σ ε_i C_μi C_νi` (energy-weighted density), `W2_μνλσ = ½ P_μν P_λσ
-- ¼ P_μλ P_νσ` (four-index two-electron weight), and all intermediates are
-reconstructed from VibeQC tensors:
+The driver retains the full basis/geometry and source hashes, compares against
+PySCF's analytic Hessian (5e-6 absolute tolerance), total-energy differences
+(5e-4), and all three analytic-gradient difference steps (2e-4 each). It also
+gates raw symmetry, translation, component sums and the omitted-relaxation
+negative case; any failed gate produces a nonzero exit status. H2 uses STO-3G;
+water uses a **custom 12-AO O(s,p,d) + H/STO-3G stress basis**, with five occupied
+and seven virtual orbitals. The tests additionally cover genuine 7-AO water
+STO-3G. No complete-method performance or generated-provider claim is made.
 
-```text
-s1ao[ia][x] = S1[ia*3+x]
-h1ao[ia][x] = h1[ia*3+x] + Wof(ERI1[ia*3+x], P0)
-```
-
-### The 1st-order CPHF and the full-response-space trap
-
-The relaxation needs the 1st-order orbital response `mo1` and the 1st-order
-orbital energies `mo_e1`, in metric gauge. `_first_order_mo1_e1` solves the
-CPHF equation **on the full (nmo, nocc) orbital-response space** — Krylov
-iteration over the occupied-column induced density
-`C (2 mo1) moccᵀ + c.c.`, then a final refinement of the virtual block —
-which is exactly PySCF's `solve_withs1`.
-
-This is the defect that H2 hides. For H2 the nonredundant (nocc, nvir) block
-is 1×1, so solving only the virtual-occupied block with the occupied block
-frozen gives the same number. For water (5 occupied, 7 virtual in the A2
-fixture) the occupied block is not a constant through the density: it must be
-iterated as part of the full `mo1`. Solving only the vir block with a frozen
-occ block leaves `mo1` wrong by ~0.02 and the assembled Hessian wrong by
-~1e-2 before the refinement is added; the full-space operator closes it to the
-finite-difference floor.
-
-### Verification (measured, not fitted)
-
-Against A1's total-energy FD oracle (h=1e-4) and against PySCF's full analytic
-RHF Hessian:
-
-| case | max analytic − FD | sym violation H−Hᵀ | translation row-sum |
-|---|---|---|---|
-| H2 STO-3G (2 AO, 1 occ, 1 virt) | 1.0e-7 | 1.4e-17 | 9e-8 |
-| water STO-3G (12 AO, 5 occ, 7 virt) | 1.6e-5 | 1.9e-14 | 1.7e-6 |
-
-The residual against FD is finite-difference truncation of the **2nd-derivative
-integrals** (differenced at h2=3e-4), not a formula error: raising h2 to
-close the O(h2²) floor drives the water analytic-to-PySCF gap to ~1e-6. The
-component sum equals the total to machine precision, and each component
-(nuclear / core / pulay / two_electron / relaxation) is individually
-non-trivial — the negative case (dropping `relaxation`, i.e. frozen density)
-shifts the Hessian by ~500× the FD floor, so a missing contribution cannot
-hide. See `tests/python/test_hessian_assemble.py`.
-
-### Step-size budget
-
-The dominant cost is the 2nd-derivative integrals: `nd(nd+1)/2` four-center
-ERI second differences, each a fresh 4-point SCF-free intor rebuild, plus
-`nd` overlap/kinetic/nuclear 1st and 2nd differences. H2 runs in a few
-seconds; the A2 water fixture (12 AO) runs in tens of seconds on CPU. The
-HeH+ d/f case (18 AO) scales roughly as the square of the AO count in the
-2nd-derivative loop and is the natural next gate for `VIBEQC_HESSIAN_SLOW=1`.
+See the [reference-boundary rationale](../.agents/notes/implemented/numerics/2026-09-17-hessian-reference-boundary.md).

@@ -38,6 +38,7 @@ __device__ __forceinline__ void contract_shell_task(
     bool triangle, std::size_t task, std::size_t tasks, unsigned long long* work) {
   using Math = std::conditional_t<Rys, generated::RysShell<A, B, C>, generated::Shell<A, B, C>>;
   using Schedule = generated::Schedule<A, B, C, Variant>;
+  constexpr bool prepare_cache = !Rys || Math::shared_root_state;
   constexpr auto lanes = Schedule::lanes, groups = Schedule::groups;
   __shared__ double all_weights[groups][Math::components], all_cache[groups][3 * Math::axis_size];
   __shared__ scalar::Geometry all_geometry[groups];
@@ -73,7 +74,7 @@ __device__ __forceinline__ void contract_shell_task(
   for (unsigned i = lane; i < Math::components; i += lanes) cart_weights[i] = 0;
   __syncwarp(mask);
   unsigned public_work = 0, public_loads = 0;
-  unsigned long long expansion_work = 0, convolution_work = 0;
+  unsigned long long expansion_work = 0, convolution_work = 0, recurrence_work = 0;
   for (auto i = std::int64_t{lane}; i < na * nb * nc; i += lanes) {
     const auto ai = oa + i / nb / nc, bi = ob + i / nc % nb, ci = oc + i % nc;
     if (ci < panel_begin || ci - panel_begin >= panel_count) continue;
@@ -119,7 +120,12 @@ __device__ __forceinline__ void contract_shell_task(
   for (unsigned i = lane; i < Math::components; i += lanes)
     if (cart_weights[i] != 0) {
       ++component_work;
-      if (work) convolution_work += Math::convolution_work(i);
+      if (work) {
+        convolution_work += Math::convolution_work(i);
+        // Component-local work skips zeros. Cooperative root/axis preparation
+        // is fixed work for every active shell and is counted separately below.
+        if constexpr (Rys) recurrence_work += Math::recurrence_work(i);
+      }
     }
   const bool active = __any_sync(mask, component_work != 0);
   for (unsigned delta = lanes / 2; delta; delta /= 2) {
@@ -129,6 +135,7 @@ __device__ __forceinline__ void contract_shell_task(
     if (work) {
       expansion_work += __shfl_down_sync(mask, expansion_work, delta, lanes);
       convolution_work += __shfl_down_sync(mask, convolution_work, delta, lanes);
+      if constexpr (Rys) recurrence_work += __shfl_down_sync(mask, recurrence_work, delta, lanes);
     }
   }
   if (lane == 0 && counters) {
@@ -201,7 +208,7 @@ __device__ __forceinline__ void contract_shell_task(
           ++primitive_work;
         }
         __syncwarp(mask);
-        if constexpr (!Rys) {
+        if constexpr (prepare_cache) {
           Math::prepare(geometry, cache, lane, lanes);
           __syncwarp(mask);
         }
@@ -231,7 +238,7 @@ __device__ __forceinline__ void contract_shell_task(
         record_work(work, DfShellWork::rys_evaluations, primitive_work);
         record_work(work, DfShellWork::rys_roots, Math::nroots * primitive_work);
         record_work(work, DfShellWork::recurrence_states,
-                    Math::recurrence_states_per_primitive * primitive_work);
+                    (Math::shared_recurrence_states + recurrence_work) * primitive_work);
       } else {
         record_work(work, DfShellWork::boys_evaluations, primitive_work);
         record_work(work, DfShellWork::boys_order_sum, primitive_work * (A + B + C + 1));
@@ -256,7 +263,7 @@ __device__ __forceinline__ void contract_shell_task(
                                    unsigned(atom_c == atom_a || atom_c == atom_b));
       record_work(work, DfShellWork::gradient_atomics_shared_atom, shared);
       record_work(work, DfShellWork::gradient_atomics_distinct_atom, 9 - shared);
-      record_work(work, DfShellWork::subgroup_rendezvous, (Rys ? 2 : 3) * primitive_work);
+      record_work(work, DfShellWork::subgroup_rendezvous, (prepare_cache ? 3 : 2) * primitive_work);
     }
     if (counters) {
       atomicAdd(counters + 1, 1ULL);

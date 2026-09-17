@@ -293,19 +293,18 @@ cudaError_t dispatch_screening(double budget, Launch&& launch) {
 template <unsigned A, unsigned B, unsigned C, class Launch>
 cudaError_t dispatch_lowering(unsigned architecture, unsigned& variant, double budget,
                               Launch&& launch) {
-  const auto choice = generated::DfProductionPolicy<A, B, C>::select(architecture);
   const char* mapping = std::getenv("VIBEQC_DF_SHELL_POLICY");
-  const bool use_choice =
-      choice.available &&
-      (choice.qualified || (mapping && std::string_view(mapping) == "candidate"));
+  const bool candidate = mapping && std::string_view(mapping) == "candidate";
+  // Campaign manifests retain the qualified baseline for automatic execution,
+  // so both arms can reuse the same prepared density, arena and library.
+  const auto choice = generated::DfProductionPolicy<A, B, C>::select(architecture, candidate);
+  const bool use_choice = choice.available && (choice.qualified || candidate);
   const char* schedule = std::getenv("VIBEQC_DF_SHELL_SCHEDULE");
   if (use_choice && (!schedule || std::string_view(schedule) == "auto")) variant = choice.variant;
-  const char* raw = std::getenv("VIBEQC_DF_SHELL_MATH_000");
-  const std::string_view policy = raw ? raw : "auto";
-  if (policy != "auto" && policy != "polynomial" && policy != "rys") return cudaErrorInvalidValue;
+  // The manifest owns mathematical lowering for every supported class; the
+  // candidate policy admits unqualified entries for endpoint qualification.
   if constexpr (generated::rys_available<A, B, C>) {
-    if (policy == "rys" || (policy == "auto" && use_choice && choice.rys))
-      return dispatch_screening<A, B, C, true>(budget, launch);
+    if (use_choice && choice.rys) return dispatch_screening<A, B, C, true>(budget, launch);
   }
   return dispatch_screening<A, B, C, false>(budget, launch);
 }

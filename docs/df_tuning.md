@@ -9,10 +9,16 @@ libcint oracles; source generation never imports them or probes a GPU.
 ## Batch qualification
 
 `tools/benchmark_df_derivatives.py` enumerates every available lowering for
-`000 001 002 100 101 110 200`, crossed with warp/packed/compact schedules. Only
-000 currently has Rys derivatives, giving 24 candidates. Each independent CUDA
+`000 001 002 100 101 110 200`, crossed with warp/packed/compact schedules. Both polynomial and Rys
+lowerings cover all seven classes, giving 42 candidates. Each independent CUDA
 translation unit instantiates the production shell template; it does not copy
-the recurrence. The linked executable checks full/symmetric/packed and
+the recurrence. The Rys node convention is `u=t²`: one root for `000`, two for the six
+other classes, restricted to ordinary full-range first derivatives. All six
+share one generated degree-17 Chebyshev evaluator and its analytic large-T
+limit. Source generation needs no high-precision library; the offline table
+reproducer is `tools/generate_df_rys2_table.py`. Availability does not qualify
+a production choice. The [numerical decision note](../.agents/notes/implemented/numerics/2026-09-16-batch-df-rys.md) records the evaluator and oracle boundaries.
+The linked executable checks full/symmetric/packed and
 Cartesian/spherical fixtures against native CPU derivatives, then measures each
 real primitive signature in the retained 384/768 work ledgers.
 
@@ -52,20 +58,36 @@ python tools/benchmark_df_values.py \
 | --- | --- | --- |
 | `VIBEQC_DF_SHELL_POLICY` | Generated sm_120 mapping for 384/768 AO with equal auxiliary dimension; other sizes retain legacy | `legacy`, `candidate` |
 | `VIBEQC_DF_SHELL_SCHEDULE` | Class-specific manifest schedule | `warp`, `packed`, `compact` |
-| `VIBEQC_DF_SHELL_MATH_000` | Manifest choice in its qualified domain; polynomial elsewhere | `polynomial`, `rys` |
 | `VIBEQC_DF_VALUE_MATH` | Existing generic Rys | `generic`, `polynomial`, `rys`, `candidate` |
 | `VIBEQC_DF_VALUE_RAW_MAPPING` | Existing scalar raw export | `scalar`, `subgroup`, `warp`, `candidate` |
 | `VIBEQC_DF_FORCE_SCREEN_ABS` | Off | Nonnegative finite absolute force budget, or `off` |
 | `VIBEQC_DF_FINAL_PROJECTION` | Reuse only in the qualified resident 768-AO RHF domain | `off`, `reuse` |
 
-The derivative manifest chooses Rys/compact for 000 and polynomial/compact for
-the other six classes. Value candidates remain unqualified after complete cold
+The derivative manifest chooses Rys/compact for 000/001/002/100/200 and
+polynomial/compact for 101/110. The automatic sm_120 domain remains 384/768 AO
+with equal auxiliary dimension; the manifest does not broaden that domain.
+See the [combined endpoint qualification note](../.agents/notes/implemented/performance/2026-09-17-combined-rys-promotion.md).
+Value candidates remain unqualified after complete cold
 endpoint regressions. The raw `candidate` schedule applies its generated lane
 count only to total angular degree at most two; metric and higher classes retain
 scalar work. Source-backed value math is frozen when its owner is constructed;
 its existing source schedule remains independent. All these controls participate
 in checkpoint scheduling identity as optional extensions, preserving older
 checkpoint compatibility.
+
+An unqualified derivative campaign may embed a qualified `baseline` profile for
+each architecture. `auto` retains that baseline in the existing qualified size
+domain; `candidate` selects the proposed class mapping. Both arms share one
+prepared state and library, so the endpoint runner can interleave identical
+frozen-density replays without repeating large initialization or holding two
+DF arenas. Both profiles undergo the same mathematical/evidence validation.
+Promoted manifests omit the campaign baseline. See the
+[campaign baseline note](../.agents/notes/implemented/performance/2026-09-17-df-campaign-baseline.md).
+
+Mathematical lowering is selected only through the class manifest. Historical
+checkpoints may retain retired controls as source provenance; importing their
+density requires `allow_warm=True`, and re-export preserves those controls.
+See the [selector retirement note](../.agents/notes/implemented/compatibility/2026-09-16-df-math-selector-retirement.md).
 
 ## Force screening contract
 

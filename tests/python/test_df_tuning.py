@@ -52,11 +52,13 @@ def rank(profiles, rows):
 
 def test_available_trials_and_identity():
     trials = enumerate_trials()
-    assert len(trials) == 24
+    assert len(trials) == 42
     assert len({t.key for t in trials}) == len(trials)
-    assert {t.angular for t in trials if t.lowering == "rys"} == {(0, 0, 0)}
+    assert {t.angular for t in trials if t.lowering == "rys"} == {
+        t.angular for t in trials
+    }
     with pytest.raises(ValueError, match="unsupported"):
-        DfDerivativeTrial((1, 0, 0), "rys", 2)
+        DfDerivativeTrial((3, 1, 1), "rys", 2)
     trial = trials[0]
     identity = {
         "generator_sha256": "abc",
@@ -87,6 +89,33 @@ def test_profiles_remain_separate_and_conflicts_block_combination():
         "384": "000:rys:compact",
         "768": "000:polynomial:compact",
     }
+
+
+def test_explicit_high_angular_campaign_preserves_both_profiles():
+    """A hot-class campaign must not silently discard classes outside the old seven."""
+    profiles, rows = fixture()
+    for payload in profiles.values():
+        payload["classes"][0]["angular"] = [1, 1, 1]
+    for row in rows:
+        row["candidate"] = row["candidate"].replace("000:", "111:")
+    result = rank_profiles(
+        profiles,
+        rows,
+        baselines={"111": "111:polynomial:compact"},
+        angular=((1, 1, 1),),
+    )
+    assert set(result["profiles"]) == {"384", "768"}
+    assert result["proposed_mapping"] == {"111": "111:rys:compact"}
+    rows[-1]["work"]["primitive_products"] += 1
+    result = rank_profiles(
+        profiles,
+        rows,
+        baselines={"111": "111:polynomial:compact"},
+        angular=((1, 1, 1),),
+    )
+    assert result["profiles"]["768"]["111"]["rejections"][rows[-1]["candidate"]] == [
+        "work domain differs"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -161,6 +190,99 @@ def test_manifests_require_complete_independent_qualification(tmp_path):
         path.write_text(json.dumps(payload))
         with pytest.raises(ValueError, match="provenance|evidence"):
             load(path)
+
+
+def campaign_manifest():
+    """Keep the already-promoted SSS choice in both synthetic comparison arms."""
+    baseline = {
+        "qualified": True,
+        "kernels": [
+            {"class": "000", "lowering": "rys", "schedule": "compact"},
+            {"class": "001", "lowering": "polynomial", "schedule": "compact"},
+        ],
+        "provenance": dict.fromkeys(
+            [
+                "generator_sha256",
+                "toolchain",
+                "profile_sha256",
+                "candidate_report",
+                "endpoint_384",
+                "endpoint_768",
+                "sanitizer",
+                "gradient_fixtures",
+            ],
+            "unit-test fixture",
+        ),
+    }
+    candidate = copy.deepcopy(baseline)
+    candidate["qualified"] = False
+    candidate["kernels"][1]["lowering"] = "rys"
+    candidate["baseline"] = baseline
+    return {"schema_version": 1, "architectures": {"sm_120": candidate}}
+
+
+@pytest.mark.parametrize("promoted", [False, True])
+def test_compiled_campaign_selection_preserves_qualified_baseline(tmp_path, promoted):
+    """Promotion removes the comparison arm without changing candidate math."""
+    import json
+    import shutil
+    import subprocess
+
+    from vibeqc_compiler.integral.df_tuning.manifest import emit_policy
+
+    compiler = shutil.which("c++")
+    if compiler is None:
+        pytest.skip("requires a host C++ compiler")
+    path = tmp_path / "manifest.json"
+    manifest = campaign_manifest()
+    if promoted:
+        profile = manifest["architectures"]["sm_120"]
+        del profile["baseline"]
+        profile["qualified"] = True
+    path.write_text(json.dumps(manifest))
+    source = tmp_path / "policy.cpp"
+    source.write_text(
+        emit_policy(path)
+        + """
+using namespace vibeqc::scf::generated_df_shell;
+static_assert(DfProductionPolicy<0,0,0>::select(120).rys);
+static_assert(DfProductionPolicy<0,0,0>::select(120,true).rys);
+static_assert(DfProductionPolicy<0,0,1>::select(120).qualified);
+static_assert(DfProductionPolicy<0,0,1>::select(120,true).rys);
+static_assert(!DfProductionPolicy<0,0,1>::select(80,true).available);
+static_assert(!DfProductionPolicy<1,1,1>::select(120,true).available);
+"""
+        + f"static_assert(DfProductionPolicy<0,0,1>::select(120).rys == {str(promoted).lower()});\n"
+        + f"static_assert(DfProductionPolicy<0,0,1>::select(120,true).qualified == {str(promoted).lower()});\n"
+    )
+    subprocess.run([compiler, "-std=c++20", "-fsyntax-only", str(source)], check=True)
+
+
+@pytest.mark.parametrize(
+    "fault", ["baseline", "candidate", "nested", "evidence", "math"]
+)
+def test_campaign_baseline_requires_qualified_independent_evidence(tmp_path, fault):
+    import json
+
+    from vibeqc_compiler.integral.df_tuning.manifest import load_manifest
+
+    payload = campaign_manifest()
+    candidate = payload["architectures"]["sm_120"]
+    baseline = candidate["baseline"]
+    if fault == "baseline":
+        baseline["qualified"] = False
+    elif fault == "candidate":
+        candidate["qualified"] = True
+    elif fault == "nested":
+        baseline["baseline"] = copy.deepcopy(baseline)
+    elif fault == "evidence":
+        del baseline["provenance"]["endpoint_768"]
+    else:
+        baseline["kernels"][0]["class"] = "311"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        load_manifest(path)
 
 
 def test_value_identity_and_profile_disagreements():

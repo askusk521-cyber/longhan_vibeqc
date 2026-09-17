@@ -14,6 +14,7 @@ its AO convention.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import time
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from vibeqc import Calculator
+from vibeqc import Calculator, load_basis
 
 try:  # Keep both direct CLI execution and shared benchmark-module imports.
     from _cases import benchmark_cases
@@ -44,6 +45,74 @@ except ModuleNotFoundError:
 
 VIBEQC_ENGINE = "vibeqc"
 GPU4PYSCF_ENGINE = "gpu4pyscf"
+
+
+def load_comparison_basis(path, case, *, role, compute_forces):
+    """Share one explicit canonical snapshot between both benchmark engines.
+
+    Preserve general-contraction columns and every shell. Reject incompatible
+    representation, ECP/alchemical metadata and unsupported CUDA shells before
+    importing GPU packages; silently dropping any of these changes the model.
+    This conversion is benchmark input preparation, never a native dependency.
+    """
+    from vibeqc.basis_capabilities import require_basis
+    from vibeqc.elements import SYMBOLS
+
+    basis = load_basis(path)
+    if basis.representation != case.basis_representation:
+        raise ValueError(f"{role} basis representation differs from the geometry case")
+    if any(
+        e.ecp_core_electrons or e.ecp_data or e.nuclear_charge != e.atomic_number
+        for e in basis.elements
+    ):
+        raise ValueError("comparison basis overrides require an all-electron model")
+    require_basis(
+        basis,
+        case.atoms,
+        backend="cuda",
+        role=role,
+        operator="df_three_center" if role == "auxiliary" else "eri",
+        derivative_order=int(compute_forces),
+    )
+    reference = {
+        SYMBOLS[element.atomic_number - 1]: [
+            [
+                shell.angular_momentum,
+                *[
+                    [float(exponent), *[float(row[i]) for row in shell.coefficients]]
+                    for i, exponent in enumerate(shell.exponents)
+                ],
+            ]
+            for shell in element.shells
+        ]
+        for element in basis.elements
+    }
+    return basis, reference
+
+
+def native_build_metadata(calculator: Any) -> dict[str, Any]:
+    """Identify the loaded binary and selected kernels outside endpoint timers.
+
+    A source identity alone cannot distinguish AOT-enabled and generic builds.
+    Read the calculator's actual library, since profile selection may replace
+    the path requested by the environment. The native probe uses the allocated
+    device's process-local ordinal and preserves its current-device selection.
+    """
+    from vibeqc.profiles import probe_device
+
+    library = calculator._library
+    path = Path(library._name).resolve()
+    # Release libraries include large generated device images. Avoid a full
+    # binary-sized host allocation just to record provenance before the solve.
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return {
+        "library_path": str(path),
+        "library_sha256": digest.hexdigest(),
+        "probe": probe_device(library, calculator._device_id),
+    }
 
 
 def fixed_warm_start_policy() -> dict[str, str]:
@@ -317,27 +386,22 @@ def _maximum_force_error(pairs: Sequence[dict[str, Any]]) -> float | None:
 
 
 def accuracy_gate_summary(pairs: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Select branch-matched accuracy rows when the engines share them.
+    """Require every measured repeat to meet the requested numerical accuracy.
 
-    Every repeat remains published. The gate uses matched rows when available
-    because a looser SCF branch can move analytic forces at the same scale as
-    the tight benchmark tolerance even though both engines report convergence.
+    Iteration branches classify timing, not correctness. Selecting only matched
+    branches or the final pair could admit a faster but inaccurate repeat into
+    the endpoint median, even when both engines report convergence.
     """
 
-    matched = [item for item in pairs if item["iteration_branches_match"]]
-    # Schema v1 gated the final warm result. Preserve that established
-    # accuracy contract when no ordinal repeat shares an iteration branch,
-    # while publishing the larger all-repeat maximum immediately beside it.
-    selected = matched or [pairs[-1]]
+    if not pairs:
+        raise ValueError("accuracy acceptance requires at least one measured pair")
     return {
-        "selection": (
-            "iteration_matched_pairs" if matched else "final_pair_unmatched_labeled"
-        ),
-        "pair_count": len(selected),
+        "selection": "all_measured_pairs",
+        "pair_count": len(pairs),
         "maximum_energy_error_hartree": max(
-            item["maximum_energy_error_hartree"] for item in selected
+            item["maximum_energy_error_hartree"] for item in pairs
         ),
-        "maximum_force_error_hartree_per_bohr": _maximum_force_error(selected),
+        "maximum_force_error_hartree_per_bohr": _maximum_force_error(pairs),
     }
 
 
@@ -465,6 +529,16 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument(
+        "--orbital-basis-file",
+        type=Path,
+        help="canonical local basis snapshot used by both engines instead of the case's orbital basis",
+    )
+    parser.add_argument(
+        "--auxiliary-basis-file",
+        type=Path,
+        help="canonical local auxiliary snapshot for both DF engines (default: same as orbital)",
+    )
+    parser.add_argument(
         "--energy-only",
         action="store_true",
         help="measure SCF energy without evaluating either engine's forces",
@@ -523,6 +597,8 @@ def main() -> None:
     args = parser.parse_args()
     compute_forces = not args.energy_only
     properties = ("energy", "forces") if compute_forces else ("energy",)
+    if args.auxiliary_basis_file and args.density_fitting != "cuda":
+        raise ValueError("--auxiliary-basis-file requires --density-fitting cuda")
     if args.energy_only and args.maximum_force_error is not None:
         raise ValueError("--maximum-force-error requires a force endpoint")
     if args.batch < 1 or args.repeats < 1 or args.max_iterations < 1:
@@ -548,6 +624,26 @@ def main() -> None:
     if args.maximum_force_error is not None and args.maximum_force_error < 0.0:
         raise ValueError("--maximum-force-error must be non-negative")
 
+    # Resolve exact shared basis inputs on the host before either engine is
+    # created. With no override, every existing fixture keeps its old inputs.
+    case = cases[args.case]
+    native_orbital, reference_orbital = case.vibeqc_basis, case.pyscf_basis
+    basis_overrides = {}
+    if args.orbital_basis_file:
+        native_orbital, reference_orbital = load_comparison_basis(
+            args.orbital_basis_file, case, role="orbital", compute_forces=compute_forces
+        )
+        basis_overrides["orbital"] = native_orbital.to_payload()
+    native_auxiliary, reference_auxiliary = native_orbital, reference_orbital
+    if args.auxiliary_basis_file:
+        native_auxiliary, reference_auxiliary = load_comparison_basis(
+            args.auxiliary_basis_file,
+            case,
+            role="auxiliary",
+            compute_forces=compute_forces,
+        )
+        basis_overrides["auxiliary"] = native_auxiliary.to_payload()
+
     def progress(stage: str, **record: Any) -> None:
         """Preserve completed work if a later large endpoint fails or times out."""
         if args.progress_output:
@@ -568,7 +664,6 @@ def main() -> None:
     from gpu4pyscf.scf import uhf as gpu_uhf
     from pyscf import gto, scf
 
-    case = cases[args.case]
     systems = scaled_geometries(case.atoms, args.batch)
     reference_molecule = gto.M(
         atom=systems[0],
@@ -576,11 +671,15 @@ def main() -> None:
         charge=case.charge,
         spin=case.multiplicity - 1,
         cart=case.basis_representation == "cartesian",
-        basis=case.pyscf_basis,
+        basis=reference_orbital,
         verbose=0,
     )
     ao_count = int(reference_molecule.nao_nr())
-    if case.expected_ao_count is not None and ao_count != case.expected_ao_count:
+    if (
+        not args.orbital_basis_file
+        and case.expected_ao_count is not None
+        and ao_count != case.expected_ao_count
+    ):
         raise ValueError(
             f"{args.case} expected {case.expected_ao_count} AOs, "
             f"but PySCF constructed {ao_count}"
@@ -594,7 +693,7 @@ def main() -> None:
             charge=case.charge,
             spin=case.multiplicity - 1,
             cart=case.basis_representation == "cartesian",
-            basis=case.pyscf_basis,
+            basis=reference_orbital,
             verbose=0,
         )
         if molecule.nao_nr() != ao_count:
@@ -606,7 +705,7 @@ def main() -> None:
         if args.density_fitting == "cuda":
             # Match VibeQC's explicit auxiliary topology.  GPU4PySCF accepts
             # the same PySCF basis description through density_fit(auxbasis=).
-            engine = engine.density_fit(auxbasis=case.pyscf_basis)
+            engine = engine.density_fit(auxbasis=reference_auxiliary)
         if hasattr(engine, "to_gpu"):
             engine = engine.to_gpu()
         engine.conv_tol = args.energy_tolerance
@@ -617,7 +716,7 @@ def main() -> None:
 
     calculator = Calculator(
         method=case.method,
-        basis=case.vibeqc_basis,
+        basis=native_orbital,
         basis_representation=case.basis_representation,
         device="cuda",
         max_iterations=args.max_iterations,
@@ -625,9 +724,13 @@ def main() -> None:
         density_tolerance=args.density_tolerance,
         screening_tolerance=args.screening_tolerance,
         density_fitting=args.density_fitting,
-        auxiliary_basis=case.vibeqc_basis if args.density_fitting == "cuda" else None,
+        auxiliary_basis=native_auxiliary if args.density_fitting == "cuda" else None,
         density_fitting_memory_budget_bytes=args.density_fitting_memory_budget_bytes,
     )
+    native_build = native_build_metadata(calculator)
+    # Journal before preparation/SCF: an unsupported cold route may fail before
+    # a result JSON exists, but its compiled capability must remain reviewable.
+    progress("native_build", **native_build)
     vibeqc_samples: list[dict[str, Any]] = []
     gpu_samples: list[dict[str, Any]] = []
     eigensolver_diagnostics: list[dict[str, object]] = []
@@ -821,6 +924,7 @@ def main() -> None:
         payload = {
             "schema_version": 2,
             "benchmark": "compare_gpu4pyscf_batch",
+            "native_build": native_build,
             "environment": environment_metadata(
                 distributions={
                     "cupy": ("cupy-cuda12x", "cupy"),
@@ -833,7 +937,14 @@ def main() -> None:
             "workload": {
                 "properties": list(properties),
                 "case": args.case,
-                "description": case.description,
+                "description": (
+                    f"Geometry/spin from {args.case}; orbital basis {native_orbital.name}"
+                    if args.orbital_basis_file
+                    else case.description
+                ),
+                # The case selects geometry/spin; an explicit orbital snapshot
+                # supersedes the basis named in its historical description.
+                "basis_overrides": basis_overrides,
                 "method": case.method,
                 "ao_count": ao_count,
                 "batch_size": args.batch,
@@ -865,7 +976,11 @@ def main() -> None:
                     else 0
                 ),
                 "auxiliary_basis": (
-                    "same as orbital basis" if args.density_fitting == "cuda" else None
+                    native_auxiliary.name
+                    if args.auxiliary_basis_file
+                    else "same as orbital basis"
+                    if args.density_fitting == "cuda"
+                    else None
                 ),
             },
             "settings": {
@@ -892,14 +1007,17 @@ def main() -> None:
             },
             "timing_summary": {
                 "integral_contraction_breakdown": {
+                    "component_split_measured": False,
                     "cold_setup_and_integral_generation_seconds": vibeqc_cold,
                     "warm_endpoint_seconds": vibeqc_warm_median,
                     "warm_contraction_and_force_seconds": vibeqc_warm_median
                     if compute_forces
                     else None,
                     "note": (
-                        "CUDA DF integral setup is included in cold timing; "
-                        "warm timings contain resident-plan contractions"
+                        "Legacy field names contain complete endpoint times: "
+                        "cold includes preparation, SCF and requested properties; "
+                        "warm includes the full resident-plan solve. "
+                        "No integral/contraction component split is measured."
                     ),
                 },
                 "ordinary": {
