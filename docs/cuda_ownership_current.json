@@ -909,20 +909,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 18378,
+      "bytes": 18605,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 312,
+        "runtime": 314,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_kernel.cuh",
-      "physical_lines": 348,
+      "physical_lines": 351,
       "reason": "Shared production shell-packet execution templates, instantiated without scientific duplication by the derivative batch tuner. Normalized AO projection, compact task indexing, primitive traversal and reductions call compiler-owned polynomial/Rys mathematics.",
       "regions": [],
       "role": "runtime",
-      "sha256": "fb990f89412563c784674d0fdb03e3f23dfb52bc38cc664bd91587e5ce432548",
+      "sha256": "7684d4d1530e7ef58e25692d22ffcd49632e9ee6f69e1c32a454178c72118932",
       "subsystem": "df_derivatives"
     },
     {
@@ -3567,7 +3567,7 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 253,
-    "runtime": 10152,
+    "runtime": 10154,
     "scientific": 12209
   },
   "migration_ledger": {
@@ -3763,7 +3763,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 806,
+      "runtime": 808,
       "scientific": 1217
     },
     "df_response_weights": {
