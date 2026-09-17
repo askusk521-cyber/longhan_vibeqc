@@ -289,9 +289,13 @@ converged flag never authorize reuse.
 
 Ordinary finalization consumes the retained C/epsilon and verifies device
 solver status and determinant generation against the full source/model/epoch
-identity. It downloads compact diagnostics; requested physical-reference C and
-force-consumer W remain explicit host outputs. W is formed on the device only
-after acceptance and only for force requests. Reference export reuses the
+identity. Frame validation downloads compact diagnostics. Force selection also
+downloads the current physical Fock for the existing ordinary eigenprovider and
+checks its occupied projector against the requested density tolerance. A failed
+probe is reused by bounded correction. Requested physical-reference C and
+force-consumer W remain explicit host outputs. After acceptance, the device
+forms W as `D F[D] D / spin_weight` using two counted GEMMs and existing scratch.
+Reference export reuses the
 selector's stronger canonicality diagnostics. The independent CPU reference
 validator remains available for imported references and scientific tests.
 
@@ -308,6 +312,11 @@ validation/W GPU intervals, transfers, synchronization and workspace bytes;
 host regions and the progress journal retain physical-Fock/eigen/correction
 counts. These intrusive diagnostics must be run separately from clean endpoint
 timing, with independent oracle checks outside the timed call.
+
+The progress journal separates frame reconstruction from physical fixed-point
+defects, and reports fixed-point checks, their eigen solves and rejections.
+These extra force checks leave energy-only selection unchanged and must be
+included in complete endpoint cost.
 
 See the [device-validation decision](../.agents/notes/implemented/performance/2026-09-16-device-final-validation.md)
 for ownership rationale, resource tradeoffs and qualification evidence.
