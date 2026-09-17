@@ -115,6 +115,13 @@ core counts, channel parameters and atom mappings; geometry changes rebuild
 one-electron terms. The first implementation favors a verifiable baseline
 and makes no speedup claim.
 
+CUDA HF resource inventory v1 remains limited to at most 16 public AOs (and
+its existing DIIS/layout constraints). Orbital-f support does not enlarge that
+inventory: larger supported calculations can execute without an explicit
+budget, but resource estimation reports `unsupported` and `require_feasible()`
+raises. The f budget/replay gate uses a 16-AO spherical fixture; larger f
+endpoint measurements qualify numerical execution only.
+
 Direct RHF/UHF are the supported complete methods. ECP density fitting is
 explicitly rejected pending its own complete force/budget gates. Complete
 canonical MP2 with ECP is also rejected until its reference/provider gates are

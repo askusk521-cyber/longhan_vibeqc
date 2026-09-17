@@ -128,9 +128,16 @@ def test_f_prepared_replay_with_planned_budget(device):
     # Complete HF above covers f on the ECP atom. This replay gate covers f
     # on the all-electron atom too, without repeating the very expensive
     # two-f-center CPU reference on every PR. Keep that larger case opt-in.
-    both_centers = device == "cuda" or os.getenv("VIBEQC_ECP_LARGE_CPU_TEST") == "1"
+    both_centers = device == "cpu" and os.getenv("VIBEQC_ECP_LARGE_CPU_TEST") == "1"
     atoms, basis, _ = fixture(f_shell=both_centers, f_on_h=True)
     calculator = Calculator(basis=basis, device=device)
+    if device == "cuda":
+        # The existing small CUDA allocation inventory stops at 16 public
+        # AOs. Orbital f does not qualify a larger resource provider.
+        larger_atoms, larger_basis, _ = fixture(f_shell=True, f_on_h=True)
+        larger = Calculator(basis=larger_basis, device=device)
+        with pytest.raises(NotImplementedError, match="<=16 public AOs"):
+            larger.estimate_resources([larger_atoms]).require_feasible()
     plan = calculator.estimate_resources([atoms]).require_feasible()
     bounded = Calculator(
         basis=basis,

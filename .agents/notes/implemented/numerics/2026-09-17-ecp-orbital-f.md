@@ -53,8 +53,11 @@ finite-difference steps. A separate detached ECP center exercises f orbitals
 with d projectors. Complete RHF/UHF energies/forces use PySCF; CUDA complete
 energies also undergo directional finite differences. Planned-budget prepared
 execution checks changed-geometry replay and the device allocation ledger.
-The default CPU replay places f on the all-electron H atom; CUDA places f on
-both atoms. The much more expensive two-f-center CPU replay is retained behind
+The default CPU/CUDA replay places f on the all-electron H atom (16 public AOs).
+CUDA resource inventory v1 still rejects more than 16 public AOs; the test also
+checks that explicit rejection for the two-f-center fixture. Larger CUDA f
+endpoints qualify complete energies/forces without claiming budget support.
+The much more expensive two-f-center CPU replay is retained behind
 `VIBEQC_ECP_LARGE_CPU_TEST=1`; its initial interrupted run is not a qualification
 claim. Raw all-center tests still exercise both f centers on both backends.
 

@@ -54,8 +54,11 @@ empirical convergence checks, not a universal error estimate.
 Four matched f endpoint cases per backend cover Cartesian/spherical RHF/UHF
 with f on Na; CUDA also measures a larger Cartesian RHF case with f on both
 atoms. Each has a warmup, then one CPU or three CUDA complete synchronous
-`singlepoint` timing samples, followed by an explicitly budgeted prepared
-calculation. The larger two-f-center CPU replay remains explicitly opt-in; its initial
+`singlepoint` timing samples. All CPU cases and the 16-AO spherical CUDA cases
+also run an explicitly budgeted prepared calculation. CUDA inventory v1 still
+rejects more than 16 public AOs: the 19/29-AO Cartesian CUDA endpoints retain
+numerical/timing evidence and the explicit rejection diagnostic, with no
+claimed budget estimate. The larger two-f-center CPU replay remains explicitly opt-in; its initial
 incomplete run is retained below rather than repeated in endpoint timing.
 These small samples are diagnostics, not a CPU/GPU speed comparison. Records include actual shells,
 primitives, AO/pair counts, iterations, energies, forces and resource diagnostics.
@@ -66,10 +69,20 @@ The original two-f-center CPU prepared replay was still computing after a
 30-minute suite run; it and its duplicate in the CUDA-linked suite were
 interrupted, with logs and the exact earlier overlay retained. This is incomplete
 large-CPU qualification, not a numerical failure or a passing performance gate.
-The default CPU replay uses f on the all-electron H atom, complementing the
-independent complete-HF checks with f on Na. CUDA keeps both f centers; raw
+The default CPU/CUDA replay uses f on the all-electron H atom (16 public AOs),
+complementing the independent complete-HF checks with f on Na. CUDA also tests
+explicit rejection of budget estimation above 16 public AOs; raw
 matrices/all-center derivatives retain both centers on both backends. Set
 `VIBEQC_ECP_LARGE_CPU_TEST=1` to reproduce the expensive original CPU replay.
+
+The first CPU endpoint driver expected the backend label `cpu`; the actual
+public result uses `cpu_reference`. Its failed log and exact script are
+retained alongside the successful rerun. The first CUDA Python suite had
+79 passes and one failure because its budget fixture exceeded the existing
+16-AO inventory. After correcting that fixture and adding the explicit
+unsupported-domain check, `f-resume.sh` reruns the CUDA-selected tests and the
+changed CPU replay test, then completes benchmarks and sanitizer checks.
+The failed full run is retained and is not relabeled as a passing full rerun.
 
 ## Reproduction
 
