@@ -272,3 +272,39 @@ run in a finite Slurm `main` allocation with
 The [resident DF dataflow note](../.agents/notes/implemented/performance/2026-09-16-resident-df-dataflow.md)
 retains isolated arithmetic/cache ablations, the comparison with GPU4PySCF's
 Rys consumer, unchanged scientific work counters, and binary/resource costs.
+
+## Low-angular Rys derivatives
+
+The compiler generates polynomial and Rys first derivatives for
+`000/001/002/100/101/110/200`. Mathematical lowering comes from the class
+manifest. Automatic selection uses the qualified sm_120 entries for 384/768 AO
+with equal auxiliary dimension and remains polynomial outside that domain.
+The production manifest selects Rys only for `000`; additional Rys availability
+does not promote a class. `VIBEQC_DF_SHELL_POLICY=candidate` admits candidate
+manifest entries for complete endpoint qualification. See [DF tuning](df_tuning.md)
+for batch qualification, manifest selection, schedules and force screening.
+
+The node convention is `u=t²`. SSS uses one node `F1(T)/F0(T)` and weight `F0(T)`;
+the other six classes share a two-root evaluator with a piecewise Chebyshev table
+and an asymptotic branch at `T >= 48`. Gaussian product geometry and moment IR
+are shared with the polynomial emitter. Raised/lowered moments produce six
+orbital-center derivatives, immediately contracted with folded response weights;
+the existing translation identity recovers the auxiliary derivative. FP64,
+normalization, shell/primitive scheduling, panel ownership and gradient
+scattering remain common to both paths. Root values and reconstructed moments
+have independent 75-digit incomplete-gamma checks, including branch boundaries
+and extreme arguments. Contracted derivatives use independent libcint and
+high-precision differentiation oracles.
+
+The usual shell resource diagnostics include `shell_000_rys_selected` and
+per-class Rys evaluation/root/recurrence counts. Polynomial axis-cache and
+convolution counts become zero for selected Rys primitives. Recurrence counts
+include only active nonzero folded components. Clean endpoint
+timing must omit diagnostic counters and compare an identical SCF workload.
+
+The [Rys family note](../.agents/notes/implemented/numerics/2026-09-16-batch-df-rys.md)
+records evaluator decisions and qualification boundaries. The
+[000 Rys qualification note](../.agents/notes/implemented/performance/2026-09-16-000-rys-qualification.md)
+retains historical endpoint evidence, and the
+[selector retirement note](../.agents/notes/implemented/compatibility/2026-09-16-df-math-selector-retirement.md)
+explains compatibility for checkpoints recording the former SSS override.

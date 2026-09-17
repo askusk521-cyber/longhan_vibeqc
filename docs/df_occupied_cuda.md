@@ -31,6 +31,9 @@ resident full-Gram K, resident flattened dense K, or the default panel-dense
 and triangular occupied route. The plan freezes this policy; changing it
 rebuilds captured SCF work.
 
+The [split Gram decision](../.agents/notes/rejected/2026-09-17-split-occupied-gram.md)
+records the endpoint qualification behind retaining this single-Gram policy.
+
 The same plan supports resident tensors, generated panels and compatibility
 host-backed tiles. Full AO panels follow #282's capacity rebalance and reuse
 the diagonal T before any column replacement. Tight row traversal retains
@@ -48,13 +51,47 @@ cannot authorize use. A missing or incompatible factor runs dense K for that
 item while compatible neighbors retain factorized K. Factor upload borrows
 the existing density-transpose staging; no allocation is needed for host B.
 
-Every device SCF invocation starts with one dense iteration because imported
-and warm densities have no trustworthy orbital factor. The iteration stores
+Every device SCF invocation starts with one seed iteration. Imported and warm
+densities have no trustworthy orbital factor, but a checked algebraic factor
+can replace its dense K. `VIBEQC_DF_SEED_EXCHANGE=dense|factor|auto` controls this
+choice; `factor` enables guarded factorization and `auto` selects it only in the
+qualified RTX 5090 RHF domain: 768 AOs, 768 auxiliaries and 160 occupied orbitals.
+Factorization requires an occupied-SCF singleton resident RHF plan
+with full AO/auxiliary tiles and existing factor capacity. The experimental
+packed resident constructor below also supports the explicit `factor` override.
+UHF, batch, streamed and other generated-source plans keep dense seeds.
+
+The seed reuses the compact GPU eigensolver and transient Fock/eigenvalue
+scratch to form `L = V sqrt(lambda)`, then builds occupied K with weight one.
+Eigenvalues below `-1e-13` reject the seed. Values at most `1e-13` may be
+discarded only if their combined Frobenius norm is at most `1e-12`; retained
+rank cannot exceed the reserved occupied rank. A full `L L^T` reconstruction
+must match both triangles of the input with maximum error at most `1e-12` and
+RMS error at most `1e-13`. No canonical identity is assigned to this factor.
+Numerical rejection returns to dense K; CUDA failures propagate. The ordinary
+path adds two explicit stream synchronizations and downloads the spectrum,
+solver status and two reconstruction scalars. It allocates no new persistent
+device buffer. `VIBEQC_DF_SEED_VERIFY=1` additionally compares candidate and
+dense K for the identical density under max/RMS gates `1e-10`/`1e-11`, restores
+candidate K, and records K/Fock errors in the progress journal. This intrusive
+validation must be disabled for clean endpoint timing.
+
+`VIBEQC_DF_FINAL_EXCHANGE=dense|occupied|auto` independently controls final
+physical Fock evaluation; `occupied` enables retained-factor qualification,
+while `auto` uses the same qualified 768/768/160 RTX 5090 domain as the seed.
+The singleton resident RHF route requires
+an exact current final-state token, matching device generation/solver status,
+and entry-for-entry equality of the supplied and retained densities. It uses
+the full retained coefficients with RHF weight two. The strict physical Fock
+and final-state gates still run; changed densities or correction generations
+use dense K. No previous physical Fock is reused.
+
+The seed iteration stores
 the exact C that constructs the next D before the convergence update. Each
 spin owns `batch*nbf*max_occupied` values plus generation controls. Inactive
 systems retain both density and factor; eigensolver scratch is never borrowed
 as persistent C. Occupation/policy changes rebuild captured GEMM shapes.
-The first dense iteration counts against the original iteration limit, even
+The first seed iteration counts against the original iteration limit, even
 when that limit is one. Generation checks run before occupied K and at final
 readback; a stale generation rejects the device result and preserves the
 caller's established numerical recovery. Force evaluation receives only the
@@ -77,7 +114,9 @@ existing tiles independently of the SCF reservation.
 GEMM dimensions, intermediate bytes and panel hits. Captured records describe graph
 construction; `occupied_scf_provenance` separately reports executed iteration
 counts, dense seeding and final generation validation. Uninstrumented complete
-endpoints remain the performance selection gate.
+endpoints remain the performance selection gate. The
+[density exchange seed note](../.agents/notes/implemented/performance/2026-09-16-density-exchange-seed.md)
+records the factorization, final-state audit and qualification rationale.
 
 ## Resident raw ownership and response storage
 
@@ -224,3 +263,60 @@ host-only or Nsight timelines and clean complete endpoints.
 The [resident DF dataflow note](../.agents/notes/implemented/performance/2026-09-16-resident-df-dataflow.md)
 records the algebra, rejected variants, numerical gates and retained evidence
 for these paths.
+
+## Experimental native packed values
+
+The explicit `create_cuda_density_fitting_jk_plan_from_source` overload accepts
+`DfValueStorageOptions{DfPairStorage::SymmetricLower, rank_capacity}`. This route
+requires a retained physical integral source and complete AO rows. Physical CUDA
+SCF and composed Fock preparation accept the diagnostic selector
+`VIBEQC_DF_VALUE_STORAGE=auto|dense|packed`; unset/`auto` remains dense. The
+explicit native constructor does not consult that selector, and arbitrary public
+tensor constructors remain dense. Packing is under qualification; component
+results do not establish a complete endpoint win.
+
+The physical selector runs before full host raw construction, including requests
+with a zero value budget. Prepared metadata, device plans, composed Fock variants
+and resource identities distinguish the representations. Changing the selector
+invalidates ordinary cached preparation and is rejected by an admitted global
+resource plan. Composed fixed-density Fock reserves no complete occupied U and
+uses the exact bounded compatibility route.
+
+Packed plans own separate immutable raw A and whitened B arrays in unit-weight
+`[mu*(mu+1)/2+nu,Q]` order for `mu>=nu`. Raw generation writes lower rows directly;
+native metric setup and one all-Q whitening preserve discarded raw directions.
+J uses diagonal density entries once and off-diagonal `D_mn+D_nm`. Occupied K
+projects directly into the existing full U layout when its rank fits the
+reservation, then uses the existing Gram. Larger ranks and arbitrary densities
+use exact bounded expansion. The common planner charges both immutable owners,
+one `max(n*rank_capacity*a,n*n*q)` scratch buffer and two `n*n*q` buffers, plus
+the existing source, metric, library and SCF reservations.
+
+`density_fitting_tile_plan(..., generated_source=True, pair_storage="packed")`
+queries these capacities without allocating a tensor or creating a CUDA context.
+Its `occupied` argument is the complete-U reservation and may be zero for a
+bounded-only packed plan. The private `vibeqc_resource_df_packed_tiles_v1` ABI
+reports both distinct factor owners and unequal scratch capacities through the
+Python descriptor; existing dense v1/v2 queries retain their original ABI.
+The complete Python HF candidate inventory exposes only `cuda-df-packed` for an
+explicit packed request, charging both immutable owners and the actual scratch
+capacities. Its existing limit of 16 orbital AOs and 128 auxiliary AOs still
+applies; the standalone shape query is not subject to this inventory limit.
+
+Force response uses a distinct `CudaDfPackedRawTensorView` with the plan's
+metric/owner identity. Canonical factors may borrow the three actual scratch
+capacities for occupied response. Missing/stale factors or insufficient
+rank-squared storage use the bounded raw loader. Neither route regenerates raw
+integrals or constructs a persistent full raw tensor. `VIBEQC_DF_RAW_REUSE=off`
+instead selects bounded source regeneration for diagnosis. Explicit seed/final
+occupied overrides admit this resident source; the automatic 768/768/rank160
+singleton policy retains its device and rank restrictions during packed
+experiments. Other generated-source exclusions remain. A final U lease is
+published only if its full projection was retained;
+the full-rank restriction and single-consumer invalidation still apply.
+
+Explicit packed selection is retained for the measured warm/constrained domains;
+unset and `auto` remain dense because bounded response and geometry rebuild can
+regress substantially. The 384/1856 unequal case remains numerically unqualified.
+The [retention decision](../.agents/notes/implemented/performance/2026-09-17-packed-df-retention.md)
+records domain evidence, validation and conditions for revisiting selection.

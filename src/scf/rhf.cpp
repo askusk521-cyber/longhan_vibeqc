@@ -298,13 +298,14 @@ void bind_generated_df(DensityFittingScfData& data, const core::System& orbital,
     // complete raw metric/three-center tensors just to discard them before
     // plan creation; retaining only dimensions and one-electron response data
     // keeps the setup peak bounded by the caller's request.
-    if (output_budget_bytes != 0U) {
+    if (output_budget_bytes != 0U || requested_df_pair_storage() == DfPairStorage::SymmetricLower) {
       integrals::DensityFittingIntegralData metadata;
       metadata.nbf = molecule::ao_count(system);
       metadata.naux = molecule::ao_count(auxiliary_system);
       metadata.ncoord = include_derivatives ? system.atoms.size() * 3U : 0U;
       data = assemble_density_fitting_metadata(std::move(data.one_electron), std::move(metadata),
                                                relative_threshold);
+      data.value_storage = requested_df_pair_storage();
       if (include_derivatives) {
         bind_generated_one_electron(data, system, cuda_device_id, output_budget_bytes);
         bind_generated_df(data, system, auxiliary_system, cuda_device_id, output_budget_bytes);
@@ -516,19 +517,32 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
     const solver::PhysicalFockOperation& physical) {
   result.converged = false;
   const auto n = data.one_electron.nbf;
+  const auto enabled = [](const char* name) {
+    const char* value = std::getenv(name);
+    return value && value[0] == '1' && value[1] == '\0';
+  };
+  // Explicit reference selection is for independent diagnostics/causal runs.
+  // A device failure never selects it implicitly.
+  const bool reference_validation = enabled("VIBEQC_DF_REFERENCE_FINAL_VALIDATION");
+  const auto operations = reference_validation ? solver::FinalStateOperations{}
+                                               : cuda_density_fitting_final_state_operations(plan);
   CudaDfFinalStateSnapshot snapshot;
   solver::FinalStateIdentity identity;
   if (device_candidate) {
+    host_trace::Region final_read("final_state_read", n);
     CudaDfFinalStateToken token;
     std::string detail;
     auto status = cuda_density_fitting_final_state_token(plan, system, token, detail);
-    if (status == VIBEQC_STATUS_SUCCESS)
-      status = host_trace::call("final_state_read", [&] {
-        return read_cuda_density_fitting_final_state(plan, token, snapshot, detail);
-      });
+    if (status == VIBEQC_STATUS_SUCCESS && reference_validation)
+      status = read_cuda_density_fitting_final_state(plan, token, snapshot, detail);
+    if (status == VIBEQC_STATUS_SUCCESS && !reference_validation) {
+      snapshot.candidate = {token.identity, token.identity.factor.density_generation - 1, true, {}};
+      snapshot.candidate.spins.resize(density.size());
+    }
     if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
     if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
-    if (snapshot.density != density || token.identity.occupied != occupied ||
+    if ((reference_validation && snapshot.density != density) ||
+        token.identity.occupied != occupied ||
         token.identity.model.metric_relative_threshold !=
             options.density_fitting_relative_threshold)
       throw std::runtime_error(
@@ -548,22 +562,40 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
   const initial_guess::EigenOperation eigen = [&](const auto& f, const auto*, const auto*, auto) {
     return final_df_eigen(f, data.one_electron.overlap, orthogonalizer, n, plan, system);
   };
-  const auto enabled = [](const char* name) {
-    const char* value = std::getenv(name);
-    return value && value[0] == '1' && value[1] == '\0';
-  };
   // Both diagnostic controls perform actual correction. The reference option
   // changes the provider; it must never be satisfied by reusing the candidate.
   const bool force =
       enabled("VIBEQC_DF_FORCE_FINAL_REBUILD") || enabled("VIBEQC_DF_REFERENCE_FINAL_EIGEN");
+  const solver::PhysicalFockOperation device_physical = [&](const auto& current, const auto& d) {
+    return evaluate_cuda_density_fitting_final_fock(plan, current, d, data.one_electron.hcore);
+  };
   auto selected = solver::select_final_state(
       identity, data.one_electron.overlap, data.one_electron.hcore, orthogonalizer,
       data.one_electron.nuclear_repulsion, std::move(density),
-      device_candidate ? &snapshot.candidate : nullptr, physical, eigen,
+      device_candidate ? &snapshot.candidate : nullptr,
+      reference_validation ? physical : device_physical, eigen,
       {options.density_tolerance, options.energy_tolerance, 16, options.export_physical_reference},
-      options.compute_forces, force);
+      options.compute_forces, force, reference_validation ? nullptr : &operations);
   if (selected.status == solver::FinalStateStatus::OutOfMemory) throw std::bad_alloc();
   if (!selected.state) throw std::runtime_error(selected.detail);
+  if (options.export_physical_reference && selected.state->fock[0].empty()) {
+    selected.state->fock =
+        operations.materialize_fock({selected.state->identity, true, selected.state->fock});
+  }
+  if (options.export_physical_reference && selected.state->orbitals[0].vectors.empty()) {
+    // C/epsilon are public reference outputs only on request. The accepted
+    // identity must still match the retained owner before their download.
+    std::string detail;
+    const auto status = read_cuda_density_fitting_final_state(
+        plan, CudaDfFinalStateToken{1, selected.state->identity}, snapshot, detail, false);
+    if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
+    if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
+    selected.state->orbitals = std::move(snapshot.candidate.spins);
+  }
+  runtime::df_progress::number("final_fock_evaluations", selected.fock_evaluations);
+  runtime::df_progress::number("final_eigen_solves", selected.eigen_solves);
+  runtime::df_progress::number("final_density_updates", selected.density_updates);
+  runtime::df_progress::number("final_candidate_rejections", selected.candidate_rejections);
   host_trace::Region accepted(selected.reused ? "final_state_reuse" : "final_state_corrected", n);
   // The intrusive journal retains the actual physical gate at the returned
   // determinant; ordinary endpoint timing adds neither formatting nor I/O.
@@ -598,6 +630,7 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
   const std::size_t n = data.one_electron.nbf;
   CudaDfFinalStateToken response_token;
   Matrix final_fock, weighted;
+  solver::FinalStateDiagnostic final_diagnostic;
   EigenResult orbitals;
   const auto execute_item_rhf_jk =
       [&](const Matrix& item_density, std::vector<double>& item_coulomb,
@@ -620,7 +653,14 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
     const solver::PhysicalFockOperation physical = [&](const auto& current, const auto& densities) {
       std::vector<double> coulomb, exchange;
       std::string detail;
-      const auto status = execute_item_rhf_jk(densities[0], coulomb, exchange, detail);
+      bool retained = false;
+      auto status =
+          try_cuda_density_fitting_final_rhf_jk(cuda_plan, CudaDfFinalStateToken{1, current},
+                                                densities[0], coulomb, exchange, retained, detail);
+      if (status == VIBEQC_STATUS_SUCCESS && !retained) {
+        host_trace::Region dense_final("final_state_dense_jk", n);
+        status = execute_item_rhf_jk(densities[0], coulomb, exchange, detail);
+      }
       if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
       if (status != VIBEQC_STATUS_SUCCESS || coulomb.size() != n * n || exchange.size() != n * n)
         throw std::runtime_error(detail.empty() ? "strict CUDA DF physical J/K evaluation failed"
@@ -637,6 +677,7 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
     final_fock = std::move(state.fock[0]);
     orbitals = std::move(state.orbitals[0]);
     if (options.compute_forces) weighted = std::move(state.weighted_density[0]);
+    final_diagnostic = state.diagnostic;
     result.energy = state.diagnostic.energy;
     result.converged = true;
   } else {
@@ -676,7 +717,17 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
         sizeof(double),
         posthf::checked_add(
             posthf::checked_mul(options.compute_forces ? 6 : 5, posthf::checked_mul(n, n)), n));
-    validate_physical_reference(*reference);
+    if (cuda_plan) {
+      // The selector already enforced export's stronger absolute canonicality
+      // and maximum-density gates on this exact state, before constructing W.
+      // The independent public validator remains for imported/CPU references.
+      if (!occupied || occupied >= n) throw std::invalid_argument("invalid reference occupation");
+      reference->commutator_residual = final_diagnostic.maximum_commutator;
+      reference->canonical_density_drift = final_diagnostic.maximum_density_error;
+      reference->eigen_residual = final_diagnostic.eigenframes[0].maximum_eigen_residual;
+    } else {
+      validate_physical_reference(*reference);
+    }
     result.reference = std::move(reference);
   }
   if (!options.compute_forces) {
@@ -1106,6 +1157,9 @@ DensityFittingTilePlan plan_cuda_density_fitting_tiles(
     throw std::bad_alloc();
   fixed_device_bytes += diis_bytes;
   try {
+    if (generated_source && requested_df_pair_storage() == DfPairStorage::SymmetricLower)
+      return plan_packed_density_fitting_tiles(batch, nbf, naux, occupied, budget,
+                                               fixed_device_bytes);
     return plan_density_fitting_tiles(batch, nbf, naux, occupied, budget, fixed_device_bytes,
                                       generated_source);
   } catch (const DensityFittingBudgetError&) {
@@ -1158,14 +1212,20 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
   std::string detail;
   std::size_t auxiliary_tile = 0;
   std::size_t ao_pair_tile = 0;
-  if (planning_budget != 0) {
+  const bool packed = requested_df_pair_storage() == DfPairStorage::SymmetricLower;
+  // Packing is valid only for physical symmetric sources. Never silently
+  // reinterpret an arbitrary public tensor when its source is unavailable.
+  if (packed && (!orbital_system || !auxiliary_system))
+    throw std::invalid_argument("packed DF values require a physical integral source");
+  if (planning_budget != 0 && !packed) {
     const DensityFittingTilePlan tile_plan = plan_cuda_density_fitting_tiles(
         1, data.raw.nbf, data.raw.naux, std::max<std::size_t>(occupied, 1), planning_budget, 0,
         false, options.diis_history);
     auxiliary_tile = tile_plan.auxiliary_tile;
     ao_pair_tile = tile_plan.ao_pair_tile;
   }
-  if (planning_budget != 0 && orbital_system != nullptr && auxiliary_system != nullptr) {
+  if ((planning_budget != 0 || packed) && orbital_system != nullptr &&
+      auxiliary_system != nullptr) {
     CudaDensityFittingIntegralSource* source = nullptr;
     std::vector<double> source_metrics;
     std::size_t source_nbf = 0;
@@ -1192,7 +1252,8 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_plan(
     const vibeqc_status plan_status = create_cuda_density_fitting_jk_plan_from_source(
         device_id, &source, 1, source_nbf, source_naux, source_metrics,
         options.density_fitting_relative_threshold, auxiliary_tile, ao_pair_tile, &raw_plan,
-        diagnostics, detail, source_tile_plan.stores_full_three_center);
+        diagnostics, detail, source_tile_plan.stores_full_three_center,
+        source_tile_plan.value_storage);
     destroy_cuda_density_fitting_integral_source(source);
     if (plan_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1260,8 +1321,14 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
   std::vector<double> metrics;
   std::vector<double> three_center;
   std::vector<CudaDensityFittingMetricDiagnostic> diagnostics;
-  if (planning_budget != 0 && orbital_systems != nullptr && auxiliary_systems != nullptr &&
-      orbital_systems->size() == data.size() && auxiliary_systems->size() == data.size()) {
+  const bool packed = requested_df_pair_storage() == DfPairStorage::SymmetricLower;
+  if (packed && (!orbital_systems || !auxiliary_systems || orbital_systems->size() != data.size() ||
+                 auxiliary_systems->size() != data.size()))
+    throw std::invalid_argument(
+        "packed DF batch values require matching physical integral sources");
+  if ((planning_budget != 0 || packed) && orbital_systems != nullptr &&
+      auxiliary_systems != nullptr && orbital_systems->size() == data.size() &&
+      auxiliary_systems->size() == data.size()) {
     CudaDensityFittingIntegralSource* source = nullptr;
     std::size_t source_nbf = 0;
     std::size_t source_naux = 0;
@@ -1289,7 +1356,8 @@ CudaDensityFittingPlanPtr make_cuda_density_fitting_batch_plan(
     const vibeqc_status plan_status = create_cuda_density_fitting_jk_plan_from_source(
         device_id, &source, data.size(), source_nbf, source_naux, metrics,
         options.density_fitting_relative_threshold, tile_plan.auxiliary_tile,
-        tile_plan.ao_pair_tile, &raw_plan, diagnostics, detail, tile_plan.stores_full_three_center);
+        tile_plan.ao_pair_tile, &raw_plan, diagnostics, detail, tile_plan.stores_full_three_center,
+        tile_plan.value_storage);
     destroy_cuda_density_fitting_integral_source(source);
     if (plan_status == VIBEQC_STATUS_OUT_OF_MEMORY && runtime::active_device_resource_ledger)
       throw std::bad_alloc();
@@ -1378,6 +1446,9 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
     const std::vector<core::System>& systems, const std::optional<core::System>& auxiliary_template,
     double relative_threshold, std::size_t output_budget_bytes, int device_id,
     std::vector<vibeqc_status>& statuses, bool include_derivatives) {
+  const auto pair_storage = requested_df_pair_storage();
+  const bool source_values =
+      output_budget_bytes != 0 || pair_storage == DfPairStorage::SymmetricLower;
   const std::size_t count = systems.size();
   statuses.assign(count, VIBEQC_STATUS_INTERNAL_ERROR);
   std::vector<std::optional<DensityFittingScfData>> prepared(count);
@@ -1462,22 +1533,22 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
       std::vector<core::System> orbital_chunk;
       std::vector<core::System> auxiliary_chunk;
       orbital_chunk.reserve(chunk_end - first_slot);
-      if (output_budget_bytes == 0U) {
+      if (!source_values) {
         auxiliary_chunk.reserve(chunk_end - first_slot);
       }
       for (std::size_t slot = first_slot; slot < chunk_end; ++slot) {
         orbital_chunk.push_back(systems[group[slot]]);
-        if (output_budget_bytes == 0U) {
+        if (!source_values) {
           auxiliary_chunk.push_back(auxiliaries[group[slot]]);
         }
       }
       std::vector<integrals::DensityFittingIntegralData> raw_batch;
       std::vector<integrals::IntegralData> one_electron_batch;
       std::string detail;
-      // Source-backed positive-budget plans regenerate DF values on demand;
-      // generating a complete raw batch here only to discard it would defeat
-      // the budget. Keep this batch limited to one-electron response data.
-      const vibeqc_status batch_status = output_budget_bytes == 0U
+      // Source plans generate their own dense panels or packed resident rows.
+      // A complete host raw batch would defeat both bounded preparation and
+      // direct packing. Only one-electron response data is prepared here.
+      const vibeqc_status batch_status = !source_values
                                              ? build_cuda_density_fitting_integrals_batch(
                                                    device_id, orbital_chunk, auxiliary_chunk,
                                                    raw_batch, detail, output_budget_bytes, false)
@@ -1492,7 +1563,7 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
               : batch_status;
       if (batch_status == VIBEQC_STATUS_SUCCESS &&
           one_electron_batch_status == VIBEQC_STATUS_SUCCESS &&
-          (output_budget_bytes != 0U || raw_batch.size() == orbital_chunk.size()) &&
+          (source_values || raw_batch.size() == orbital_chunk.size()) &&
           one_electron_batch.size() == orbital_chunk.size()) {
         for (std::size_t slot = first_slot; slot < chunk_end; ++slot) {
           const std::size_t local = slot - first_slot;
@@ -1501,7 +1572,7 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
             integrals::IntegralData one_electron =
                 integrals::transform_integrals(one_electron_batch[local], systems[source]);
             integrals::DensityFittingIntegralData raw;
-            if (output_budget_bytes != 0U) {
+            if (source_values) {
               raw.nbf = molecule::ao_count(systems[source]);
               raw.naux = molecule::ao_count(auxiliaries[source]);
               raw.ncoord = systems[source].atoms.size() * 3U;
@@ -1510,7 +1581,7 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
                   raw_batch[local], systems[source], auxiliaries[source]);
             }
             prepared[source] =
-                output_budget_bytes != 0U
+                source_values
                     ? assemble_density_fitting_metadata(std::move(one_electron), std::move(raw),
                                                         relative_threshold)
                     : assemble_density_fitting_data(std::move(one_electron), std::move(raw),
@@ -1536,7 +1607,7 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
       // each item independently so one bad system never poisons its neighbors.
       for (std::size_t slot = first_slot; slot < chunk_end; ++slot) {
         const std::size_t source = group[slot];
-        if (output_budget_bytes != 0U) {
+        if (source_values) {
           // Retry through the bounded batch API with one item.  The legacy
           // single-system entry point may allocate an unbounded derivative
           // result, so it cannot be used here; a one-item batch preserves the
@@ -1548,11 +1619,10 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
             std::vector<integrals::IntegralData> single_one_electron;
             std::string retry_detail;
             const vibeqc_status retry_raw_status =
-                output_budget_bytes == 0U
-                    ? build_cuda_density_fitting_integrals_batch(
-                          device_id, single_orbital, single_auxiliary, single_raw, retry_detail,
-                          output_budget_bytes, false)
-                    : VIBEQC_STATUS_SUCCESS;
+                !source_values ? build_cuda_density_fitting_integrals_batch(
+                                     device_id, single_orbital, single_auxiliary, single_raw,
+                                     retry_detail, output_budget_bytes, false)
+                               : VIBEQC_STATUS_SUCCESS;
             const vibeqc_status retry_one_electron_status =
                 retry_raw_status == VIBEQC_STATUS_SUCCESS
                     ? build_cuda_one_electron_integrals_batch(
@@ -1563,12 +1633,11 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
                     : retry_raw_status;
             if (retry_raw_status == VIBEQC_STATUS_SUCCESS &&
                 retry_one_electron_status == VIBEQC_STATUS_SUCCESS &&
-                (output_budget_bytes != 0U || single_raw.size() == 1U) &&
-                single_one_electron.size() == 1U) {
+                (source_values || single_raw.size() == 1U) && single_one_electron.size() == 1U) {
               integrals::IntegralData one_electron =
                   integrals::transform_integrals(single_one_electron.front(), systems[source]);
               integrals::DensityFittingIntegralData raw;
-              if (output_budget_bytes != 0U) {
+              if (source_values) {
                 raw.nbf = molecule::ao_count(systems[source]);
                 raw.naux = molecule::ao_count(auxiliaries[source]);
                 raw.ncoord = systems[source].atoms.size() * 3U;
@@ -1577,7 +1646,7 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
                     single_raw.front(), systems[source], auxiliaries[source]);
               }
               prepared[source] =
-                  output_budget_bytes != 0U
+                  source_values
                       ? assemble_density_fitting_metadata(std::move(one_electron), std::move(raw),
                                                           relative_threshold)
                       : assemble_density_fitting_data(std::move(one_electron), std::move(raw),
@@ -1621,11 +1690,10 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
               integrals::transform_density_fitting_integrals(cartesian, systems[source],
                                                              auxiliaries[source]);
           prepared[source] =
-              output_budget_bytes != 0U
-                  ? assemble_density_fitting_metadata(std::move(one_electron), std::move(raw),
-                                                      relative_threshold)
-                  : assemble_density_fitting_data(std::move(one_electron), std::move(raw),
-                                                  relative_threshold, false);
+              source_values ? assemble_density_fitting_metadata(std::move(one_electron),
+                                                                std::move(raw), relative_threshold)
+                            : assemble_density_fitting_data(std::move(one_electron), std::move(raw),
+                                                            relative_threshold, false);
         } catch (const std::bad_alloc&) {
           statuses[source] = VIBEQC_STATUS_OUT_OF_MEMORY;
         } catch (const std::invalid_argument&) {
@@ -1637,7 +1705,9 @@ std::vector<std::optional<DensityFittingScfData>> prepare_cuda_density_fitting_b
     }
   }
   for (std::size_t source = 0; source < count; ++source) {
-    if (!prepared[source] || !include_derivatives) continue;
+    if (!prepared[source]) continue;
+    prepared[source]->value_storage = pair_storage;
+    if (!include_derivatives) continue;
     try {
       bind_generated_one_electron(*prepared[source], systems[source], device_id,
                                   output_budget_bytes);
@@ -1970,6 +2040,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
       std::all_of(
           prepared_cache->begin(), prepared_cache->end(), [&options, device_id](const auto& item) {
             return item.has_value() &&
+                   (device_id < 0 || item->value_storage == requested_df_pair_storage()) &&
                    one_electron_response_policy_matches(*item,
                                                         options.density_fitting_memory_budget_bytes,
                                                         options.compute_forces && device_id >= 0) &&
@@ -1979,6 +2050,7 @@ std::vector<RhfBucketItem> run_rhf_density_fitting_cuda_bucket_impl(
           });
   if (cached_plan != nullptr && *cached_plan != nullptr &&
       ((prepared_cache != nullptr && !cached_data_complete) ||
+       cuda_density_fitting_pair_storage(*cached_plan) != requested_df_pair_storage() ||
        cuda_density_fitting_scf_value_budget(*cached_plan) !=
            df_value_budget(options.density_fitting_memory_budget_bytes, options.compute_forces) ||
        cuda_density_fitting_scf_diis_history(*cached_plan) != options.diis_history)) {
@@ -2436,6 +2508,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
       std::all_of(
           prepared_cache->begin(), prepared_cache->end(), [&options, device_id](const auto& item) {
             return item.has_value() &&
+                   (device_id < 0 || item->value_storage == requested_df_pair_storage()) &&
                    one_electron_response_policy_matches(*item,
                                                         options.density_fitting_memory_budget_bytes,
                                                         options.compute_forces && device_id >= 0) &&
@@ -2445,6 +2518,7 @@ std::vector<RhfBucketItem> run_uhf_density_fitting_cuda_bucket_impl(
           });
   if (cached_plan != nullptr && *cached_plan != nullptr &&
       ((prepared_cache != nullptr && !cached_data_complete) ||
+       cuda_density_fitting_pair_storage(*cached_plan) != requested_df_pair_storage() ||
        cuda_density_fitting_scf_value_budget(*cached_plan) !=
            df_value_budget(options.density_fitting_memory_budget_bytes, options.compute_forces) ||
        cuda_density_fitting_scf_diis_history(*cached_plan) != options.diis_history)) {

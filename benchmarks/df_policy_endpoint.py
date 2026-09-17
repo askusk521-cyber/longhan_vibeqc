@@ -98,8 +98,20 @@ def main():
     parser.add_argument("--aos", type=int, choices=CASES, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument(
+        "--df-budget",
+        type=int,
+        default=0,
+        help="Total native DF value/response budget in bytes (zero selects defaults)",
+    )
     parser.add_argument("--control", default="VIBEQC_DF_EXCHANGE")
     parser.add_argument("--policies", nargs="+", default=["dense", "occupied"])
+    parser.add_argument(
+        "--policy-controls",
+        type=json.loads,
+        default={},
+        help="JSON mapping each policy to additional CUDA controls, applied before its prime",
+    )
     parser.add_argument("--trace", action="store_true")
     parser.add_argument(
         "--components-after",
@@ -139,15 +151,10 @@ def main():
     if (
         not os.environ.get("SLURM_JOB_ID")
         or args.repeats < 1
+        or args.df_budget < 0
         or (args.expected_iterations is not None and args.expected_iterations < 1)
     ):
-        parser.error("requires Slurm and positive repeats")
-    if args.energy_only and (
-        args.trace or args.host_trace or args.journal or args.components_after
-    ):
-        parser.error(
-            "energy-only diagnostics must use clean timing; trace complete endpoints separately"
-        )
+        parser.error("requires Slurm, positive repeats and a nonnegative DF budget")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.output.exists():
         parser.error("refusing to overwrite evidence")
@@ -156,6 +163,32 @@ def main():
     if args.skip_cold and (not args.warm_checkpoint_in or not args.reference):
         parser.error("skip-cold requires a frozen checkpoint and independent reference")
     from vibeqc.resources_hf import _CUDA_SCHEDULE_VARIABLES
+
+    if not isinstance(args.policy_controls, dict) or any(
+        policy not in args.policies
+        or not isinstance(controls, dict)
+        or any(
+            name not in _CUDA_SCHEDULE_VARIABLES
+            or name == args.control
+            or not isinstance(value, str)
+            or not value
+            for name, value in controls.items()
+        )
+        for policy, controls in args.policy_controls.items()
+    ):
+        parser.error(
+            "policy-controls must map selected policies to known CUDA controls"
+        )
+    # Every arm must set the same extra controls. Otherwise an interleaved arm
+    # could silently inherit the preceding arm's settings.
+    control_sets = [set(args.policy_controls.get(p, {})) for p in args.policies]
+    if any(names != control_sets[0] for names in control_sets):
+        parser.error("policy-controls must set the same controls for every policy")
+
+    def select_policy(policy):
+        """Apply the complete declared arm before rebuilding/priming its owner."""
+        os.environ[args.control] = policy
+        os.environ.update(args.policy_controls.get(policy, {}))
 
     cold_controls = {}
     for assignment in args.cold_control:
@@ -189,6 +222,7 @@ def main():
         "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "controls": {k: v for k, v in os.environ.items() if k.startswith("VIBEQC_")},
         "scientific_settings": {
+            "density_fitting_memory_budget_bytes": args.df_budget,
             "basis": str(case.vibeqc_basis),
             "basis_representation": case.basis_representation,
             "auxiliary_basis": "same as orbital basis",
@@ -208,6 +242,7 @@ def main():
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "control": args.control,
         "policies": args.policies,
+        "policy_controls": args.policy_controls,
         "warm_policy": "one frozen post-cold density, prime every policy transition",
         "measured_properties": ["energy"] if args.energy_only else ["energy", "forces"],
         "expected_iterations": args.expected_iterations,
@@ -231,7 +266,7 @@ def main():
         seconds = time.perf_counter() - start
         return result, seconds
 
-    os.environ[args.control] = args.policies[0]
+    select_policy(args.policies[0])
     previous_controls = {name: os.environ.get(name) for name in cold_controls}
     os.environ.update(cold_controls)
     calculator = Calculator(
@@ -241,7 +276,7 @@ def main():
         device="cuda",
         density_fitting="cuda",
         auxiliary_basis=case.vibeqc_basis,
-        density_fitting_memory_budget_bytes=0,
+        density_fitting_memory_budget_bytes=args.df_budget,
         screening_tolerance=1e-12,
         energy_tolerance=1e-12,
         density_tolerance=1e-10,
@@ -324,7 +359,7 @@ def main():
         for repeat, policy, diagnostic in jobs:
             traced = args.trace or diagnostic
             phase = "diagnostic-" if diagnostic else ""
-            os.environ[args.control] = policy
+            select_policy(policy)
             prime, prime_seconds = execute(batch)
             trace = args.output.with_suffix(f".{phase}{repeat}-{policy}.jsonl")
             host_trace = args.output.with_suffix(
@@ -337,7 +372,7 @@ def main():
             journal = args.output.with_suffix(
                 f".{phase}{repeat}-{policy}.journal.jsonl"
             )
-            if args.journal:
+            if args.journal or diagnostic:
                 os.environ["VIBEQC_DF_PROGRESS_TRACE"] = str(journal.resolve())
             if args.cuda_profile:
                 cudart = ctypes.CDLL("libcudart.so.12")
@@ -423,10 +458,16 @@ def main():
                     for region in record["regions"]
                     if region["name"] == "force_response"
                 ]
-                if len(force_regions) != 1 or force_regions[0]["failed"]:
-                    raise RuntimeError("expected one completed force stage")
-                sample["force_stage_seconds"] = force_regions[0]["wall_ms"] / 1000
-            if args.journal:
+                if args.energy_only:
+                    if force_regions:
+                        raise RuntimeError(
+                            "energy-only endpoint executed a force stage"
+                        )
+                else:
+                    if len(force_regions) != 1 or force_regions[0]["failed"]:
+                        raise RuntimeError("expected one completed force stage")
+                    sample["force_stage_seconds"] = force_regions[0]["wall_ms"] / 1000
+            if args.journal or diagnostic:
                 sample["final_state_observations"] = [
                     row
                     for line in journal.read_text().splitlines()

@@ -12,6 +12,7 @@
 #include "runtime/host_component_trace.hpp"
 #include "runtime/resource_cuda.cuh"
 #include "scf/cuda/df_derivatives.cuh"
+#include "scf/cuda/df_packed_values.hpp"
 #include "scf/cuda/df_response_weights.cuh"
 #include "scf/cuda/df_shell_derivatives.cuh"
 #include "scf/cuda_density_fitting.hpp"
@@ -504,8 +505,20 @@ vibeqc_status execute_cuda_df_hf_gradient(
     double relative_threshold, unsigned schedule, std::size_t maximum_bytes,
     std::size_t maximum_auxiliary_tile, std::vector<double>& gradient, std::string& detail,
     DfGradientResources* resources, const CudaDfMetricView* device_metric, void* blas_handle,
-    const CudaDfResponseBuffers* borrowed) {
+    const CudaDfResponseBuffers* borrowed, const CudaDfPackedRawTensorView* packed_raw) {
   detail.clear();
+  // Validate even when the selected execution path retains strict evaluation.
+  double target = 0;
+  const char* screen_control = std::getenv("VIBEQC_DF_FORCE_SCREEN_ABS");
+  if (screen_control && std::string_view(screen_control) != "off") {
+    char* end = nullptr;
+    target = std::strtod(screen_control, &end);
+    if (end == screen_control || *end || !std::isfinite(target) || target < 0) {
+      detail = "VIBEQC_DF_FORCE_SCREEN_ABS requires off or a finite nonnegative force budget";
+      return VIBEQC_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
   if (resources) *resources = {};
   const auto n = molecule::ao_count(orbital), a = molecule::ao_count(auxiliary),
              atoms = orbital.atoms.size();
@@ -515,7 +528,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
       !stream_handle || schedule > 1 || !maximum_bytes || !n || !a || !atoms || n > maximum / n ||
       a > maximum / a || n * n > maximum / a || atoms > maximum / 3 ||
       atoms != auxiliary.atoms.size() || (source && !device_metric) ||
-      (!source && raw_a.size() != n * n * a) ||
+      (!source && !packed_raw && raw_a.size() != n * n * a) ||
       (device_metric && (!blas_handle || n * n > index_limit)) ||
       (device_metric ? (!device_metric->inverse_square_root || !device_metric->eigenvectors ||
                         !device_metric->eigenvalues)
@@ -525,12 +538,44 @@ vibeqc_status execute_cuda_df_hf_gradient(
     detail = "invalid generated DF-HF response dimensions or budget";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
-  if (borrowed && (!device_metric || source || n * n * a > maximum / 3 ||
-                   borrowed->elements_per_buffer < n * n * a || !borrowed->staging_weights ||
-                   !borrowed->raw_auxiliary_major || !borrowed->exchange_response ||
-                   borrowed->staging_weights == borrowed->raw_auxiliary_major ||
-                   borrowed->staging_weights == borrowed->exchange_response ||
-                   borrowed->raw_auxiliary_major == borrowed->exchange_response)) {
+  const auto metric_matches = [&](const CudaDfMetricView& view) {
+    return device_metric && view.inverse_square_root == device_metric->inverse_square_root &&
+           view.eigenvectors == device_metric->eigenvectors &&
+           view.eigenvalues == device_metric->eigenvalues &&
+           view.relative_threshold == device_metric->relative_threshold;
+  };
+  if (packed_raw && (!packed_raw->data || !packed_raw->owner_identity || packed_raw->nbf != n ||
+                     packed_raw->naux != a || packed_raw->pair_count != n * (n + 1) / 2 ||
+                     !metric_matches(packed_raw->metric))) {
+    detail = "packed raw DF view differs from response shape or metric owner";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
+  // A packed resident borrow is admitted only for the occupied algorithm.
+  // Dense/rejected factors keep the bounded loader below; they must not enter
+  // the old all-Q routine with capacities sized for one auxiliary panel.
+  const bool packed_borrow =
+      borrowed && packed_raw && borrowed->occupied_response &&
+      borrowed->resident_packed_raw.data == packed_raw->data &&
+      borrowed->resident_packed_raw.owner_identity == packed_raw->owner_identity &&
+      borrowed->resident_packed_raw.nbf == n && borrowed->resident_packed_raw.naux == a &&
+      borrowed->resident_packed_raw.pair_count == packed_raw->pair_count &&
+      metric_matches(borrowed->resident_packed_raw.metric) &&
+      packed_raw->data != borrowed->staging_weights &&
+      packed_raw->data != borrowed->raw_auxiliary_major &&
+      packed_raw->data != borrowed->exchange_response && !borrowed->resident_raw.data;
+  const auto minimum_scratch = packed_borrow ? n * n : n * n * a;
+  if (borrowed &&
+      (!device_metric ||
+       ((source || packed_raw || borrowed->resident_packed_raw.data) && !packed_borrow) ||
+       n * n * a > maximum / 3 || borrowed->staging_capacity() < minimum_scratch ||
+       borrowed->raw_capacity() < minimum_scratch ||
+       borrowed->exchange_capacity() < minimum_scratch ||
+       borrowed->staging_capacity() > maximum / 3 || borrowed->raw_capacity() > maximum / 3 ||
+       borrowed->exchange_capacity() > maximum / 3 || !borrowed->staging_weights ||
+       !borrowed->raw_auxiliary_major || !borrowed->exchange_response ||
+       borrowed->staging_weights == borrowed->raw_auxiliary_major ||
+       borrowed->staging_weights == borrowed->exchange_response ||
+       borrowed->raw_auxiliary_major == borrowed->exchange_response)) {
     detail = "invalid borrowed resident DF response tensors";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
@@ -557,7 +602,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
       const auto& factor = borrowed->occupied_factors[t];
       if (factor.rank > n || (factor.rank && !factor.coefficients) ||
           !std::isfinite(factor.density_scale) || factor.density_scale < 0 ||
-          factor.rank * factor.rank > borrowed->elements_per_buffer / a - projected) {
+          factor.rank * factor.rank > borrowed->staging_capacity() / a - projected ||
+          factor.rank * factor.rank > borrowed->exchange_capacity() / a) {
         detail = "invalid occupied DF response factor or borrowed capacity";
         return VIBEQC_STATUS_INVALID_ARGUMENT;
       }
@@ -612,6 +658,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
     PinnedResponsePanels raw_panels;
     // The host destination must outlive Arena's exceptional-path stream drain.
     std::array<unsigned long long, 6> observed_shell_work{};
+    std::array<unsigned long long, 3> observed_screen_work{};
+    unsigned long long* screen_counters = nullptr;
     std::vector<unsigned long long> detailed_shell_work_host;
     DfShellDiagnostics detailed_shell_work;
     DfShellDiagnostics* shell_diagnostics = nullptr;
@@ -630,7 +678,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
     const char* upload_diagnostic = std::getenv("VIBEQC_DF_RESPONSE_UPLOAD_PROBE");
     const char* scatter_diagnostic = std::getenv("VIBEQC_DF_RESPONSE_SCATTER_PROBE");
     const char* serial_diagnostic = std::getenv("VIBEQC_DF_SERIAL_RESPONSE_DOT");
-    if (device_metric && schedule == 0 && !source &&
+    if (device_metric && schedule == 0 && (!source || packed_raw) &&
         ((n >= 192 && n <= 384) || (borrowed && n == 768 && a == 768)) &&
         !(upload_diagnostic && *upload_diagnostic) &&
         !(scatter_diagnostic && *scatter_diagnostic) &&
@@ -687,9 +735,11 @@ vibeqc_status execute_cuda_df_hf_gradient(
     const char* shell_schedule_control = std::getenv("VIBEQC_DF_SHELL_SCHEDULE");
     const std::string_view shell_schedule =
         shell_schedule_control ? shell_schedule_control : (promoted_default ? "compact" : "warp");
-    if (shell_schedule != "warp" && shell_schedule != "packed" && shell_schedule != "compact")
-      throw std::invalid_argument("unknown DF shell schedule (use warp, packed or compact)");
-    const unsigned shell_variant = shell_schedule == "warp"     ? 0
+    if (shell_schedule != "auto" && shell_schedule != "warp" && shell_schedule != "packed" &&
+        shell_schedule != "compact")
+      throw std::invalid_argument("unknown DF shell schedule (use auto, warp, packed or compact)");
+    const unsigned shell_variant = shell_schedule == "auto"     ? (promoted_default ? 2 : 0)
+                                   : shell_schedule == "warp"   ? 0
                                    : shell_schedule == "packed" ? 1
                                                                 : 2;
     const char* primitive_bucket_control = std::getenv("VIBEQC_DF_PRIMITIVE_BUCKETS");
@@ -771,6 +821,37 @@ vibeqc_status execute_cuda_df_hf_gradient(
         check(cudaMemsetAsync(shell_counters, 0, sizeof(observed_shell_work), arena.stream));
         arena.stats.host_bytes += sizeof(observed_shell_work);
       }
+      {
+        if (target > 0 && full_shell_domain) {
+          // S auxiliary shells have one AO and intersect exactly one response
+          // panel. Ordered orbital pairs bound full/symmetric/packed work;
+          // summing all primitive allowances therefore bounds every final
+          // force component independently of response weights and cancellation.
+          long double orbital_primitives = 0, auxiliary_primitives = 0;
+          for (const auto& shell : orbital.shells)
+            if (!shell.angular_momentum) orbital_primitives += shell.primitives.size();
+          for (const auto& shell : auxiliary.shells)
+            if (!shell.angular_momentum) auxiliary_primitives += shell.primitives.size();
+          const auto capacity = orbital_primitives * orbital_primitives * auxiliary_primitives;
+          if (capacity > 0 && capacity <= std::numeric_limits<unsigned long long>::max()) {
+            const double budget = std::nextafter(static_cast<double>(target / capacity), 0.0);
+            shell_o->view.force_screen_budget = shell_o->signature_view.force_screen_budget =
+                budget;
+            runtime::cuda_trace::trace_counter("screening_000_primitive_capacity",
+                                               static_cast<unsigned long long>(capacity));
+            runtime::cuda_trace::trace_counter("screening_000_enabled", budget > 0);
+            if (shell_counters && budget > 0) {
+              screen_counters =
+                  static_cast<unsigned long long*>(arena.allocate(sizeof(observed_screen_work)));
+              check(
+                  cudaMemsetAsync(screen_counters, 0, sizeof(observed_screen_work), arena.stream));
+              arena.stats.host_bytes += sizeof(observed_screen_work);
+              shell_o->view.force_screen_counts = shell_o->signature_view.force_screen_counts =
+                  screen_counters;
+            }
+          }
+        }
+      }
       const char* work_control = std::getenv("VIBEQC_DF_SHELL_WORK");
       if (work_control && std::string_view(work_control) == "1") {
         // One fixed packet buffer is reused after each explicitly intrusive
@@ -810,6 +891,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
       // independently of Naux and avoids fragmenting generated shell work.
       const auto consume_tile =
           borrowed ? std::min({a, borrowed->occupied_response ? std::size_t{64} : a,
+                               borrowed->exchange_capacity() / (n * n),
                                maximum_auxiliary_tile ? maximum_auxiliary_tile : a})
                    : tile;
       auto* densities = static_cast<double*>(arena.allocate(terms.size() * n * n * sizeof(double)));
@@ -832,7 +914,10 @@ vibeqc_status execute_cuda_df_hf_gradient(
         // These allocations remain owned and charged by the value plan. Keep
         // their capacity visible without double-counting it as new response
         // scratch or silently widening the caller's private force allowance.
-        arena.stats.borrowed_device_bytes = 3 * n * n * a * sizeof(double);
+        arena.stats.borrowed_device_bytes =
+            (borrowed->staging_capacity() + borrowed->raw_capacity() +
+             borrowed->exchange_capacity()) *
+            sizeof(double);
         runtime::cuda_trace::trace_counter("response_borrowed_jk_bytes",
                                            arena.stats.borrowed_device_bytes);
         runtime::cuda_trace::trace_counter("response_resident_auxiliary_tile", consume_tile);
@@ -909,7 +994,7 @@ vibeqc_status execute_cuda_df_hf_gradient(
       if (borrowed && (algebra != "blas" || serial_dot || gradient_copies != 1))
         throw std::invalid_argument(
             "resident JK scratch requires BLAS response without serial/scatter probes");
-      if (borrowed && !borrowed->resident_raw.data) {
+      if (borrowed && !borrowed->resident_raw.data && !packed_borrow) {
         arena.stats.host_to_device_bytes += raw_a.size_bytes();
         arena.stats.tensor_host_to_device_bytes += raw_a.size_bytes();
         arena.stats.value_slices += a;
@@ -922,11 +1007,21 @@ vibeqc_status execute_cuda_df_hf_gradient(
         runtime::cuda_trace::trace_counter("raw_value_owner_identity",
                                            borrowed->resident_raw.owner_identity);
       }
+      if (packed_raw) {
+        runtime::cuda_trace::trace_counter("raw_packed_value_reused_bytes",
+                                           packed_raw->pair_count * a * sizeof(double));
+        runtime::cuda_trace::trace_counter("raw_value_owner_identity", packed_raw->owner_identity);
+      }
       check(contract_cuda_df_response_weights(
           n, a, terms, densities, *device_metric, consume_tile, workspace, arena.stream,
           reinterpret_cast<cublasHandle_t>(blas_handle), serial_dot, algebra == "blas",
           [&](std::size_t p, double* values) {
-            if (source) {
+            if (packed_raw) {
+              cuda_df::launch_unpack_df_values(arena.stream, n, a, 0, n, p, 1, true,
+                                               packed_raw->data, values);
+              check(cudaGetLastError());
+              runtime::cuda_trace::trace_counter("raw_packed_unpacked_elements", n * n);
+            } else if (source) {
               const auto status = generate_cuda_density_fitting_raw_tile(
                   source, source_index, 0, n * n, p, 1, -1, stream_handle, values, detail);
               if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
@@ -1145,6 +1240,11 @@ vibeqc_status execute_cuda_df_hf_gradient(
                             cudaMemcpyDeviceToHost, arena.stream));
       arena.stats.device_to_host_bytes += sizeof(observed_shell_work);
     }
+    if (screen_counters) {
+      check(cudaMemcpyAsync(observed_screen_work.data(), screen_counters,
+                            sizeof(observed_screen_work), cudaMemcpyDeviceToHost, arena.stream));
+      arena.stats.device_to_host_bytes += sizeof(observed_screen_work);
+    }
     check(cudaMemcpyAsync(result.data(), output, result.size() * sizeof(double),
                           cudaMemcpyDeviceToHost, arena.stream));
     arena.stats.device_to_host_bytes += result.size() * sizeof(double);
@@ -1160,6 +1260,16 @@ vibeqc_status execute_cuda_df_hf_gradient(
                                     "shell_public_weights_consumed"};
       for (unsigned i = 0; i < observed_shell_work.size(); ++i)
         runtime::cuda_trace::trace_counter(names[i], observed_shell_work[i]);
+    }
+    if (screen_counters) {
+      runtime::cuda_trace::trace_counter("screening_000_primitives_considered",
+                                         observed_screen_work[0]);
+      runtime::cuda_trace::trace_counter("screening_000_primitives_skipped",
+                                         observed_screen_work[1]);
+      runtime::cuda_trace::trace_counter("screening_000_primitives_executed",
+                                         observed_screen_work[0] - observed_screen_work[1]);
+      runtime::cuda_trace::trace_counter("screening_000_shell_tasks_skipped",
+                                         observed_screen_work[2]);
     }
     runtime::cuda_trace::trace_counter("host_to_device_bytes", arena.stats.host_to_device_bytes);
     runtime::cuda_trace::trace_counter("tensor_host_to_device_bytes",

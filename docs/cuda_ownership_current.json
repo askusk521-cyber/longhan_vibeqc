@@ -1,5 +1,5 @@
 {
-  "all_handwritten_scientific_lines": 12048,
+  "all_handwritten_scientific_lines": 12472,
   "counting_scope": "nonblank noncomment physical lines in source CUDA translation units/headers; includes host launch code; explicit source regions own semantics",
   "delta": {
     "added_files": [
@@ -25,6 +25,8 @@
       "src/scf/cuda/df_jk_kernels.hpp",
       "src/scf/cuda/df_metric_kernels.cu",
       "src/scf/cuda/df_metric_kernels.hpp",
+      "src/scf/cuda/df_packed_values.cu",
+      "src/scf/cuda/df_packed_values.hpp",
       "src/scf/cuda/df_plan_internal.hpp",
       "src/scf/cuda/df_response_weights.cu",
       "src/scf/cuda/df_response_weights.cuh",
@@ -34,6 +36,7 @@
       "src/scf/cuda/df_shell_derivatives.cu",
       "src/scf/cuda/df_shell_derivatives.cuh",
       "src/scf/cuda/df_shell_diagnostics.cuh",
+      "src/scf/cuda/df_shell_kernel.cuh",
       "src/scf/cuda/df_source_internal.hpp",
       "src/scf/cuda/df_source_kernels.cu",
       "src/scf/cuda/df_source_kernels.hpp",
@@ -121,6 +124,8 @@
       "src/scf/cuda/eigensolver_kernels.cu",
       "src/scf/cuda/eigensolver_kernels.hpp",
       "src/scf/cuda/eri_tensor_index.cuh",
+      "src/scf/cuda/final_validation_kernels.cu",
+      "src/scf/cuda/final_validation_kernels.hpp",
       "src/scf/cuda/gaussian_geometry.cuh",
       "src/scf/cuda/hermite_recurrence.cuh",
       "src/scf/cuda/matrix_index.cuh",
@@ -160,9 +165,9 @@
     "maintained_code_lines": {
       "fallback": 0,
       "oracle": 10,
-      "performance_exception": 66,
-      "runtime": -5797,
-      "scientific": 1780
+      "performance_exception": 163,
+      "runtime": -5506,
+      "scientific": 2107
     },
     "reclassified_files": [
       "src/dft/cuda_grid.cu",
@@ -373,20 +378,20 @@
       "subsystem": "xc"
     },
     {
-      "bytes": 12750,
+      "bytes": 12271,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 287
+        "scientific": 272
       },
       "path": "src/integrals/ecp_cuda.cu",
-      "physical_lines": 293,
-      "reason": "Generated AO jets, residual radial potentials, harmonic projections and local/nonlocal pair contractions. Native AO primitive accumulation, HF density consumption, grid construction/convergence, launches and physical-center scatter remain; count the mixed adapter conservatively as scientific.",
+      "physical_lines": 278,
+      "reason": "Generated AO jets, node displacement and primitive/component accumulation, residual radial potentials, harmonic projections, local/nonlocal pair contractions and full AO fixed-weight force consumption. Native normalization metadata, grid construction/convergence, launches and physical-center scatter remain; count the mixed adapter conservatively as scientific.",
       "regions": [],
       "role": "scientific",
-      "sha256": "e64f6352ae720dab31d2ad47e2f792929a14ec4d1e5d04c3e0080cacc54f15c5",
+      "sha256": "8ebfd8cabd9cd5b117f8f049e90975506e644cf509b3681fdb866b649711f6b5",
       "subsystem": "ecp"
     },
     {
@@ -776,20 +781,20 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 68771,
+      "bytes": 75418,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 1116
+        "scientific": 1217
       },
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "physical_lines": 1198,
+      "physical_lines": 1308,
       "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink. Primitive-signature metadata, exact measured-profile selection and bounded packet dispatch remain conservatively counted in this method-glue owner; they do not introduce derivative equations.",
       "regions": [],
       "role": "scientific",
-      "sha256": "05de3474686acc3a49706ad2bc3d8fd6175306df251255aba3787fc460e7beb2",
+      "sha256": "ed3baa5352ccc0f3a7e5fbba7a7ef005ca78963a659a1c84b31257170d1a4d79",
       "subsystem": "df_derivatives"
     },
     {
@@ -871,39 +876,73 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 4664,
+      "bytes": 5088,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 97,
+        "runtime": 0,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_packed_values.cu",
+      "physical_lines": 112,
+      "reason": "Explicit experimental exact packed-value layout and FP64 occupied projection; preserves existing DF tensor equations and has no automatic promotion. Evidence: benchmarks/results/issue409-packed-values/README.md. Retire if no complete endpoint/capacity domain qualifies, or when compiler-owned triangular gathering passes the same numerical, resource and endpoint gates.",
+      "regions": [],
+      "role": "performance_exception",
+      "sha256": "6576cfcaa78b4afa001b05bfa7b8fd94b3e90eedc210c739827ee7169f262e4e",
+      "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 1663,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 64,
+        "runtime": 16,
         "scientific": 0
       },
-      "path": "src/scf/cuda/df_plan_internal.hpp",
-      "physical_lines": 104,
-      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "path": "src/scf/cuda/df_packed_values.hpp",
+      "physical_lines": 36,
+      "reason": "Checked owner-facing launch boundary for packed value density, expansion and projection.",
       "regions": [],
       "role": "runtime",
-      "sha256": "17366f21d6f7ff759de6ac96563a4c2b66b0958a98e1454405e6155744cc0ff3",
+      "sha256": "8306c257b106450ded1b3788d7b1fb68763a883fa63ee3635cb8fdb39cff8faa",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 46404,
+      "bytes": 5740,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 73,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_plan_internal.hpp",
+      "physical_lines": 123,
+      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "ba412750673fb7f03e7cde7acea8bab79a24c6b46fdd5127a7425fd1e5d26f61",
+      "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 51192,
       "code_lines": {
         "fallback": 0,
         "oracle": 10,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 669
+        "scientific": 725
       },
       "path": "src/scf/cuda/df_response_weights.cu",
-      "physical_lines": 786,
+      "physical_lines": 854,
       "reason": "Native HF density response and spectral Frechet method adapters. FP64 cuBLAS computes charge/density products and auxiliary contractions. Eligible resident plans borrow existing full J/K scratch, evaluate each exchange projection once, and reuse it across response consumers; bounded panels remain for other plans and explicit comparison. Provider, layout and accumulation glue remain conservatively scientific. Integral values and coordinate derivatives retain their generated owners. Qualified occupied response emits packed pairs directly from bounded lower rectangular BLAS blocks, including explicit diagonal overshoot accounting; no dense weight panel is generated and then compressed.",
       "regions": [
         {
           "code_lines": 10,
-          "first_line": 122,
-          "last_line": 137,
+          "first_line": 124,
+          "last_line": 139,
           "reason": "Opt-in VIBEQC_DF_SERIAL_RESPONSE_DOT=1 retains the independently ordered serial AO-pair reduction for same-library numerical/regression and timing controls. It is not an automatic provider-error fallback or a substitute for external scientific references. Removal is governed by the df_response_weights ledger entry.",
           "role": "oracle",
           "start": "__global__ void exchange_metric_kernel(",
@@ -911,7 +950,7 @@
         }
       ],
       "role": "scientific",
-      "sha256": "c05b2a018bb68491a395117fb855c4997dad31807b729ae387c5246ceb8b57be",
+      "sha256": "8a7935fae51e83c83eb0bd9d6c9d892295e33b8387a02cf7ef4668ab580ee0ad",
       "subsystem": "df_response_weights"
     },
     {
@@ -949,22 +988,31 @@
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 19703,
+      "bytes": 21879,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 246,
-        "scientific": 74
+        "runtime": 256,
+        "scientific": 107
       },
       "path": "src/scf/cuda/df_scf_kernels.cu",
-      "physical_lines": 344,
+      "physical_lines": 392,
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": [
         {
+          "code_lines": 33,
+          "first_line": 17,
+          "last_line": 52,
+          "reason": "Algebraic PSD density factor scaling and complete reconstruction error reduction, qualified independently against four-index RI exchange.",
+          "role": "scientific",
+          "start": "__global__ void density_exchange_factor_kernel",
+          "stop": "void launch_density_exchange_factor"
+        },
+        {
           "code_lines": 74,
-          "first_line": 93,
-          "last_line": 171,
+          "first_line": 141,
+          "last_line": 219,
           "reason": "Existing RHF/UHF Fock, density and energy equations, preserved independently of host replay control.",
           "role": "scientific",
           "start": "__global__ void assemble_rhf_fock_kernel",
@@ -972,120 +1020,137 @@
         }
       ],
       "role": "runtime",
-      "sha256": "d6aa725a977709d743c72f5ab034d3a5c9fe2b84e8dd3dd8619f5d041ec0bb2c",
+      "sha256": "eb40b2d25d93d4913e541d2fef54265a42fbf691c108c9258260f3b67db8f37d",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 6324,
+      "bytes": 7014,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 62,
+        "runtime": 66,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_scf_kernels.hpp",
-      "physical_lines": 95,
+      "physical_lines": 107,
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": [],
       "role": "runtime",
-      "sha256": "f0919afebde95f1de7e43fda9451f8d193fb28b7f57ef14bcec97137f417ad3e",
+      "sha256": "d96fafbbf29c3647b4118e6f5743653c403d3e1f02492a01c2b0e1f4be68ec9c",
       "subsystem": "scf_tensor"
     },
     {
-      "bytes": 33300,
+      "bytes": 22367,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 571,
+        "runtime": 383,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cu",
-      "physical_lines": 621,
+      "physical_lines": 413,
       "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator. Unordered shell-pair traversal folds dense adjoints or consumes folded public AO pairs; the full ordered diagnostic remains available. Individual and bounded signature-packet entrypoints share one contraction helper and unchanged generated equations; block-prefix lookup and homogeneous primitive bounds change scheduling only.",
       "regions": [],
       "role": "runtime",
-      "sha256": "16499c2abcb55f00a84193e3435627464a8851c8ada3c34458111e285ac003f8",
+      "sha256": "d07d0f8d73bad1f3d08ffef65b25fe06a8cfe5fb10d10a5357e79b2620a9b3c2",
       "subsystem": "df_derivatives"
     },
     {
-      "bytes": 4412,
+      "bytes": 4801,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 36,
+        "runtime": 38,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_derivatives.cuh",
-      "physical_lines": 75,
+      "physical_lines": 81,
       "reason": "Borrowed compact shell-class lists, panel and optional execution-counter launch contract.",
       "regions": [],
       "role": "runtime",
-      "sha256": "5cafb58483c7ab57953578f326cba3b1d1c0f2625536f92c803b14c07e50bda0",
+      "sha256": "659bb6b4d8e6f7d45eff996c763c30d8683dd1dd3e80d8561de66f8492ea4381",
       "subsystem": "runtime"
     },
     {
-      "bytes": 3507,
+      "bytes": 3685,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 79,
+        "runtime": 85,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_shell_diagnostics.cuh",
-      "physical_lines": 92,
+      "physical_lines": 98,
       "reason": "Bounded optional diagnostic counter storage, observer and operation labels; scientific operation counts are defined by the generated lowering.",
       "regions": [],
       "role": "runtime",
-      "sha256": "a259f55a9a95bb9c334d2495895151b6bdbbebfa0e6dddb47cd1351eca1cb458",
+      "sha256": "308e6208eee7cfe09a3698c2c1c335e25f19ee8a8ff6f1a64aa058a689e22886",
       "subsystem": "runtime"
     },
     {
-      "bytes": 2451,
+      "bytes": 18378,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 39,
+        "runtime": 312,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_shell_kernel.cuh",
+      "physical_lines": 348,
+      "reason": "Shared production shell-packet execution templates, instantiated without scientific duplication by the derivative batch tuner. Normalized AO projection, compact task indexing, primitive traversal and reductions call compiler-owned polynomial/Rys mathematics.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "fb990f89412563c784674d0fdb03e3f23dfb52bc38cc664bd91587e5ce432548",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "bytes": 2546,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 40,
         "scientific": 0
       },
       "path": "src/scf/cuda/df_source_internal.hpp",
-      "physical_lines": 63,
+      "physical_lines": 64,
       "reason": "DF source ownership or host-callable generation boundary; scalar policies and bounded public-layout contractions are separately classified.",
       "regions": [],
       "role": "runtime",
-      "sha256": "0850c9e0d4d23fcf2e1dbca3cfaaef2b54b77b6f71024d9710399728c8d02133",
+      "sha256": "5c45dcdf7304b664573897f1cd6ee50cea91da006d786cc6b49e53858a81748b",
       "subsystem": "df_values"
     },
     {
-      "bytes": 17094,
+      "bytes": 20162,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 105,
-        "scientific": 154
+        "runtime": 151,
+        "scientific": 168
       },
       "path": "src/scf/cuda/df_source_kernels.cu",
-      "physical_lines": 305,
+      "physical_lines": 369,
       "reason": "Existing generated-policy traversal and bounded raw/public-layout DF value/response contractions, moved from cuda_rhf.cu without copying formulas.",
       "regions": [
         {
-          "code_lines": 46,
+          "code_lines": 47,
           "first_line": 1,
-          "last_line": 65,
+          "last_line": 66,
           "reason": "Includes, common basis ABI adapter and generated-policy instantiation; the generated scalar families retain scientific ownership upstream.",
           "role": "runtime",
           "start": "#include <cuda_runtime.h>",
           "stop": "__global__ void build_cuda_df_integrals_kernel"
         },
         {
-          "code_lines": 59,
-          "first_line": 244,
-          "last_line": 305,
+          "code_lines": 104,
+          "first_line": 263,
+          "last_line": 369,
           "reason": "Host-callable wrappers preserve exact specialization selection, launch geometry, stream and argument forwarding.",
           "role": "runtime",
           "start": "void launch_build_cuda_df_integrals_kernel",
@@ -1093,11 +1158,11 @@
         }
       ],
       "role": "scientific",
-      "sha256": "27749639fc13fa754867a23bde0f782a83fe687586d3ceb03d6f0bc1bbdceaa2",
+      "sha256": "51f8240a597027e1db448aa485a8efbeed95237f380c0e522d582070f3b97731",
       "subsystem": "df_values"
     },
     {
-      "bytes": 2849,
+      "bytes": 2910,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
@@ -1110,7 +1175,7 @@
       "reason": "DF source ownership or host-callable generation boundary; scalar policies and bounded public-layout contractions are separately classified.",
       "regions": [],
       "role": "runtime",
-      "sha256": "5cbd55cf6b582226c32b1fa2b568c36283e4e0cb1c066fd23e6908f960b6a023",
+      "sha256": "6b184cff6a9dc64e00a4b4412d622f7780537cd9ecea7211713f097195270fe7",
       "subsystem": "df_values"
     },
     {
@@ -2612,6 +2677,50 @@
       "subsystem": "runtime"
     },
     {
+      "bytes": 8038,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 27,
+        "scientific": 138
+      },
+      "path": "src/scf/cuda/final_validation_kernels.cu",
+      "physical_lines": 168,
+      "reason": "Launch boundary for shared final-state validation products.",
+      "regions": [
+        {
+          "code_lines": 138,
+          "first_line": 8,
+          "last_line": 146,
+          "reason": "FP64 final-state norms, finite/generation checks, trace/energy reductions and occupied-column weighting; common acceptance policy remains in the shared solver.",
+          "role": "scientific",
+          "start": "__device__ void add(",
+          "stop": "void launch_validation_eigen("
+        }
+      ],
+      "role": "runtime",
+      "sha256": "9da4c130404223fcdd4dfb1b0fb517dddc7c6b921ab6428e451a4a4799d3ccee",
+      "subsystem": "scf_tensor"
+    },
+    {
+      "bytes": 3071,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 46,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/final_validation_kernels.hpp",
+      "physical_lines": 59,
+      "reason": "Fixed-size device reduction payloads and launch declarations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "ebdf9298e4630398f81bb374dd6ce35151877e125814ea4740b3993339ba414f",
+      "subsystem": "scf_tensor"
+    },
+    {
       "bytes": 2327,
       "code_lines": {
         "fallback": 0,
@@ -3519,10 +3628,10 @@
     {
       "files": [
         {
-          "bytes": 56942,
-          "code_lines": 1761,
+          "bytes": 57310,
+          "code_lines": 1763,
           "path": "generated/generated_df_shell_derivatives.cuh",
-          "sha256": "e29856d48b92371c98e70aaf094888442db3f9f911d2dd18c2cd327bdf04df18"
+          "sha256": "36780dfb9fae3f1625917cdb03f9316c74cd8dea4e95ef0869a97407e21b7cc9"
         }
       ],
       "measurement": "explicit build",
@@ -3531,6 +3640,45 @@
         "generated/generated_df_shell_derivatives.cuh"
       ],
       "owner": "python/vibeqc_compiler/integral/df_shell_derivatives.py"
+    },
+    {
+      "files": [
+        {
+          "bytes": 42928,
+          "code_lines": 155,
+          "path": "generated/generated_df_rys.cuh",
+          "sha256": "103d3d65945471d2eeecaf601bf7101f088c68819bf4b5b51e170815ab9f70d3"
+        }
+      ],
+      "measurement": "explicit build",
+      "name": "df_rys_roots",
+      "outputs": [
+        "generated/generated_df_rys.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_rys.py"
+    },
+    {
+      "files": [
+        {
+          "bytes": 76148,
+          "code_lines": 2440,
+          "path": "generated/generated_df_rys_shell.cuh",
+          "sha256": "4b4b7f1ad71b34ac58272b8ebdd84baae8d583fd4c9469839774834c535ceef5"
+        },
+        {
+          "bytes": 449,
+          "code_lines": 8,
+          "path": "generated/generated_df_rys_policy.hpp",
+          "sha256": "d1a83446e9943746f72348ec70821fb50c008d88687e9a8ec80e5cfa9b75c162"
+        }
+      ],
+      "measurement": "explicit build",
+      "name": "df_rys_shell",
+      "outputs": [
+        "generated/generated_df_rys_shell.cuh",
+        "generated/generated_df_rys_policy.hpp"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_rys_shell.py"
     },
     {
       "files": [
@@ -3549,68 +3697,7 @@
       "owner": "python/vibeqc_compiler/integral/weighted_eri_cuda.py"
     },
     {
-      "files": [
-        {
-          "bytes": 5411313,
-          "code_lines": 87485,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_0.cu",
-          "sha256": "a5c16bb800d7932cdac9172f47e0fa5b6d5db4923dfa7aa048e7d1a7cf0636bf"
-        },
-        {
-          "bytes": 2538460,
-          "code_lines": 41159,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_1.cu",
-          "sha256": "cbe442cd1a68e9424f7008850e0056bcda3f61a78fc01e5a6381070594acd1fc"
-        },
-        {
-          "bytes": 1771129,
-          "code_lines": 28991,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_2.cu",
-          "sha256": "c6db029c35f589fd6f8c7376d047dadf1a969223f41f01b62d53ed1c7994f26a"
-        },
-        {
-          "bytes": 1350250,
-          "code_lines": 21734,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_3.cu",
-          "sha256": "f7f0fcf2c61bea04438c45de57c105c21ca9bb54680a8d1861fca3dbe04d6c46"
-        },
-        {
-          "bytes": 1093094,
-          "code_lines": 17566,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_4.cu",
-          "sha256": "c514b912fae0fab0b7c5c8c1dc5acc8dfb37a89e65e912fc1b445cd066927748"
-        },
-        {
-          "bytes": 1034512,
-          "code_lines": 16847,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_5.cu",
-          "sha256": "7be5c404b378a366e90a2a5fb9da3d557b4d61198bcd5ebc005b9b4159386fbf"
-        },
-        {
-          "bytes": 871861,
-          "code_lines": 14268,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_6.cu",
-          "sha256": "6fe5a223f9b7e2d5f27768ec5d661e93ca5b4b8bacf1f1a61955ab72689deae2"
-        },
-        {
-          "bytes": 979891,
-          "code_lines": 16017,
-          "path": "generated/production_shell_kernels/sm_120/vibeqc_generated_shell_sm120_shard_7.cu",
-          "sha256": "69883972e00d71fc9c9590aace3cdb4ba00654943f90cdd4d23c04c2f561ede9"
-        },
-        {
-          "bytes": 61259,
-          "code_lines": 828,
-          "path": "generated/production_shell_kernels/vibeqc_generated_shell_registry.cu",
-          "sha256": "9d8ba1e55539f177f318569a513aad001b4bfe53be59cf1f6a5c943287581955"
-        },
-        {
-          "bytes": 1779,
-          "code_lines": 48,
-          "path": "generated/production_shell_kernels/vibeqc_generated_shell_registry.hpp",
-          "sha256": "c92c38b48c8d4368f98620f1455c44427a340b834c3d7315fb0f628ecc2a33a9"
-        }
-      ],
+      "files": [],
       "measurement": "explicit build",
       "name": "aot_integrals",
       "outputs": [
@@ -3672,10 +3759,10 @@
     {
       "files": [
         {
-          "bytes": 1602,
-          "code_lines": 27,
+          "bytes": 1701,
+          "code_lines": 28,
           "path": "generated/generated_df_policy.cuh",
-          "sha256": "0a6389d7c326c5a162e4768d2535433445ccb32a345ad95957191fe6a5289b20"
+          "sha256": "3213fbe8225e8c3bf653ff2cdfd8da97b011ef6c598ad7d184c1f1e051ceca32"
         },
         {
           "bytes": 1611,
@@ -3702,10 +3789,10 @@
     {
       "files": [
         {
-          "bytes": 13625,
-          "code_lines": 489,
+          "bytes": 15768,
+          "code_lines": 542,
           "path": "generated/generated_ecp_ao.cuh",
-          "sha256": "8b47cec89c48834e009d669a033d90514b7b9291fe6921d0a290971e1d96f825"
+          "sha256": "3c80c44c94642f4bd99c1f6c5013c9ee11a34c8cff07dec86b363a20ccc815a6"
         }
       ],
       "measurement": "explicit build",
@@ -3714,15 +3801,63 @@
         "generated/generated_ecp_ao.cuh"
       ],
       "owner": "python/vibeqc_compiler/integral/ecp_projector.py"
+    },
+    {
+      "files": [
+        {
+          "bytes": 1229,
+          "code_lines": 24,
+          "path": "generated/generated_df_production.hpp",
+          "sha256": "f0eeabe66c387efbaeca9090565e47fbcd4b51a6baf3ac39dd6de59f205e6022"
+        }
+      ],
+      "measurement": "explicit build",
+      "name": "df_derivative_production_policy",
+      "outputs": [
+        "generated/generated_df_production.hpp"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_tuning/manifest.py"
+    },
+    {
+      "files": [
+        {
+          "bytes": 2297,
+          "code_lines": 56,
+          "path": "generated/generated_df_screening.cuh",
+          "sha256": "1dca9586bb2d53479e2ba171fa3478b8239e8aab4402028419c4b692f56a5aab"
+        }
+      ],
+      "measurement": "explicit build",
+      "name": "df_sss_force_screening",
+      "outputs": [
+        "generated/generated_df_screening.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_screening.py"
+    },
+    {
+      "files": [
+        {
+          "bytes": 66074,
+          "code_lines": 2076,
+          "path": "generated/generated_df_value_candidates.cuh",
+          "sha256": "0fd28623ed04ddc356bef47316351ef3dbe619562b4c4da7915224713dbc4c46"
+        }
+      ],
+      "measurement": "explicit build",
+      "name": "df_value_candidates",
+      "outputs": [
+        "generated/generated_df_value_candidates.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_value_candidates.py"
     }
   ],
-  "generated_bytes": 27154196,
+  "generated_bytes": 12232383,
   "maintained_code_lines": {
     "fallback": 0,
     "oracle": 10,
-    "performance_exception": 156,
-    "runtime": 9776,
-    "scientific": 11882
+    "performance_exception": 253,
+    "runtime": 10067,
+    "scientific": 12209
   },
   "migration_ledger": {
     "ao_grid": {
@@ -3770,7 +3905,8 @@
         "benchmarks/results/issue377-379-df/README.md",
         "tests/native/test_df_shell_pairs.cpp",
         "tests/python/test_df_shell_derivatives_cuda.py",
-        "benchmarks/results/issue382-packed-df/README.md"
+        "benchmarks/results/issue382-packed-df/README.md",
+        "docs/df_tuning.md"
       ],
       "generated_capability": "Existing generated two-/three-center values and coordinate-response consumers are reused unchanged. No new generated capability is introduced; a generic cuBLAS call does not constitute a generated method-equation migration.",
       "missing_capability": "An equivalent bounded compiler-owned HF density/spectral response method consumer is not integrated. Final #206 cold/warm/changed-geometry and resident/constrained-memory endpoint acceptance remains open.",
@@ -3784,9 +3920,10 @@
       "evidence": [
         "benchmarks/results/generated-df-values-142/promotion.json",
         "benchmarks/results/generated-df-values-142/README.md",
-        "benchmarks/results/cuda-ownership/df/publication.json"
+        "benchmarks/results/cuda-ownership/df/publication.json",
+        "docs/df_tuning.md"
       ],
-      "generated_capability": "All two-/three-center values through f and public spherical transforms instantiate the same rank-generic normalized traversal as derivatives.",
+      "generated_capability": "All two-/three-center values through f and public spherical transforms instantiate the same rank-generic normalized traversal as derivatives. Diagnostic specialized polynomial/Rys values through total angular degree two and raw 1/4/32-lane schedules share the same compiler scalar IR and Direct/DF batch qualification helpers; no value candidate is promoted.",
       "missing_capability": "None for promoted DF values; shared ERI/Dual recurrences remain for Direct and separately gated one-electron derivatives.",
       "owner": "df_values",
       "retirement_condition": "Completed: legacy Hermite value selection/dispatch and parallel DF derivative recurrence/contraction are removed; retain metric factors, planning and cuBLAS/cuSOLVER runtime.",
@@ -3814,11 +3951,11 @@
         "tests/python/test_ecp_ir.py",
         "tests/native/test_ecp_projector.cpp"
       ],
-      "generated_capability": "Gaussian AO and center-derivative DAGs; radial integrand powers 0..4 including volume measure; bounded s/p/d harmonic projections and local/nonlocal bilinear jet reductions; ECP-center translation recovery. One C++ header supplies host tests and production CUDA.",
+      "generated_capability": "Gaussian AO and center-derivative DAGs, ECP node displacement and normalized primitive/component accumulation; radial integrand powers 0..4 including volume measure; bounded s/p/d harmonic projections and local/nonlocal bilinear jet reductions; ECP-center translation recovery; hcore addition and full AO fixed-weight energy-derivative-to-force consumption. One C++ header supplies host tests and production CUDA.",
       "missing_capability": "Complete DFT ECP awaits issues 162/163; spin-orbit, orbital f and higher projector families unavailable.",
       "owner": "python/vibeqc_compiler/integral/ecp.py, ecp_projector.py and src/integrals/ecp_cuda.cu",
-      "retirement_condition": "Radial/projector scientific loops retired from CUDA after independent addition-theorem, Libcint, all-center derivative, complete HF and resource gates. Remaining native primitive accumulation, density consumption and host grid/harmonic construction require equivalent generated replacements with those gates. Keep the independent ecp.cpp CPU oracle/fallback separate from generated production algebra.",
-      "status": "Bounded projector/radial lowering migration; unchanged capability domain; no DFT, broad heavy-element or performance-promotion claim."
+      "retirement_condition": "Radial/projector, AO primitive/component and fixed-weight consumer loops require independent polynomial/addition-theorem, Libcint, all-center derivative, complete HF and resource gates. Remaining host normalization metadata, grid/harmonic construction and grid-convergence policy require equivalent compiler-owned replacements with those gates before complete adapter retirement. Keep the independent ecp.cpp CPU oracle/fallback separate from generated production algebra.",
+      "status": "Bounded projector/radial and AO/fixed-weight consumer lowering; unchanged capability domain; no DFT, broad heavy-element or performance-promotion claim."
     },
     "low_rank": {
       "current_default": "experimental native matrix-prefix projection and cuBLAS J/K; CPU source and pivot policy",
@@ -3915,22 +4052,22 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 682,
-      "scientific": 1116
+      "runtime": 806,
+      "scientific": 1217
     },
     "df_response_weights": {
       "fallback": 0,
       "oracle": 10,
       "performance_exception": 0,
       "runtime": 0,
-      "scientific": 695
+      "scientific": 751
     },
     "df_values": {
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 179,
-      "scientific": 154
+      "runtime": 226,
+      "scientific": 168
     },
     "direct_integrals": {
       "fallback": 0,
@@ -3944,7 +4081,7 @@
       "oracle": 0,
       "performance_exception": 0,
       "runtime": 0,
-      "scientific": 287
+      "scientific": 272
     },
     "low_rank": {
       "fallback": 0,
@@ -3971,15 +4108,15 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4337,
+      "runtime": 4345,
       "scientific": 5
     },
     "scf_tensor": {
       "fallback": 0,
       "oracle": 0,
-      "performance_exception": 0,
-      "runtime": 1923,
-      "scientific": 638
+      "performance_exception": 97,
+      "runtime": 2035,
+      "scientific": 809
     },
     "xc": {
       "fallback": 0,

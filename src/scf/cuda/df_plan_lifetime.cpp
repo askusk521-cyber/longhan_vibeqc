@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "scf/cuda/df_eigensystem.hpp"
+#include "scf/cuda/df_final_validation.hpp"
 #include "scf/cuda/df_plan_internal.hpp"
 #include "scf/cuda/df_plan_setup.hpp"
 #include "scf/cuda/df_scf_state.hpp"
@@ -31,11 +32,13 @@ void release(CudaDensityFittingJkPlan& plan) noexcept {
   if (plan.device_id >= 0) (void)cudaSetDevice(plan.device_id);
   destroy_persistent_scf_state(plan.persistent_scf_state);
   destroy_ordinary_eigensystem(plan.ordinary_eigensystem);
+  destroy_final_validation(plan.final_validation);
   destroy_cuda_density_fitting_integral_source(plan.integral_source);
   (void)runtime::resource_cuda_free(plan.inverse_square_roots);
   (void)runtime::resource_cuda_free(plan.metric_eigenvectors);
   (void)runtime::resource_cuda_free(plan.metric_eigenvalues);
   (void)runtime::resource_cuda_free(plan.three_center);
+  (void)runtime::resource_cuda_free(plan.packed_raw);
   (void)runtime::resource_cuda_free(plan.primary_density);
   (void)runtime::resource_cuda_free(plan.secondary_density);
   (void)runtime::resource_cuda_free(plan.total_density);

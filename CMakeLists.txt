@@ -278,30 +278,39 @@ if(VIBEQC_ENABLE_CUDA)
        "${CMAKE_CURRENT_SOURCE_DIR}/python/vibeqc_compiler/*.py")
   set(VIBEQC_DF_GENERATED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/df_values.cuh")
   set(VIBEQC_DF_POLICY_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_policy.cuh")
+  set(VIBEQC_DF_VALUE_CANDIDATE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_value_candidates.cuh")
   add_custom_command(
-    OUTPUT "${VIBEQC_DF_GENERATED_HEADER}" "${VIBEQC_DF_POLICY_HEADER}"
+    OUTPUT "${VIBEQC_DF_GENERATED_HEADER}" "${VIBEQC_DF_POLICY_HEADER}" "${VIBEQC_DF_VALUE_CANDIDATE_HEADER}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py"
             --output "${VIBEQC_DF_GENERATED_HEADER}"
             --policy-output "${VIBEQC_DF_POLICY_HEADER}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/vibeqc_compiler/integral/production_df_values.json"
             ${VIBEQC_DF_GENERATOR_INPUTS}
     VERBATIM)
-  target_sources(vibeqc PRIVATE "${VIBEQC_DF_GENERATED_HEADER}" "${VIBEQC_DF_POLICY_HEADER}")
+  target_sources(vibeqc PRIVATE "${VIBEQC_DF_GENERATED_HEADER}" "${VIBEQC_DF_POLICY_HEADER}" "${VIBEQC_DF_VALUE_CANDIDATE_HEADER}")
   target_sources(vibeqc PRIVATE src/integrals/ecp_cuda.cu)
   set(VIBEQC_DF_DERIVATIVE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_derivatives.cuh")
   set(VIBEQC_DF_DERIVATIVE_POLICY_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_derivative_policy.cuh")
   set(VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_derivative_schedule.cuh")
   set(VIBEQC_DF_SHELL_DERIVATIVE_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_shell_derivatives.cuh")
+  set(VIBEQC_DF_RYS_HEADERS
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_rys.cuh"
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_rys_policy.hpp"
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_production.hpp"
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_screening.cuh"
+      "${CMAKE_CURRENT_BINARY_DIR}/generated/generated_df_rys_shell.cuh")
   add_custom_command(
-    OUTPUT "${VIBEQC_DF_DERIVATIVE_HEADER}" "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}" "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}" "${VIBEQC_DF_SHELL_DERIVATIVE_HEADER}"
+    OUTPUT "${VIBEQC_DF_DERIVATIVE_HEADER}" "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}" "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}" "${VIBEQC_DF_SHELL_DERIVATIVE_HEADER}" ${VIBEQC_DF_RYS_HEADERS}
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py"
             --derivatives --output "${VIBEQC_DF_DERIVATIVE_HEADER}"
             --policy-output "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}"
             --schedule-output "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}"
             --shell-output "${VIBEQC_DF_SHELL_DERIVATIVE_HEADER}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_df_kernels.py" ${VIBEQC_DF_GENERATOR_INPUTS}
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/vibeqc_compiler/integral/production_df_derivatives.json"
     VERBATIM)
-  target_sources(vibeqc PRIVATE "${VIBEQC_DF_DERIVATIVE_HEADER}" "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}" "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}" "${VIBEQC_DF_SHELL_DERIVATIVE_HEADER}"
+  target_sources(vibeqc PRIVATE "${VIBEQC_DF_DERIVATIVE_HEADER}" "${VIBEQC_DF_DERIVATIVE_POLICY_HEADER}" "${VIBEQC_DF_DERIVATIVE_SCHEDULE_HEADER}" "${VIBEQC_DF_SHELL_DERIVATIVE_HEADER}" ${VIBEQC_DF_RYS_HEADERS}
                  src/scf/cuda/df_derivatives.cu src/scf/cuda/df_shell_derivatives.cu src/scf/cuda/df_gradient_bridge.cu
                  src/scf/cuda/df_response_weights.cu)
 
@@ -399,6 +408,7 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_force_response.cpp
     src/scf/cuda/df_jk.cpp
     src/scf/cuda/df_jk_kernels.cu
+    src/scf/cuda/df_packed_values.cu
     src/scf/cuda/df_metric_kernels.cu
     src/scf/cuda/df_plan.cpp
     src/scf/cuda/df_plan_lifetime.cpp
@@ -409,6 +419,8 @@ if(VIBEQC_ENABLE_CUDA)
     src/scf/cuda/df_scf_library.cpp
     src/scf/cuda/df_scf_diis.cpp
     src/scf/cuda/df_eigensystem.cpp
+    src/scf/cuda/df_final_validation.cpp
+    src/scf/cuda/final_validation_kernels.cu
     src/scf/cuda/df_uhf_scf.cpp
     src/scf/cuda_eigensolver_probe.cu
     src/scf/cuda_rhf.cpp

@@ -348,6 +348,12 @@
       "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
       "regions": [
         {
+          "start": "__global__ void density_exchange_factor_kernel",
+          "stop": "void launch_density_exchange_factor",
+          "role": "scientific",
+          "reason": "Algebraic PSD density factor scaling and complete reconstruction error reduction, qualified independently against four-index RI exchange."
+        },
+        {
           "start": "__global__ void assemble_rhf_fock_kernel",
           "stop": "__global__ void update_device_convergence_kernel",
           "role": "scientific",
@@ -1403,6 +1409,48 @@
       "regions": []
     },
     {
+      "path": "src/scf/cuda/df_packed_values.cu",
+      "role": "performance_exception",
+      "subsystem": "scf_tensor",
+      "reason": "Explicit experimental exact packed-value layout and FP64 occupied projection; preserves existing DF tensor equations and has no automatic promotion. Evidence: benchmarks/results/issue409-packed-values/README.md. Retire if no complete endpoint/capacity domain qualifies, or when compiler-owned triangular gathering passes the same numerical, resource and endpoint gates.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_packed_values.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Checked owner-facing launch boundary for packed value density, expansion and projection.",
+      "regions": []
+    },
+    {
+      "path": "src/scf/cuda/df_shell_kernel.cuh",
+      "reason": "Shared production shell-packet execution templates, instantiated without scientific duplication by the derivative batch tuner. Normalized AO projection, compact task indexing, primitive traversal and reductions call compiler-owned polynomial/Rys mathematics.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "df_derivatives"
+    },
+    {
+      "path": "src/scf/cuda/final_validation_kernels.cu",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Launch boundary for shared final-state validation products.",
+      "regions": [
+        {
+          "start": "__device__ void add(",
+          "stop": "void launch_validation_eigen(",
+          "role": "scientific",
+          "reason": "FP64 final-state norms, finite/generation checks, trace/energy reductions and occupied-column weighting; common acceptance policy remains in the shared solver."
+        }
+      ]
+    },
+    {
+      "path": "src/scf/cuda/final_validation_kernels.hpp",
+      "role": "runtime",
+      "subsystem": "scf_tensor",
+      "reason": "Fixed-size device reduction payloads and launch declarations.",
+      "regions": []
+    },
+    {
       "path": "src/tensor/cuda_resident.cuh",
       "reason": "Resident span transfer and checked device-to-device copy over the existing tensor Context owner; host-side allocation-bound and lock contracts with no scientific equations.",
       "regions": [],
@@ -1459,6 +1507,21 @@
         "generated/generated_df_shell_derivatives.cuh"
       ],
       "owner": "python/vibeqc_compiler/integral/df_shell_derivatives.py"
+    },
+    {
+      "name": "df_rys_roots",
+      "outputs": [
+        "generated/generated_df_rys.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_rys.py"
+    },
+    {
+      "name": "df_rys_shell",
+      "outputs": [
+        "generated/generated_df_rys_shell.cuh",
+        "generated/generated_df_rys_policy.hpp"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_rys_shell.py"
     },
     {
       "name": "weighted_eri",
@@ -1523,6 +1586,27 @@
         "generated/generated_ecp_ao.cuh"
       ],
       "owner": "python/vibeqc_compiler/integral/ecp_projector.py"
+    },
+    {
+      "name": "df_derivative_production_policy",
+      "outputs": [
+        "generated/generated_df_production.hpp"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_tuning/manifest.py"
+    },
+    {
+      "name": "df_sss_force_screening",
+      "outputs": [
+        "generated/generated_df_screening.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_screening.py"
+    },
+    {
+      "name": "df_value_candidates",
+      "outputs": [
+        "generated/generated_df_value_candidates.cuh"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_value_candidates.py"
     }
   ],
   "schema": "vibeqc.cuda-ownership.v1",
@@ -1562,9 +1646,10 @@
       "evidence": [
         "benchmarks/results/generated-df-values-142/promotion.json",
         "benchmarks/results/generated-df-values-142/README.md",
-        "benchmarks/results/cuda-ownership/df/publication.json"
+        "benchmarks/results/cuda-ownership/df/publication.json",
+        "docs/df_tuning.md"
       ],
-      "generated_capability": "All two-/three-center values through f and public spherical transforms instantiate the same rank-generic normalized traversal as derivatives.",
+      "generated_capability": "All two-/three-center values through f and public spherical transforms instantiate the same rank-generic normalized traversal as derivatives. Diagnostic specialized polynomial/Rys values through total angular degree two and raw 1/4/32-lane schedules share the same compiler scalar IR and Direct/DF batch qualification helpers; no value candidate is promoted.",
       "missing_capability": "None for promoted DF values; shared ERI/Dual recurrences remain for Direct and separately gated one-electron derivatives.",
       "owner": "df_values",
       "retirement_condition": "Completed: legacy Hermite value selection/dispatch and parallel DF derivative recurrence/contraction are removed; retain metric factors, planning and cuBLAS/cuSOLVER runtime.",
@@ -1670,15 +1755,15 @@
     "ecp": {
       "owner": "python/vibeqc_compiler/integral/ecp.py, ecp_projector.py and src/integrals/ecp_cuda.cu",
       "current_default": "Scalar Gaussian residual ECP, local plus s/p/d projectors, s/p/d orbital basis; two-grid convergence-gated native HF.",
-      "generated_capability": "Gaussian AO and center-derivative DAGs; radial integrand powers 0..4 including volume measure; bounded s/p/d harmonic projections and local/nonlocal bilinear jet reductions; ECP-center translation recovery. One C++ header supplies host tests and production CUDA.",
+      "generated_capability": "Gaussian AO and center-derivative DAGs, ECP node displacement and normalized primitive/component accumulation; radial integrand powers 0..4 including volume measure; bounded s/p/d harmonic projections and local/nonlocal bilinear jet reductions; ECP-center translation recovery; hcore addition and full AO fixed-weight energy-derivative-to-force consumption. One C++ header supplies host tests and production CUDA.",
       "missing_capability": "Complete DFT ECP awaits issues 162/163; spin-orbit, orbital f and higher projector families unavailable.",
-      "retirement_condition": "Radial/projector scientific loops retired from CUDA after independent addition-theorem, Libcint, all-center derivative, complete HF and resource gates. Remaining native primitive accumulation, density consumption and host grid/harmonic construction require equivalent generated replacements with those gates. Keep the independent ecp.cpp CPU oracle/fallback separate from generated production algebra.",
+      "retirement_condition": "Radial/projector, AO primitive/component and fixed-weight consumer loops require independent polynomial/addition-theorem, Libcint, all-center derivative, complete HF and resource gates. Remaining host normalization metadata, grid/harmonic construction and grid-convergence policy require equivalent compiler-owned replacements with those gates before complete adapter retirement. Keep the independent ecp.cpp CPU oracle/fallback separate from generated production algebra.",
       "evidence": [
         "tests/python/test_ecp.py",
         "tests/python/test_ecp_ir.py",
         "tests/native/test_ecp_projector.cpp"
       ],
-      "status": "Bounded projector/radial lowering migration; unchanged capability domain; no DFT, broad heavy-element or performance-promotion claim."
+      "status": "Bounded projector/radial and AO/fixed-weight consumer lowering; unchanged capability domain; no DFT, broad heavy-element or performance-promotion claim."
     },
     "df_response_weights": {
       "owner": "scf_tensor",
@@ -1700,7 +1785,8 @@
         "benchmarks/results/issue377-379-df/README.md",
         "tests/native/test_df_shell_pairs.cpp",
         "tests/python/test_df_shell_derivatives_cuda.py",
-        "benchmarks/results/issue382-packed-df/README.md"
+        "benchmarks/results/issue382-packed-df/README.md",
+        "docs/df_tuning.md"
       ],
       "status": "native_baseline_with_opt_in_control"
     }

@@ -4,7 +4,10 @@
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
 
+#include <optional>
+
 #include "scf/cuda_density_fitting.hpp"
+#include "scf/cuda_density_fitting_final_state.hpp"
 
 namespace vibeqc::scf {
 
@@ -39,6 +42,12 @@ struct CudaDensityFittingJkPlan {
   std::size_t naux{};
   std::size_t matrix_elements{};
   std::size_t tensor_elements_per_system{};
+  // Logical dense extent above preserves public contracts. Stored strides and
+  // scratch capacities below are explicit; packed views never borrow dense strides.
+  DfValueStorageOptions value_storage{};
+  std::size_t stored_pair_count{}, stored_tensor_elements_per_system{};
+  std::size_t projection_capacity{}, panel_capacity{};
+  double* packed_raw{};
   std::size_t auxiliary_tile{};
   std::size_t ao_pair_tile{};
   std::size_t row_tile{};
@@ -57,11 +66,19 @@ struct CudaDensityFittingJkPlan {
   double* auxiliary_tile_values{};
   double* exchange_intermediate{};
   double* exchange_contributions{};
-  // Resident occupied K uses one scratch tensor; dense K fits its Q panels
-  // in the other two. The former contribution buffer retains raw A[Q,mu,nu],
-  // including discarded metric directions, from setup until destruction.
-  // Never reuse it as J/K output under the resident exchange policy.
+  // Dense resident exchange preserves raw A[Q,mu,nu] in the contribution
+  // allocation and fits K into the other two buffers. Packed plans instead
+  // own immutable packed_raw separately; all three buffers remain mutable.
+  // Both raw representations retain every discarded metric direction.
   bool resident_raw_valid{};
+  // An exclusive lease on U[mu,i,Q] in auxiliary_tile_values. Only the
+  // validated final physical RHF K publishes it. Every scratch writer and
+  // new solve revokes it before submission, including unsuccessful attempts.
+  std::optional<CudaDfFinalStateToken> final_projection_token;
+  // Reconstructing raw projections from whitened U is valid only when every
+  // metric direction survived the forward cutoff. Rank boundaries still use
+  // the existing spectral-response validity check.
+  std::vector<std::uint8_t> metric_full_rank;
   bool resident_exchange_enabled{};
   bool triangular_exchange{};
   bool flat_dense_exchange{};
@@ -99,6 +116,8 @@ struct CudaDensityFittingJkPlan {
   // Ordinary AO setup/final eigen operations share the existing handles while
   // retaining one bounded scratch frame, separate from captured SCF state.
   void* ordinary_eigensystem{};
+  // Serialized FP64 final validation/projection storage, separate from graphs.
+  void* final_validation{};
 };
 
 }  // namespace vibeqc::scf
