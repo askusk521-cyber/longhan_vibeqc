@@ -109,7 +109,7 @@ def resident_source(plan, *, prefix="", extension=""):
         validation_block = (
             "ctx.section(profile, metrics.input_ms, [&] {\n"
             + "".join(f"    {call}\n" for call in _vc)
-            + "}});"
+            + "});"
         )
 
     if extension and "__VIBEQC_RESIDENT_POST_RUN_DECL__" in extension:
