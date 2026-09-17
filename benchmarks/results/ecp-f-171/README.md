@@ -9,18 +9,25 @@ heavy-element, additional-method or speedup claim. Refs #171; depends on #425.
 
 Baseline: `d0f6b127a2e9e0049994c5f14e4748441d71fc43` (PR #425). The measured
 candidate is this public Git archive plus the 12 exact source/test files in
-`source-overlay.tar.gz`, not a claimed clean Git checkout. The retained full
+the remote `source-overlay.tar.gz`, not a claimed clean Git checkout. The full
 source manifests verify every archive file, and CPU/CUDA candidate manifests
 must match. Documentation and ownership records do not alter measured code.
+The reviewed `source.patch` reconstructs the 12-file change from that baseline;
+`source-match.json` binds it to the publishing source commit after LF normalization.
 Archive compression can differ across Git versions; per-file source hashes
 and the archive's base-commit PAX record bind the actual scientific baseline.
 
 RTX 4090, CUDA 12.9, sm_89, Release, AOT shells disabled, one OpenMP/BLAS thread.
 Compute Sanitizer uses CUDA 12.8. `summary.json` records exact hardware,
 toolchain, source/library hashes, numerical errors, all timing samples, work
-counts and planned/observed resources. `raw-evidence.zip` and its manifest retain
-build/test logs, generated headers, kernel resource usage, source identities and
-reproduction scripts. The initial failed native test build is retained; it
+counts and planned/observed resources. `raw-evidence.manifest.json` binds the
+full diagnostic archive retained in the user's original qb-ilm workspace under
+`evidence-171/f-results/raw-evidence.zip` and downloaded locally. Routine logs,
+retries and generated products remain outside Git under the evidence-retention
+policy. Reproduction scripts, source reconstruction, accepted samples, test
+outcomes and kernel resource records are retained here; reproduction does not
+depend on access to the diagnostic archive. The initial failed native build
+is retained in that archive; it
 used a nonexistent CPU enum, subsequently corrected to `CPU_REFERENCE`.
 An initial baseline finished measurement/provenance but its mutable driver
 encountered a trailing parse error; the queued candidate correctly refused
@@ -84,16 +91,41 @@ unsupported-domain check, `f-resume.sh` reruns the CUDA-selected tests and the
 changed CPU replay test, then completes benchmarks and sanitizer checks.
 The failed full run is retained and is not relabeled as a passing full rerun.
 
+## Results
+
+CPU CTest passed 31/31 and CUDA ECP CTest passed 3/3. The CPU Python suite
+passed 61 tests with 19 expected GPU skips. Following the budget correction,
+all 19 CUDA-selected tests passed and the changed CPU replay passed separately.
+Both native error recovery and the two f matrix/derivative cases completed
+Compute Sanitizer with zero errors. Final local checks passed 66 tests,
+174 compiler modules, 217 shared SCF modules and the 182-file CUDA inventory.
+
+Across the four CPU and five CUDA f endpoints, maximum raw-matrix error was
+3.47e-12 Eh, complete-energy error 8.89e-15 Eh and complete-force error
+5.11e-10 Eh/bohr. CPU complete calls took 85.4–86.0 s in the single retained
+sample per case. CUDA medians were 1.53/1.30 s for 19-AO Cartesian RHF/UHF,
+9.41/9.37 s for 16-AO spherical RHF/UHF, and 1.91 s for 29-AO Cartesian RHF.
+The slower spherical route is explicitly retained; these are distinct layouts,
+not a matched representation speed comparison or a schedule promotion.
+
+On the existing s/p/d domain, matched baseline/candidate complete RHF medians
+were 989.10/993.60 ms (+0.45%) and UHF 983.36/989.19 ms (+0.59%). Full-engine
+component endpoint medians changed by -0.17% to +1.18%. Three samples per case
+show no material regression in this bounded run; they do not establish a
+general performance guarantee. Full samples and numerical gates are in `summary.json`.
+
 ## Reproduction
 
-1. Obtain the exact public baseline with `git archive`, verify the retained
-   archive manifest, and extract `source-overlay.tar.gz` over a separate source
-   tree. The overlay can be used as `f-changes.tar.gz` for preparation.
-2. Adapt only the workspace prefix in `f-prepare.sh`, `f-run.sh`,
+1. Obtain baseline `d0f6b127a2e9e0049994c5f14e4748441d71fc43` with `git archive`
+   as `f-baseline.tar.gz`, extract it, and apply `source.patch` in a separate
+   candidate tree. Verify the 12 normalized file hashes in `source-match.json`;
+   package those paths as `f-changes.tar.gz` and `f-formatted.tar.gz`.
+2. Use the scripts in `reproduction/`. Adapt the workspace prefix in
+   `f-prepare.sh`, `f-run-v2.sh`,
    `f-provenance.py` and `f-collect.py`. Keep the flags, grids and test commands.
 3. Run preparation, then `f-run-v2.sh cpu` and `f-run-v2.sh baseline`. After baseline
    succeeds, run `f-run-v2.sh cuda`; GPU timing must remain sequential. The
-   original script and its initial orchestration failures are retained too;
+   original script and its initial orchestration failures are archived too;
    never edit a script while a running shell may still read it.
 4. Candidate CUDA execution explicitly regenerates the header, touches native
    inputs and reconfigures CMake so archive mtimes cannot hide changed code or
@@ -101,7 +133,11 @@ The failed full run is retained and is not relabeled as a passing full rerun.
    `VIBEQC_LIBRARY` explicitly.
 5. `f-collect.py` requires successful exit markers, matching complete candidate
    source manifests, all four CPU/five CUDA endpoint cases and exact library
-   identities before archiving. Retain failures and diagnostic follow-ups.
+   identities before archiving. `f-resume.sh` records the actual focused rerun;
+   it expects the completed initial builds. On a clean full rerun, preserve the
+   new full-suite totals rather than manufacturing the historical focused logs.
+   The collector's focused-log checks describe this campaign's exact sequence.
+   Retain failures and diagnostic follow-ups outside Git.
 
 ## Ownership
 

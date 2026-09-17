@@ -135,7 +135,7 @@ parameter format.
 
 Install the pinned `reference-test` extra (PySCF 2.14.0), build the CPU or CUDA
 library and set `PYTHONPATH=python` and `VIBEQC_LIBRARY` to that exact artifact.
-The measured builds used Release mode and Ninja:
+For example, build in Release mode with Ninja:
 
 ```sh
 cmake -S . -B build-ecp-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DVIBEQC_ENABLE_CUDA=OFF
