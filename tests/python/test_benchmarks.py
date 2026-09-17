@@ -63,6 +63,39 @@ def _results_summary_module():
     return module
 
 
+def test_batch_native_metadata_identifies_loaded_profile_library(tmp_path, monkeypatch):
+    """A replaced library must not inherit the requested base binary's identity."""
+    import hashlib
+
+    from vibeqc import profiles
+
+    base = tmp_path / "base.so"
+    selected = tmp_path / "selected.so"
+    base.write_bytes(b"generic build")
+    selected.write_bytes(b"selected AOT build")
+    monkeypatch.setenv("VIBEQC_LIBRARY", str(base))
+    library = SimpleNamespace(_name=str(selected))
+    observed = []
+
+    def probe(actual, ordinal):
+        observed.append((actual, ordinal))
+        return {
+            "source_identity": "same-source",
+            "device": {"official_profile": "sm_120"},
+        }
+
+    monkeypatch.setattr(profiles, "probe_device", probe)
+    payload = _batch_comparison_module().native_build_metadata(
+        SimpleNamespace(_library=library, _device_id=2)
+    )
+    assert observed == [(library, 2)]
+    assert payload["library_path"] == str(selected)
+    assert (
+        payload["library_sha256"] == hashlib.sha256(selected.read_bytes()).hexdigest()
+    )
+    assert payload["probe"]["device"]["official_profile"] == "sm_120"
+
+
 def _aot_shell_gate_module():
     """Load the AOT endpoint helpers without importing a GPU backend."""
 
@@ -705,6 +738,9 @@ def test_real_molecule_gate_has_four_explicit_dry_run_points(tmp_path):
     assert sum("--batch 1" in line for line in commands) == 2
     assert sum("--batch 4" in line for line in commands) == 2
     assert all("--repeats 5" in line for line in commands)
+    assert all(
+        "--progress-output" in line and ".progress.jsonl" in line for line in commands
+    )
     assert sum("--minimum-speedup 1.0" in line for line in commands) == 2
     assert all("--max-iterations 100" in line for line in commands)
     assert all("--energy-tolerance 1e-12" in line for line in commands)
@@ -1026,7 +1062,9 @@ def test_gpu_cycle_tracker_retains_explicit_final_residuals():
     assert tracker.orbital_gradient_norm == pytest.approx(2.0e-8)
 
 
-def test_accuracy_gate_prefers_iteration_matched_repeat_pairs():
+@pytest.mark.parametrize("last_branch_matches", [False, True])
+def test_accuracy_gate_rejects_an_earlier_failed_repeat(last_branch_matches):
+    """A passing final or matched pair cannot qualify an inaccurate median."""
     comparison = _batch_comparison_module()
     summary = comparison.accuracy_gate_summary(
         [
@@ -1036,39 +1074,35 @@ def test_accuracy_gate_prefers_iteration_matched_repeat_pairs():
                 "maximum_force_error_hartree_per_bohr": 2.0e-9,
             },
             {
-                "iteration_branches_match": True,
+                "iteration_branches_match": last_branch_matches,
                 "maximum_energy_error_hartree": 3.0e-12,
                 "maximum_force_error_hartree_per_bohr": 4.0e-12,
             },
         ]
     )
     assert summary == {
-        "selection": "iteration_matched_pairs",
-        "pair_count": 1,
-        "maximum_energy_error_hartree": 3.0e-12,
-        "maximum_force_error_hartree_per_bohr": 4.0e-12,
+        "selection": "all_measured_pairs",
+        "pair_count": 2,
+        "maximum_energy_error_hartree": 1.0e-9,
+        "maximum_force_error_hartree_per_bohr": 2.0e-9,
     }
-
-    unmatched = comparison.accuracy_gate_summary(
-        [
-            {
-                "iteration_branches_match": False,
-                "maximum_energy_error_hartree": 1.0e-9,
-                "maximum_force_error_hartree_per_bohr": 2.0e-9,
-            },
-            {
-                "iteration_branches_match": False,
-                "maximum_energy_error_hartree": 5.0e-12,
-                "maximum_force_error_hartree_per_bohr": 6.0e-12,
-            },
-        ]
+    failures = comparison.benchmark_gate_failures(
+        speedup=2.0,
+        maximum_energy_error=summary["maximum_energy_error_hartree"],
+        maximum_force_error=summary["maximum_force_error_hartree_per_bohr"],
+        vibeqc_converged=True,
+        reference_converged=True,
+        maximum_energy_error_limit=1e-10,
+        maximum_force_error_limit=1e-10,
     )
-    assert unmatched == {
-        "selection": "final_pair_unmatched_labeled",
-        "pair_count": 1,
-        "maximum_energy_error_hartree": 5.0e-12,
-        "maximum_force_error_hartree_per_bohr": 6.0e-12,
-    }
+    assert len(failures) == 2
+    assert any("energy error" in failure for failure in failures)
+    assert any("force error" in failure for failure in failures)
+
+
+def test_accuracy_gate_requires_measured_pairs():
+    with pytest.raises(ValueError, match="at least one measured pair"):
+        _batch_comparison_module().accuracy_gate_summary([])
 
 
 def test_energy_only_pairs_reject_mismatched_properties_and_nonfinite_values():
