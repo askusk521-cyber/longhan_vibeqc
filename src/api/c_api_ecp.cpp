@@ -5,6 +5,7 @@
 
 #include "api/error.hpp"
 #include "api/handles.hpp"
+#include "generated_ecp_ao.cuh"
 #include "integrals/ecp.hpp"
 #include "integrals/ecp_cuda.hpp"
 #include "molecule/basis.hpp"
@@ -32,8 +33,9 @@ vibeqc_status vibeqc_system_create_ecp(vibeqc_context* context,
       removed += core_electrons[a];
     }
     for (unsigned s = 0; s < descriptor->shell_count; ++s)
-      if (descriptor->shells[s].angular_momentum > 2)
-        throw std::invalid_argument("scalar ECP execution currently supports orbital s/p/d shells");
+      if (descriptor->shells[s].angular_momentum > vibeqc::generated::ecp_max_orbital_angular)
+        throw std::invalid_argument(
+            "scalar ECP execution currently supports orbital s/p/d/f shells");
     std::vector<vibeqc::core::EcpTerm> owned;
     for (std::size_t i = 0; i < term_count; ++i) {
       const auto& t = terms[i];

@@ -1,6 +1,7 @@
 """Scalar ECP preflight, independent of native libraries and reference packages."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from vibeqc import Atom, BasisProvenance, BasisSet, BasisShell, ElementBasis
@@ -75,3 +76,30 @@ def test_highest_singleton_channel_is_local():
 def test_unsupported_execution_conventions_remain_rejected(changes, message):
     with pytest.raises(NotImplementedError, match=message):
         resolve(element([potential(**changes)]))
+
+
+def test_f_orbitals_are_resolved_but_g_remains_unsupported():
+    record = element([potential()])
+    for angular in (3, 4):
+        changed = replace(record, shells=(BasisShell(angular, ("0.7",), (("1",),)),))
+        if angular == 3:
+            assert resolve(changed)[0] == (10,)
+        else:
+            with pytest.raises(NotImplementedError, match="orbital s/p/d/f"):
+                resolve(changed)
+
+
+def test_mixed_all_electron_atom_obeys_the_same_orbital_boundary():
+    for angular in (3, 4):
+        hydrogen = ElementBasis(1, (BasisShell(angular, ("0.7",), (("1",),)),))
+        basis = BasisSet(
+            "mixed scalar ECP",
+            (element([potential()]), hydrogen),
+            BasisProvenance("synthetic test", "1", "CC0", "0" * 64),
+        )
+        atoms = (Atom(11, (0.0, 0.0, 0.0)), Atom(1, (0.3, 0.1, 3.0)))
+        if angular == 3:
+            assert resolve_ecp(basis, atoms)[0] == (10, 0)
+        else:
+            with pytest.raises(NotImplementedError, match="orbital s/p/d/f"):
+                resolve_ecp(basis, atoms)
