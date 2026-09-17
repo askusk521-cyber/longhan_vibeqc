@@ -25,6 +25,9 @@ class KernelConsumer(str, Enum):
     FORCE = "force"
 
 
+ECP_MAX_ORBITAL_ANGULAR = 3
+
+
 class OperatorFamily(str, Enum):
     """Backend-neutral integral operator families known to the compiler."""
 
@@ -542,10 +545,12 @@ class IntegralIR:
         ):
             raise ValueError("scalar ECP requires its explicit quadrature lowering")
         if self.operator.family == OperatorFamily.SCALAR_ECP and (
-            any(s.angular > 2 for s in signature.shells)
+            any(s.angular > ECP_MAX_ORBITAL_ANGULAR for s in signature.shells)
             or (self.derivative is not None and self.derivative.order != 1)
         ):
-            raise ValueError("ECP lowering supports s/p/d values and first derivatives")
+            raise ValueError(
+                "ECP lowering supports s/p/d/f values and first derivatives"
+            )
         if self.recurrence == "hermite" and self.operator.family not in (
             OperatorFamily.OVERLAP,
             OperatorFamily.KINETIC,

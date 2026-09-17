@@ -12,7 +12,8 @@ The highest supplied angular channel is local. Each lower channel denotes
 `U_l - U_local`, with radial terms `c r^(n-2) exp(-alpha r^2)`. The nonlocal
 operator sums normalized real spherical projectors over `m = -l..l`. Orbital
 normalization and Cartesian/spherical ordering come from the ordinary basis
-layer. Supported orbitals are s/p/d; projectors are s/p/d, local labels at
+layer. Supported orbitals are s/p/d/f in Cartesian and real spherical layouts;
+projectors are s/p/d, local labels at
 most f, radial powers 0..4, at most 256 AOs and 128 atoms. Unknown parameter
 fields, multiple coefficient rows, spin-orbit formats and higher angular
 momenta are rejected. Parameter import performs no online lookup.
@@ -56,7 +57,7 @@ ECP-center derivatives use generated `dC = -(dA+dB)` after the angular
 reduction and before physical atom accumulation, including coincident A/B/C
 cases. Value-only calls do not read derivative slots.
 
-This migration preserves the initial domain and one-radial-shell schedule.
+The one-radial-shell schedule is shared across the supported orbital domain.
 The independent `src/integrals/ecp.cpp` CPU implementation remains the public
 CPU fallback and a numerical oracle; it intentionally does not call these
 generated contractions. The compiler also owns ECP-centered node displacement,
@@ -76,12 +77,22 @@ stopping policy, node order and append semantics are preserved.
 The CUDA adapter retains allocation/launch/scatter, AO expansion metadata and
 the method's two-grid convergence policy. It remains conservatively classified
 as scientific in the ownership ledger. This does not claim complete adapter
-retirement or expanded method/angular support.
+retirement or expanded method/projector support.
+
+Orbital f uses the existing Gaussian DAG, generated component normalization and
+molecular real-spherical expansion. The compiler-owned orbital limit also
+defines the native ECP constructor boundary. The Python preflight applies the
+same limit to both ECP atoms and all-electron atoms in mixed systems. Component
+dispatch checks the angular powers before encoding them, so unsupported g
+components cannot alias supported lower components. This orbital extension
+does not expand projector channels, radial powers, element families or methods.
 
 See the [AO/weight ownership decision](../.agents/notes/implemented/architecture/2026-09-16-ecp-ao-weight-consumers.md)
 for the reduction-order and oracle rationale.
 The [host-grid ownership decision](../.agents/notes/implemented/architecture/2026-09-17-ecp-host-grid.md)
 records the quadrature boundary and independent moment/addition-theorem gates.
+The [orbital-f decision](../.agents/notes/implemented/numerics/2026-09-17-ecp-orbital-f.md)
+records the separate orbital/projector bounds and f qualification gates.
 
 ## Numerical and execution boundaries
 
@@ -130,12 +141,21 @@ Architecture 89 is the measured RTX 4090 target; select the actual allocated
 GPU architecture for other devices. The measurements validate the generic
 CUDA build and do not promote an AOT shell profile.
 
-Run `pytest tests/python/test_ecp.py tests/python/test_ecp_ir.py`; set
+Run `pytest tests/python/test_ecp.py tests/python/test_ecp_ir.py tests/python/test_ecp_validation.py tests/python/test_ecp_f.py`; set
 `VIBEQC_ECP_CUDA_TEST=1` only on an allocated GPU. The tests use installed
 PySCF LANL2DZ Na ECP/orbitals with STO-3G H, asymmetric mixed centers, d shells,
+contracted f shells on ECP and all-electron atoms,
 Cartesian/spherical layouts, charged open-shell HF, independent ECP center
 motion and two finite-difference steps. Synthetic fixtures isolate local and
 nonlocal components. Production code never imports PySCF.
+
+The f suite compares all-center derivatives at two displacement steps, including
+an independently moving ECP center without its own basis, and nonsymmetric
+fixed-weight contractions. Complete RHF/UHF energies and forces are checked
+against PySCF for both representations; CUDA additionally checks complete
+energy finite differences. Prepared geometry replay is checked under the
+planned host/device budget. The native capability test checks f acceptance,
+g rejection and continued rejection of f projectors through the C API.
 
 `vibeqc_ecp_projector_tests` independently checks the emitted host arithmetic
 using a double angular-node sum and the Legendre addition theorem, without

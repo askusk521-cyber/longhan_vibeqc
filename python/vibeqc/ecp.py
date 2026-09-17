@@ -42,8 +42,8 @@ def resolve_ecp(basis, atoms):
             raise NotImplementedError(
                 "ECP local channel must be s/p/d/f; projectors at most d"
             )
-        if any(s.angular_momentum > 2 for s in element.shells):
-            raise NotImplementedError("ECP execution supports orbital s/p/d shells")
+        if any(s.angular_momentum > 3 for s in element.shells):
+            raise NotImplementedError("ECP execution supports orbital s/p/d/f shells")
         for potential in potentials:
             if set(potential) - {
                 "ecp_type",
@@ -82,8 +82,10 @@ def resolve_ecp(basis, atoms):
     if terms:
         # Applies to mixed all-electron/ECP atoms too.
         for atom in atoms:
-            if any(s.angular_momentum > 2 for s in metadata[atom.atomic_number].shells):
-                raise NotImplementedError("ECP execution supports orbital s/p/d shells")
+            if any(s.angular_momentum > 3 for s in metadata[atom.atomic_number].shells):
+                raise NotImplementedError(
+                    "ECP execution supports orbital s/p/d/f shells"
+                )
     return tuple(cores), tuple(terms)
 
 

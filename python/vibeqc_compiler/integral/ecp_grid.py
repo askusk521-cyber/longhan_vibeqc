@@ -8,6 +8,7 @@ The independent CPU ECP oracle deliberately retains its own implementation.
 import math
 
 from .expr import Graph
+from .ir import ECP_MAX_ORBITAL_ANGULAR
 from .scalar_c import ScalarCEmitter
 from .shell_spec import cartesian_components
 
@@ -159,7 +160,7 @@ def emit_ecp_grid_cpp():
         "}",
         "inline double ecp_component_coefficient(unsigned x, unsigned y, unsigned z, double coefficient) {",
     ]
-    for angular in range(3):
+    for angular in range(ECP_MAX_ORBITAL_ANGULAR + 1):
         for component in cartesian_components(angular):
             powers = tuple(component.count(a) for a in "xyz")
             denominator = math.prod(math.prod(range(1, 2 * p, 2)) for p in powers)
@@ -176,7 +177,7 @@ def emit_ecp_grid_cpp():
                 "  }",
             ]
     lines += [
-        '  throw std::invalid_argument("ECP component exceeds validated s/p/d domain");',
+        '  throw std::invalid_argument("ECP component exceeds validated s/p/d/f domain");',
         "}",
     ]
     return lines

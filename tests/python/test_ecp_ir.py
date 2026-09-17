@@ -102,7 +102,7 @@ def test_ecp_center_and_versioned_roundtrip(weighted):
 
 def test_generated_center_derivatives_independent_finite_difference():
     rng = np.random.default_rng(171)
-    for l in range(3):
+    for l in range(4):
         for component in cartesian_components(l):
             graph, roots = gaussian_roots(component)
             for xyz in (np.zeros(3), rng.normal(size=3)):
@@ -125,7 +125,7 @@ def test_generated_center_derivatives_independent_finite_difference():
 
 def test_invalid_ecp_lowerings_fail_closed():
     term = EcpRadialTerm(-1, 2, 1.0, 1.0)
-    for angular in ((0,), (0, 3)):
+    for angular in ((0,), (0, 4)):
         with pytest.raises(ValueError):
             build_ecp_ir(angular, (term,))
     with pytest.raises(ValueError):
@@ -138,6 +138,19 @@ def test_invalid_ecp_lowerings_fail_closed():
     ):
         with pytest.raises(ValueError):
             replace(term, **kwargs)
+
+
+@pytest.mark.parametrize("angular", [(0, 3), (3, 2), (3, 3)])
+@pytest.mark.parametrize("weighted", [False, True])
+def test_f_orbital_ir_derivative_contract(angular, weighted):
+    ir = build_ecp_ir(
+        angular,
+        (EcpRadialTerm(2, 4, 0.8, -1.2),),
+        derivatives=True,
+        weighted=weighted,
+    )
+    assert ir.derivative.recovered_centers(ir.operator) == (2,)
+    assert integral_from_payload(integral_to_payload(ir)) == ir
 
 
 @pytest.mark.parametrize("power", range(5))
