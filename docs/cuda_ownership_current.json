@@ -4181,8 +4181,7 @@
       "src/scf/cuda/weighted_eri_kernels.cu",
       "src/scf/cuda/weighted_eri_kernels.hpp",
       "src/scf/cuda_direct_jk_device.hpp",
-      "src/tensor/cuda_error.hpp",
-      "src/tensor/cuda_resident.cuh"
+      "src/tensor/cuda_error.hpp"
     ],
     "maintained_code_lines": {
       "fallback": 0,
