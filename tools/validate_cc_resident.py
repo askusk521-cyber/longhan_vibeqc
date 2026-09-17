@@ -101,9 +101,9 @@ def run(output, compiler, cache, *, compile_only=False):
                         name: resident.download(lease) for name, lease in leases.items()
                     }
                     checks = {}
-                    for name in ordinary_outputs:
+                    for name, ord_val in ordinary_outputs.items():
                         checks[name] = block_error(
-                            res[name], ordinary_outputs[name], atol=1e-11, rtol=1e-10
+                            res[name], ord_val, atol=1e-11, rtol=1e-10
                         )
                     ok = all(
                         c["max_absolute_error"] <= (1e-8 if "energy" in k else 1e-9)
@@ -156,8 +156,8 @@ def run(output, compiler, cache, *, compile_only=False):
                 reuser.upload(feeds)
                 r2, _ = reuser.run()
                 second = {name: reuser.download(lease) for name, lease in r2.items()}
-                for name in first:
-                    c = block_error(second[name], first[name], atol=1e-11, rtol=1e-10)
+                for name, first_val in first.items():
+                    c = block_error(second[name], first_val, atol=1e-11, rtol=1e-10)
                     if c["max_absolute_error"] > 1e-9:
                         repeat_ok = False
 
