@@ -37,11 +37,12 @@ def run(output, compiler, cache, *, compile_only=False):
     references = load_references(reference_path)
 
     manifest = {
-        "scope": "#149 B resident-vs-ordinary GPU parity on real H200",
+        "scope": "#149 B resident-vs-ordinary GPU parity",
         "tensor_source_identity": tensor_source_identity(),
         "python": platform.python_version(),
         "numpy": np.__version__,
         "reference_sha256": file_hash(reference_path),
+        "compiler_target": compiler.target.to_payload(),
         "cases": [],
     }
 
@@ -92,6 +93,10 @@ def run(output, compiler, cache, *, compile_only=False):
 
             # 2. Compile + run resident
             artifact = compile_resident(p, compiler, cache)
+            record["resident_artifact"] = {
+                "key": artifact.metadata["key"],
+                "binary_sha256": artifact.metadata["binary_sha256"],
+            }
             parity = []
             with PreparedResident(p, artifact) as resident:
                 resident.upload(feeds)
@@ -171,6 +176,10 @@ def run(output, compiler, cache, *, compile_only=False):
             tests_passed = all([stale_ok, nonfinite_ok, missing_ok, repeat_ok])
             all_passed = all(r["passed"] for r in parity) and tests_passed
 
+            record["resident_artifact"] = {
+                "key": artifact.metadata["key"],
+                "binary_sha256": artifact.metadata["binary_sha256"],
+            }
             record["parity"] = parity
             record["tests"] = {
                 "stale_lease": stale_ok,

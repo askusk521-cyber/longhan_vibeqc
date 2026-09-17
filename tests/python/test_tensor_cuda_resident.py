@@ -135,6 +135,28 @@ def test_resident_requires_pinned_materialized_outputs():
     assert resident_source(plan)
 
 
+def test_resident_source_rejects_an_unpinned_output():
+    """The emitter must fail closed when an output is not pinned for the
+    full plan lifetime — this is the emitter's own check, not the planner's.
+    A future planner change that recycles an output's arena offset must be
+    caught here, before a compiled resident binary reads overwritten storage."""
+    from types import SimpleNamespace
+
+    import pytest as _pytest
+
+    class _MockStep:
+        virtual = False
+        last_use = 0  # not pinned
+
+    plan = SimpleNamespace(
+        steps=[_MockStep],
+        inputs=[],
+        outputs=[("unpinned", 0)],
+    )
+    with _pytest.raises(ValueError, match="pinned"):
+        resident_source(plan)
+
+
 def test_resident_extension_is_part_of_the_generated_source():
     """Any plan-specific post-run action must be visible in the identity."""
     plan = plan_cuda(doubled_pair_program(), TARGET, max_bytes=1 << 26)
