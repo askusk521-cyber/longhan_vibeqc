@@ -64,16 +64,24 @@ normalized AO primitive/component accumulation, local/nonlocal hcore addition
 and the full AO fixed-weight derivative contraction with the energy-to-force
 sign. The CUDA adapter supplies total RHF/UHF density without an extra occupancy
 factor. Component/primitive/AO reduction order and FP64 storage are unchanged.
-The CUDA adapter retains allocation/launch/scatter and grid
-convergence checks. Host quadrature-node/harmonic construction also remains
-explicit. These remaining scientific portions are conservatively retained in
-the ownership ledger; this slice does not claim complete ECP code retirement.
-They can be retired only after an equivalent generated replacement passes
-independent raw, derivative, method and resource gates. The CPU oracle must
-remain structurally independent of generated production arithmetic.
+`integral/ecp_grid.py` owns the production host Gauss-Legendre recurrence,
+mapped radial Jacobian, sphere coordinates/weights, real s/p/d harmonics and
+Cartesian component coefficient normalization. Scalar arithmetic uses the
+common DAG; finite root/grid loops are compiler-emitted host schedules.
+Trigonometric operations call the host standard library. The independent CPU
+oracle retains its own nodes, harmonics and normalization; its integral path
+does not call the generated grid wrapper. The existing grid limits, Newton
+stopping policy, node order and append semantics are preserved.
+
+The CUDA adapter retains allocation/launch/scatter, AO expansion metadata and
+the method's two-grid convergence policy. It remains conservatively classified
+as scientific in the ownership ledger. This does not claim complete adapter
+retirement or expanded method/angular support.
 
 See the [AO/weight ownership decision](../.agents/notes/implemented/architecture/2026-09-16-ecp-ao-weight-consumers.md)
 for the reduction-order and oracle rationale.
+The [host-grid ownership decision](../.agents/notes/implemented/architecture/2026-09-17-ecp-host-grid.md)
+records the quadrature boundary and independent moment/addition-theorem gates.
 
 ## Numerical and execution boundaries
 

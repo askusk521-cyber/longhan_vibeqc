@@ -4,7 +4,10 @@ This numerical repair applies metric inversion to linear factors before quadrati
 products and validates the current physical-Fock projector before complete forces.
 The frozen v14 library was used in Slurm 9946, 9947 and 9949. One subsequent
 comment-only correction is bound explicitly in `review-source-binding-v1.json`.
-No executable numerical code changed after qualification.
+No executable DF code changed after qualification. Integration with upstream
+`d756162` adds its separately qualified ECP host-grid work; the shared ownership
+snapshot is regenerated. `integration-v1.json` binds that source separation and
+confirms the same PR ownership delta against the new base.
 
 The 19-cell stock campaign completed with **11 warm wins, 3 losses, 2 inconclusive
 results and 3 numerical failures**. This does not close #206 or establish universal

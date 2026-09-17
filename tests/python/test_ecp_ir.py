@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from vibeqc_compiler.integral.ecp import build_ecp_ir, gaussian_roots
+from vibeqc_compiler.integral.ecp_grid import harmonic_roots, radial_map_roots
 from vibeqc_compiler.integral.ecp_projector import (
     emit_ecp_quadrature_cpp,
     pair_roots,
@@ -34,6 +35,39 @@ def test_ecp_codegen_without_site_packages(tmp_path):
         cwd=tmp_path,
     )
     assert output.read_text() == emit_ecp_quadrature_cpp()
+
+
+def test_generated_grid_radial_map_and_jacobian():
+    graph, (radius, weight) = radial_map_roots()
+    for z in (-0.999, -0.7, 0.0, 0.4, 0.999):
+        values = {"z": z, "weight": 0.37}
+        # Independent rational form and its analytic Jacobian.
+        assert graph.evaluate(radius, values) == pytest.approx((1 + z) / (1 - z))
+        assert graph.evaluate(weight, values) == pytest.approx(0.74 / (1 - z) ** 2)
+        derivative = graph.differentiate(radius, graph.variable("z"))
+        assert graph.evaluate(weight, values) == pytest.approx(
+            0.37 * graph.evaluate(derivative, values)
+        )
+
+
+def test_generated_harmonic_channel_addition_theorem():
+    graph, roots = harmonic_roots()
+    rng = np.random.default_rng(17103)
+    for _ in range(30):
+        a, b = rng.normal(size=(2, 3))
+        a, b = a / np.linalg.norm(a), b / np.linalg.norm(b)
+        ya, yb = (
+            np.array(
+                [graph.evaluate(r, dict(zip("xyz", v, strict=True))) for r in roots]
+            )
+            for v in (a, b)
+        )
+        dot = a @ b
+        for l, polynomial in enumerate((1.0, dot, (3 * dot * dot - 1) / 2)):
+            selected = slice(l * l, (l + 1) ** 2)
+            assert ya[selected] @ yb[selected] == pytest.approx(
+                (2 * l + 1) / (4 * math.pi) * polynomial, abs=3e-15
+            )
 
 
 @pytest.mark.parametrize("weighted", [False, True])

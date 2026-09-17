@@ -161,9 +161,9 @@ void run(const core::System& system, unsigned radial, unsigned polar, bool deriv
             {}};
       for (unsigned t = 0; t < expansion.size(); ++t) {
         const auto& v = expansion[t];
-        ao.components[t] = {
-            v.component[0], v.component[1], v.component[2],
-            v.coefficient * molecule::cartesian_component_normalization(v.component)};
+        ao.components[t] = {v.component[0], v.component[1], v.component[2],
+                            generated::ecp_component_coefficient(v.component[0], v.component[1],
+                                                                 v.component[2], v.coefficient)};
       }
       aos.push_back(ao);
     }

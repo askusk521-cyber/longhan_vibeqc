@@ -5,6 +5,7 @@
 #include <numbers>
 #include <stdexcept>
 
+#include "generated_ecp_ao.cuh"
 #include "molecule/basis.hpp"
 
 namespace vibeqc::integrals {
@@ -93,21 +94,7 @@ std::array<double, 9> harmonics(double x, double y, double z) {
 
 void ecp_quadrature(unsigned radial, unsigned angular, std::vector<EcpRadialPoint>& radii,
                     std::vector<EcpSpherePoint>& sphere) {
-  if (radial < 16 || radial > 512 || angular < 8 || angular > 96)
-    throw std::invalid_argument("invalid ECP quadrature grid");
-  for (const auto& tw : legendre(radial)) {
-    const double t = (tw[0] + 1) / 2;
-    radii.push_back({t / (1 - t), tw[1] / (2 * (1 - t) * (1 - t))});
-  }
-  const unsigned nphi = 2 * angular;
-  for (const auto& zw : legendre(angular))
-    for (unsigned k = 0; k < nphi; ++k) {
-      const double phi = 2 * pi * k / nphi, s = std::sqrt(1 - zw[0] * zw[0]);
-      EcpSpherePoint p{s * std::cos(phi), s * std::sin(phi), zw[0], zw[1] * 2 * pi / nphi, {}};
-      const auto y = harmonics(p.x, p.y, p.z);
-      std::copy(y.begin(), y.end(), p.harmonics);
-      sphere.push_back(p);
-    }
+  generated::ecp_make_grid(radial, angular, radii, sphere);
 }
 
 EcpData ecp_integrals(const core::System& system, unsigned radial, unsigned angular,

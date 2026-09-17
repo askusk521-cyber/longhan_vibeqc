@@ -845,3 +845,10 @@ acceptance includes repeated cold/changed performance, direct-path failures,
 exact-geometry independent residual coverage, complete work/memory accounting,
 and v14 qualification of the larger constrained-memory boundary. Small v14
 128-MiB cases and older v12 192-AO results do not establish that last boundary.
+
+PR433 integrates upstream d756162 (#425 ECP host-grid generation) after its
+submission. The only conflict is the generated current CUDA ownership snapshot;
+regeneration preserves both subsystems. Executable DF sources and all frozen
+benchmark arrays remain unchanged. Ownership delta against this new base is
+identical, and 96 CPU benchmark/ownership/ECP IR tests pass after integration.
+Issue434 tracks the deferred strict residual discrepancy independently.
