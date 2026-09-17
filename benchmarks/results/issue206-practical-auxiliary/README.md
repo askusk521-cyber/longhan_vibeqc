@@ -117,6 +117,10 @@ the discrepancy, but this alone does not identify its mathematical source.
 All 44 benchmark tests pass with the frozen native library under finite Slurm.
 An initial ECP test fixture error and the initial missing-library test failure
 are documented in `validation/`; the missing-library diagnostic is retained.
+The initial host suite had 43 passing tests and 1 failure because the fresh
+checkout had no native library; all 44 passed with the frozen library. The
+hash-pinned `initial-validation-observations.json` preserves the original
+observation text, including its spacing, without changing any reported result.
 No pinned GPU Python environment was changed to install test dependencies.
 
 `manifest.json` maps 41 lossless retained records to their original hashes.

@@ -265,8 +265,8 @@ def analyze(directory):
         "timed_solves": 28,
         "controller_exit_code": 1,
         "all_required_numeric_gates_pass": all(p["numeric_pass"] for p in points),
-        "conclusion": "Both practical-basis force cells fail the predeclared 3e-11 force gate; all14 pairs retained. Independent CPU diagnosis localizes the main force discrepancy to native results. Keeps #206 open.",
-        "statistical_scope": "Predeclared ordinary-latency criterion: both relative MAD<=3%, median reduction>=2%, and paired-bootstrap95% lower bound>2%,10000 resamples with NumPy default_rng(206). Numerical failure forbids performance admission. No fixed-work claim.",
+        "conclusion": "Both practical-basis force cells fail the predeclared 3e-11 force gate; all 14 pairs retained. Independent CPU diagnosis localizes the main force discrepancy to native results. Keeps #206 open.",
+        "statistical_scope": "Predeclared ordinary-latency criterion: both relative MAD <= 3%, median reduction >= 2%, and paired-bootstrap 95% lower bound > 2%, 10000 resamples with NumPy default_rng(206). Numerical failure forbids performance admission. No fixed-work claim.",
         "points": points,
     }
 
