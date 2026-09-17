@@ -67,7 +67,6 @@ def compile_resident(plan, compiler, cache, *, extension="", dependencies=()):
     # wheel layouts, and across platforms.  We normalise each path to:
     #   - <repo-root>/<checkout-relative>  when inside the root checkout, or
     #   - python/<package-relative>        when under the installed package.
-    root = Path(__file__).resolve().parents[2]
     from vibeqc_compiler.common.paths import source_root as _source_root
 
     def _logical_name(path):
