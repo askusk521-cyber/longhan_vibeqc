@@ -47,7 +47,7 @@ vibeqc_status select_occupied_response_factors(CudaDensityFittingJkPlan& plan, s
                                                const CudaDfFinalStateToken* requested,
                                                std::span<const DensityFittingDensityResponse> terms,
                                                std::size_t maximum_bytes,
-                                               CudaDfResponseBuffers& buffers,
+                                               CudaDfOccupiedResponseView& view,
                                                std::string& detail) {
   auto* state = static_cast<PersistentScfState*>(plan.persistent_scf_state);
   if (!requested || !state || !state->occupied_exchange || !plan.occupied_scf_reserved ||
@@ -71,7 +71,6 @@ vibeqc_status select_occupied_response_factors(CudaDensityFittingJkPlan& plan, s
     return static_cast<std::size_t>(spin ? state->factor_beta_ranks[system]
                                          : state->factor_alpha_ranks[system]);
   };
-  std::size_t projected = 0;
   for (unsigned spin = 0; spin < spins; ++spin) {
     const auto t = first + spin;
     const auto r = rank(spin);
@@ -80,12 +79,7 @@ vibeqc_status select_occupied_response_factors(CudaDensityFittingJkPlan& plan, s
         (state->unrestricted && terms[t].coulomb_coefficient != 0.0) ||
         current.identity.occupied[spin] != r)
       return VIBEQC_STATUS_SUCCESS;
-    if (r * r > buffers.exchange_capacity() / plan.naux) return VIBEQC_STATUS_SUCCESS;
-    projected += r * r;
   }
-  // Both spin projections coexist in one existing tensor. Saturated UHF
-  // ranks that exceed this capacity keep the dense reference route.
-  if (projected > buffers.staging_capacity() / plan.naux) return VIBEQC_STATUS_SUCCESS;
   try {
     std::vector<double> canonical(spins * matrix);
     std::uint32_t generations[2]{};
@@ -130,14 +124,16 @@ vibeqc_status select_occupied_response_factors(CudaDensityFittingJkPlan& plan, s
       const auto r = rank(spin);
       const auto* coefficients = spin ? state->d_beta_factor : state->d_alpha_factor;
       if (r && !coefficients) return VIBEQC_STATUS_SUCCESS;
-      buffers.occupied_factors[first + spin] = {
+      view.factors[first + spin] = {
           coefficients
               ? coefficients +
                     system * plan.nbf * (spin ? state->beta_factor_rank : state->alpha_factor_rank)
               : nullptr,
           r, state->unrestricted ? 1.0 : 2.0};
     }
-    buffers.occupied_response = true;
+    view.nbf = plan.nbf;
+    view.naux = plan.naux;
+    view.owner_identity = plan.factor_basis_identity;
     runtime::cuda_trace::trace_counter("validated_density_generations", spins);
     runtime::cuda_trace::trace_counter("density_generation",
                                        current.identity.factor.density_generation);
@@ -234,14 +230,14 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
   CudaDfPackedRawTensorView packed_raw;
   const char* raw_reuse_control = std::getenv("VIBEQC_DF_RAW_REUSE");
   if (packed_resident && (!raw_reuse_control || std::string_view(raw_reuse_control) == "auto")) {
-    packed_raw = {
-        plan->packed_raw + system * plan->stored_tensor_elements_per_system,
-        plan->nbf,
-        plan->naux,
-        plan->stored_pair_count,
-        plan->factor_basis_identity,
-        {plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
-         plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold}};
+    packed_raw = {plan->packed_raw + system * plan->stored_tensor_elements_per_system,
+                  plan->nbf,
+                  plan->naux,
+                  plan->stored_pair_count,
+                  plan->factor_basis_identity,
+                  {plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
+                   plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold,
+                   plan->metric_full_rank[system] != 0, plan->factor_basis_identity}};
   }
   const bool matching_source =
       plan->response_host_raw && plan->response_host_raw == raw_a.data() &&
@@ -292,13 +288,30 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
           1,
           plan->factor_basis_identity,
           {plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
-           plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold}};
+           plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold,
+           plan->metric_full_rank[system] != 0, plan->factor_basis_identity}};
     }
   }
   if (borrow && (space == "occupied" || (space == "auto" && automatic_occupied))) {
+    CudaDfOccupiedResponseView factors;
     const auto selected = select_occupied_response_factors(*plan, system, final_state, terms,
-                                                           maximum_bytes, buffers, detail);
+                                                           maximum_bytes, factors, detail);
     if (selected != VIBEQC_STATUS_SUCCESS) return selected;
+    // Validation authorizes immutable factors, not arbitrary mutable capacity.
+    // Both spin projections must still fit the actual resident scratch lease.
+    std::size_t projected = 0;
+    bool fits = factors.owner_identity != 0;
+    for (const auto& factor : factors.factors) {
+      const auto rr = factor.rank * factor.rank;
+      fits = fits && rr <= buffers.exchange_capacity() / plan->naux &&
+             rr <= buffers.staging_capacity() / plan->naux - projected;
+      if (!fits) break;
+      projected += rr;
+    }
+    if (fits) {
+      buffers.occupied_factors = factors.factors;
+      buffers.occupied_response = true;
+    }
   }
   // Packed scratch is not a dense all-Q allocation. Invalid/stale/corrected
   // factors retain the exact bounded raw loader instead of widening storage.
@@ -335,9 +348,36 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
       detail = "DF metric rank crossing: retained/discarded subspaces are unresolved";
       return VIBEQC_STATUS_NUMERICAL_FAILURE;
     }
-    const CudaDfMetricView metric{
-        plan->inverse_square_roots + offset, plan->metric_eigenvectors + offset,
-        plan->metric_eigenvalues + system * plan->naux, plan->metric_relative_threshold};
+    const CudaDfMetricView metric{plan->inverse_square_roots + offset,
+                                  plan->metric_eigenvectors + offset,
+                                  plan->metric_eigenvalues + system * plan->naux,
+                                  plan->metric_relative_threshold,
+                                  plan->metric_full_rank[system] != 0,
+                                  plan->factor_basis_identity};
+    CudaDfWhitenedTensorView whitened;
+    if (!plan->streamed && plan->three_center && metric.full_rank) {
+      // SCF and force share the plan stream; this resident forward tensor is
+      // immutable until the entire prepared geometry is replaced. Borrowing it
+      // lets a smaller response panel avoid repeated raw integral generation.
+      whitened = {plan->three_center + system * plan->stored_tensor_elements_per_system,
+                  plan->nbf,
+                  plan->naux,
+                  plan->stored_pair_count,
+                  plan->value_storage.pairs == DfPairStorage::SymmetricLower,
+                  plan->factor_basis_identity,
+                  metric};
+    }
+    CudaDfOccupiedResponseView streamed_factors;
+    if (!borrow && plan->integral_source && plan->streamed && metric.full_rank &&
+        space != "dense") {
+      // A streamed value plan has no all-Q raw or symmetric-C owner to lend.
+      // It can still lend validated canonical C while the response bridge
+      // budgets its own much smaller C^T A_P C projections. Never lend the
+      // streamed K eigenbasis projection as if it were symmetric whitening.
+      const auto selected = select_occupied_response_factors(
+          *plan, system, final_state, terms, maximum_bytes, streamed_factors, detail);
+      if (selected != VIBEQC_STATUS_SUCCESS) return selected;
+    }
     // The diagnostic upload route writes the former raw scratch buffer.
     // Revoke its immutable view before submission, so an interrupted copy
     // cannot leave a previously valid cache available to the next force.
@@ -347,7 +387,8 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
         orbital, auxiliary, raw_a, {}, {}, terms, plan->metric_relative_threshold, schedule,
         maximum_bytes, maximum_auxiliary_tile, derivative, detail, resources, &metric,
         reinterpret_cast<void*>(plan->blas), borrow ? &buffers : nullptr,
-        packed_raw.data ? &packed_raw : nullptr);
+        packed_raw.data ? &packed_raw : nullptr, whitened.data ? &whitened : nullptr,
+        streamed_factors.owner_identity ? &streamed_factors : nullptr);
     if (status == VIBEQC_STATUS_SUCCESS && borrow && matching_source &&
         plan->resident_exchange_enabled && plan->batch_size == 1 &&
         plan->nbf * plan->naux <= static_cast<std::size_t>(std::numeric_limits<int>::max()))

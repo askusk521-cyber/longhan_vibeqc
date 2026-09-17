@@ -238,14 +238,14 @@
     },
     {
       "path": "src/scf/cuda/df_gradient_bridge.cu",
-      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink. Primitive-signature metadata, exact measured-profile selection and bounded packet dispatch remain conservatively counted in this method-glue owner; they do not introduce derivative equations.",
+      "reason": "External-weight staging and ABI around native HF density/spectral-inverse response, conservatively counted as scientific method glue. Integral and center arithmetic is compiler-owned. Opt-in bounded pinned host panels use event-protected recycling and blocked byte gathers; original drain/gather and gradient-copy probes retain causal attribution. Layout, budget and BLAS-provider glue remain in this conservative classification; no handwritten derivative evaluator is added. Borrowed full J/K tensors remain charged to the value plan and are reported separately from bounded new response scratch. Packed-response selection, shell-boundary panel clipping and dense diagnostic handoff reuse that same owner and generated derivative sink. Primitive-signature metadata, exact measured-profile selection and bounded packet dispatch remain conservatively counted in this method-glue owner; they do not introduce derivative equations. Full-rank response admission now selects inverse-applied linear factors before quadratic products; the bounded general and canonical-factor routes report their own source passes, scratch and provenance. Rank-deficient/crossing paths retain the spectral owner and explicit rejection rules.",
       "regions": [],
       "role": "scientific",
       "subsystem": "df_derivatives"
     },
     {
       "path": "src/scf/cuda/df_response_weights.cu",
-      "reason": "Native HF density response and spectral Frechet method adapters. FP64 cuBLAS computes charge/density products and auxiliary contractions. Eligible resident plans borrow existing full J/K scratch, evaluate each exchange projection once, and reuse it across response consumers; bounded panels remain for other plans and explicit comparison. Provider, layout and accumulation glue remain conservatively scientific. Integral values and coordinate derivatives retain their generated owners. Qualified occupied response emits packed pairs directly from bounded lower rectangular BLAS blocks, including explicit diagonal overshoot accounting; no dense weight panel is generated and then compressed.",
+      "reason": "Native HF density response and spectral Frechet method adapters. FP64 cuBLAS computes charge/density products and auxiliary contractions. Eligible resident plans borrow existing full J/K scratch, evaluate each exchange projection once, and reuse it across response consumers; bounded panels remain for other plans and explicit comparison. Provider, layout and accumulation glue remain conservatively scientific. Integral values and coordinate derivatives retain their generated owners. Qualified occupied response emits packed pairs directly from bounded lower rectangular BLAS blocks, including explicit diagonal overshoot accounting; no dense weight panel is generated and then compressed. Full-rank dense and bounded responses apply metric eigenfactors before density/Gram products to avoid amplified quadratic rounding. These BLAS method adapters remain conservatively scientific; retained spectral rank-deficient and serial-reference alternatives have separate numerical roles.",
       "regions": [
         {
           "start": "__global__ void exchange_metric_kernel(",
@@ -463,8 +463,15 @@
       "path": "src/scf/cuda/df_metric_kernels.cu",
       "role": "runtime",
       "subsystem": "scf_tensor",
-      "reason": "DF runtime storage/launch boundary extracted without changing arithmetic or ownership.",
-      "regions": []
+      "reason": "Runtime storage and launch glue for CUDA DF metric factors. The new physical inverse/whitening projection kernel is separately counted as scientific; existing storage/symmetrization launch ownership is unchanged.",
+      "regions": [
+        {
+          "start": "__global__ void scale_metric_projection_kernel(",
+          "stop": "void launch_symmetrize_metrics_kernel(",
+          "role": "scientific",
+          "reason": "New FP64 per-eigendirection inverse or inverse-root scaling for a caller-validated full-rank metric. This bounded matrix adapter is native scientific arithmetic, with no integral evaluator or new rank/cutoff policy. Only newly added code is reclassified."
+        }
+      ]
     },
     {
       "path": "src/scf/cuda/df_metric_kernels.hpp",

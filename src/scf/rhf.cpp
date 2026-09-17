@@ -596,6 +596,9 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
   runtime::df_progress::number("final_eigen_solves", selected.eigen_solves);
   runtime::df_progress::number("final_density_updates", selected.density_updates);
   runtime::df_progress::number("final_candidate_rejections", selected.candidate_rejections);
+  runtime::df_progress::number("final_fixed_point_checks", selected.fixed_point_checks);
+  runtime::df_progress::number("final_fixed_point_eigen_solves", selected.fixed_point_eigen_solves);
+  runtime::df_progress::number("final_fixed_point_rejections", selected.fixed_point_rejections);
   host_trace::Region accepted(selected.reused ? "final_state_reuse" : "final_state_corrected", n);
   // The intrusive journal retains the actual physical gate at the returned
   // determinant; ordinary endpoint timing adds neither formatting nor I/O.
@@ -608,6 +611,9 @@ EigenResult device_df_eigen(const Matrix& matrix, const Matrix* overlap,
     };
     record("final_maximum_commutator", selected.state->diagnostic.maximum_commutator);
     record("final_density_rms", selected.state->diagnostic.density_rms);
+    record("final_maximum_fixed_point_density_error",
+           selected.state->diagnostic.maximum_fixed_point_density_error);
+    record("final_fixed_point_density_rms", selected.state->diagnostic.fixed_point_density_rms);
     record("final_maximum_idempotency_error", selected.state->diagnostic.maximum_idempotency_error);
     runtime::df_progress::number("final_density_generation",
                                  selected.state->identity.factor.density_generation);
