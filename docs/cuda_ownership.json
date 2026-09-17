@@ -1456,6 +1456,13 @@
       "subsystem": "scf_tensor",
       "reason": "Checked owner-facing launch boundary for packed value density, expansion and projection.",
       "regions": []
+    },
+    {
+      "path": "src/tensor/cuda_resident.cuh",
+      "reason": "Resident span transfer and checked device-to-device copy over the existing tensor Context owner; host-side allocation-bound and lock contracts with no scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
     }
   ],
   "generated_families": [
