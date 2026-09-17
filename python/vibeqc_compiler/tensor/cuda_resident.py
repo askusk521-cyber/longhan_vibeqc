@@ -64,36 +64,37 @@ def compile_resident(plan, compiler, cache, *, extension="", dependencies=()):
     paths = [*[Path(p) for p in dependencies], Path(emit_module.__file__), header]
     # Every dependency gets a stable logical name so the identity is the same
     # across different source-checkout prefixes, between source and installed-
-    # wheel layouts, and across platforms.  We normalise each path to:
-    #   - <repo-root>/<checkout-relative>  when inside the root checkout, or
-    #   - python/<package-relative>        when under the installed package.
-    from vibeqc_compiler.common.paths import source_root as _source_root
+    # wheel layouts, and across platforms.  We use the same pattern as
+    # ``source_hashes(assets=...)``: files under ``PACKAGE`` are named
+    # ``python/vibeqc_compiler/<rest>``; non-package assets use their
+    # repository-relative name (``src/tensor/cuda_resident.cuh``).
+    from vibeqc_compiler.common.paths import PACKAGE as _PKG
 
     def _logical_name(path):
+        # Is it under the installed package tree?
         try:
-            checkout = _source_root()
+            rel = Path(os.path.relpath(path, _PKG)).as_posix()
         except ValueError:
-            # installed: normalise under the package tree
-            from vibeqc_compiler.common.paths import PACKAGE
+            rel = None
+        if rel is not None and not rel.startswith(".."):
+            # Package assets carry an ``assets/`` prefix we strip so the
+            # installed key matches the checkout key for the same header.
+            if rel.startswith("assets/"):
+                rel = rel[len("assets/") :]
+            else:
+                rel = f"python/vibeqc_compiler/{rel}"
+            return rel
+        # Not under the package tree — must be under the checkout root.
+        from vibeqc_compiler.common.paths import source_root
 
-            rel = Path(os.path.relpath(path, PACKAGE)).as_posix()
-            if rel.startswith(".."):
-                raise ValueError(
-                    f"resident dependency {path} is not inside the installed package root"
-                )
-            return f"python/{rel}"
-        try:
-            rel = Path(os.path.relpath(path, checkout)).as_posix()
-        except ValueError:
+        root = source_root()
+        rel = Path(os.path.relpath(path, root)).as_posix()
+        if rel.startswith(".."):
             raise ValueError(
-                f"cannot normalise resident dependency {path}: outside source checkout"
-            ) from None
-        if rel.as_posix().startswith(".."):
-            raise ValueError(
-                f"resident dependency {path} is outside the source checkout;"
-                " pass an absolute or checkout-relative dependency path"
+                f"resident dependency {path} is outside both the source"
+                " checkout and the installed package"
             )
-        return rel.as_posix()
+        return rel
 
     identity = {
         "schema": RESIDENT_SCHEMA,

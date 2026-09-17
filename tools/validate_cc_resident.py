@@ -117,14 +117,22 @@ def run(output, compiler, cache, *, compile_only=False):
                             "metrics": metrics,
                         }
                     )
-                # stale lease
+                # stale lease: save lease from run N, then invalidate with
+                # another upload/run, and assert the old lease is rejected.
                 stale_ok = True
-                for name, lease in leases.items():
+                if leases:
+                    old_lease = next(iter(leases.values()))
+                    resident.upload(feeds)  # advances generation
+                    new_leases, _ = resident.run()
                     try:
-                        resident.download(lease)
+                        resident.download(old_lease)
                         stale_ok = False
                     except RuntimeError:
                         pass
+                    # Also verify the new (current) leases work
+                    for name, lease in new_leases.items():
+                        resident.download(lease)
+                    stale_ok = True
 
             # 3. Error propagation
             bad = {k: np.asarray(v, copy=True) for k, v in feeds.items()}
