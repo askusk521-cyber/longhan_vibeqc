@@ -8,6 +8,7 @@ suite.
 """
 
 import inspect
+
 from vibeqc_compiler.common.cuda_target import cuda_target_info
 from vibeqc_compiler.tensor import (
     Index,
@@ -22,7 +23,6 @@ from vibeqc_compiler.tensor import (
 from vibeqc_compiler.tensor.cuda_plan import plan_cuda
 from vibeqc_compiler.tensor.cuda_resident import (
     DeviceTensor,
-    PreparedResident,
     _check_lease,
 )
 from vibeqc_compiler.tensor.cuda_resident_emit import resident_source
@@ -182,7 +182,6 @@ def test_lease_is_invalidated_by_generation_or_readiness():
     owner = _FakeOwner()
     owner.plan = plan_cuda(doubled_pair_program(), TARGET, max_bytes=1 << 26)
     # generation mismatch
-    from vibeqc_compiler.tensor.cuda_resident import DeviceTensor
 
     lease = DeviceTensor(owner, "squared", 99)
     with _pytest.raises(RuntimeError, match="stale"):
@@ -201,7 +200,6 @@ def test_download_before_run_or_after_invalidation_is_rejected():
     rejected — the arena is not safe to read before ``run()`` succeeds or
     after a later ``upload``/failed run invalidated ``_ready``."""
     import pytest as _pytest
-    from vibeqc_compiler.tensor.cuda_resident import DeviceTensor
 
     class _FakeOwner:
         _pointer = object()
@@ -231,7 +229,6 @@ def test_compile_resident_source_identity_rejects_external_dependencies():
     or installed-package roots — a silent fallback to a relative path with
     `..` components would embed filesystem prefixes in the artifact identity
     and violate the compiler determinism contract."""
-    from vibeqc_compiler.common.paths import asset_path, source_root
     from vibeqc_compiler.tensor import cuda_resident as m
 
     # Locate the helper (it lives inside compile_resident).

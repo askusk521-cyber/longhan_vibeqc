@@ -202,7 +202,9 @@ def _check_lease(owner, value):
     path checks readiness separately.
     """
     if value is None:
-        raise TypeError("download requires a DeviceTensor lease; pass name=... only with a valid lease")
+        raise TypeError(
+            "download requires a DeviceTensor lease; pass name=... only with a valid lease"
+        )
     if value.owner is not owner:
         raise ValueError("resident output owner mismatch")
     value._step()  # checks _ready and generation

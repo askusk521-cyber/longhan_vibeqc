@@ -179,7 +179,9 @@ def run(output, compiler, cache, *, compile_only=False):
             print(f"    [{bname}] PASSED={all_passed}", flush=True)
 
     manifest["passed"] = bool(manifest["cases"]) and all(
-        c.get("passed", False) if not c.get("compiled", False) else c.get("compiled", False)
+        c.get("passed", False)
+        if not c.get("compiled", False)
+        else c.get("compiled", False)
         for c in manifest["cases"]
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
