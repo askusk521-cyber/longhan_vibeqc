@@ -87,8 +87,12 @@ def resident_source(plan, *, prefix="", extension=""):
     *successful* evaluation.
     """
     for _, i in plan.outputs:
-        if plan.steps[i].virtual:
-            raise ValueError("resident outputs require materialized steps")
+        step = plan.steps[i]
+        if step.virtual or step.last_use != len(plan.steps):
+            raise ValueError(
+                "resident outputs must be materialized and pinned"
+                " for the full plan lifetime"
+            )
     for i in plan.inputs:
         step = plan.steps[i]
         if step.virtual or step.last_use != len(plan.steps):
