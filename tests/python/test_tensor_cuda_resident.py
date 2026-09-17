@@ -84,11 +84,21 @@ def test_resident_spans_match_the_pinned_plan_offsets():
 
 
 def test_resident_run_propagates_the_ordinary_status():
-    """A native non-finite/division error must not be reported as success."""
+    """A native non-finite/division error must not be reported as success.
+
+    The resident path inlines the generated launch sequence directly
+    (without the ordinary H2D/D2H staging copies), so it does not shell
+    out to ``tensor_run``.  The inline error boundary is identical: it
+    reads ``arithmetic_error`` from the device, throws when non-zero, and
+    the ``catch`` block synchronises the stream before returning through
+    ``vibeqc_tensor::error_text``.
+    """
     plan = plan_cuda(doubled_pair_program(), TARGET, max_bytes=1 << 26)
     source = resident_source(plan)
-    assert "const int status =" in source
-    assert "if (status) return status;" in source
+    assert "arithmetic_error" in source
+    assert "vibeqc_tensor::error_text(error, size, e.what()); return 1;" in source
+    assert "try {" in source
+    assert "throw std::runtime_error" in source
 
 
 def test_resident_validation_covers_every_input_symmetry():

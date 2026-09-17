@@ -3,36 +3,31 @@
 No generated-source replacement or second mathematical lowering: this module
 wraps the complete TU produced by
 :func:`vibeqc_compiler.tensor.cuda_emit.emit_cuda` and appends span-based
-upload/run/download entry points around the same ``Context`` owner. The
-resident run path re-enters the *ordinary* generated ``tensor_run`` with
-input/output pointers pinned into the retained arena, so kernel launches,
-gemm handling, the arithmetic error boundary and metrics are identical to
-the host-staged path.
+upload/run/download entry points around the same ``Context`` owner.
 
-Physical spans are the plan's pinned materialized step offsets. Each named
-input/output slot maps to exactly one ``(offset, bytes)`` span emitted at
-compile time; a caller cannot edit the table, and a mismatched length fails
-the checked span lookup before any copy runs.
+The ordinary ``tensor_run`` performs explicit H2D/D2H staging copies at every
+call — device-resident iteration cannot use it.  *resident_run* therefore
+inlines the generated kernel launch sequence directly: the same mutex guard,
+begin/end events, per-section timers, gemm contractions, error-memset and
+arithmetic-error readback, but *without* the input/output staging copies.
+Inputs are uploaded once through ``resident_upload``; outputs are downloaded
+on demand through ``resident_download``.  Every kernel, coefficient, tensor
+offset, alignment and error boundary is identical to the ordinary path — only
+the per-call transfers are removed.
 
-The ordinary evaluation's status is propagated unchanged: a native
-non-finite/division-by-zero boundary or an allocation-accounting mismatch is
-reported to the caller exactly as it is on the host-staged path, never
-swallowed. ``extension`` may add plan-specific tables and kernels; when it
-defines ``vibeqc_resident_post_run`` the action runs after a *successful*
-evaluation and its status is propagated too.
+Physical spans are the plan's pinned materialized step offsets, emitted to
+match exactly one named slot.  ``extension`` may add plan-specific tables and
+kernels; when it defines ``vibeqc_resident_post_run`` the action runs after a
+*successful* evaluation.
 """
 
+from vibeqc_compiler.tensor.cuda_emit import _launch as _emit_launch
 from vibeqc_compiler.tensor.cuda_emit import emit_cuda
 
 
 def _flat_parts(permuted_axes, shape):
-    """Row-major flat index of a symmetry partner of element ``z``.
-
-    Each axis coordinate is ``(z / stride[axis]) % extent[axis]``; the
-    partner's flat index sums its coordinates weighted by the target-axis
-    stride ``stride[permutation.index(axis)]``, matching the C-order
-    symmetry verification the ordinary interpreter performs.
-    """
+    """Row-major flat index of a symmetry partner — same arithmetic as the
+    ordinary interpreter's C-order symmetry verification."""
     strides = []
     for axis in range(len(shape)):
         tail = 1
@@ -49,7 +44,8 @@ def _flat_parts(permuted_axes, shape):
 
 
 def _validation_body(plan):
-    """Emit one finiteness/symmetry validation kernel per input slot."""
+    """Emit one finiteness/symmetry validation kernel per input slot, matching
+    ``PreparedCuda._validate`` tolerances exactly."""
     validations, calls = [], []
     for slot, i in enumerate(plan.inputs):
         step = plan.steps[i]
@@ -62,7 +58,7 @@ def _validation_body(plan):
                 f"fabs(value - ({symmetry.sign}) * peer) > 1e-11 + "
                 f"1e-10 * fabs(peer)) atomicCAS(error, 0, {i + 1});"
             )
-        body = "".join(f"{{{comparison}}}" for comparison in comparisons)
+        body = "".join(f"{{{c}}}" for c in comparisons)
         validations.append(f"""
 __global__ void resident_validate_{slot}(unsigned char* p, int* error) {{
     auto* values = reinterpret_cast<const double*>(p + {step.offset});
@@ -86,18 +82,15 @@ def resident_source(plan, *, prefix="", extension=""):
     """Append the resident ABI to the verified ordinary TU.
 
     ``prefix`` must match the value used to compile the ordinary artifact.
-    ``extension`` supplies optional plan-specific tables/kernels. If it
+    ``extension`` supplies optional plan-specific tables/kernels.  If it
     defines ``vibeqc_resident_post_run``, that action runs after every
-    *successful* ordinary evaluation (for example a bounded scalar residual
-    reduction), and it must only touch the plan's own arena and reservation.
-    A non-zero return from either the ordinary evaluation or the extension
-    action is propagated; the error buffer already carries its detail.
+    *successful* evaluation.
     """
     for _, i in plan.outputs:
         if plan.steps[i].virtual:
             raise ValueError("resident outputs require materialized steps")
     base = emit_cuda(plan, symbol_prefix=prefix)
-    validations, _validation_calls = _validation_body(plan)
+    validations, _vc = _validation_body(plan)
 
     inputs = [plan.steps[i] for i in plan.inputs]
     outputs = [plan.steps[i] for _, i in plan.outputs]
@@ -105,18 +98,20 @@ def resident_source(plan, *, prefix="", extension=""):
     def span_rows(steps):
         return ", ".join(f"{{{s.offset}ULL,{s.node.spec.size * 8}ULL}}" for s in steps)
 
-    in_ptrs = (
-        ", ".join(
-            f"reinterpret_cast<double*>(ctx.arena + {s.offset}ULL)" for s in inputs
+    # The ordinary ``tensor_run`` performs H2D/D2H copies around the launch
+    # sequence.  Resident execution skips those copies by inlining the
+    # generated kernels directly, reusing the same section-timer/metrics
+    # pattern.  Every contraction, gemm call, offset and alignment is
+    # identical — only the per-call staging is absent.
+    launches = "".join(_emit_launch(plan, i, prefix) for i in range(len(plan.steps)))
+    validation_block = ""
+    if _vc:
+        validation_block = (
+            "ctx.section(profile, metrics.input_ms, [&] {\n"
+            + "".join(f"    {call}\n" for call in _vc)
+            + "}});"
         )
-        or "nullptr"
-    )
-    out_ptrs = (
-        ", ".join(
-            f"reinterpret_cast<double*>(ctx.arena + {s.offset}ULL)" for s in outputs
-        )
-        or "nullptr"
-    )
+
     if extension and "__VIBEQC_RESIDENT_POST_RUN_DECL__" in extension:
         post_run = (
             "int status = vibeqc_resident_post_run(pointer, profile, result, error, size);"
@@ -124,6 +119,7 @@ def resident_source(plan, *, prefix="", extension=""):
         )
     else:
         post_run = ""
+
     return f"""{base}
 
 #include "cuda_resident.cuh"
@@ -150,14 +146,44 @@ extern "C" int resident_run(void* pointer, int profile, Metrics* result, char* e
         vibeqc_tensor::error_text(error, size, "null resident argument"); return 1;
     }}
     auto& ctx = *static_cast<Context*>(pointer);
-    const double* stored_inputs[{max(1, len(inputs))}] = {{ {in_ptrs} }};
-    double* stored_outputs[{max(1, len(outputs))}] = {{ {out_ptrs} }};
-    const int status =
-        {prefix}tensor_run(pointer, stored_inputs, stored_outputs, profile, result, error, size);
-    (void)ctx;
-    if (status) return status;
-    {post_run}
-    return 0;
+    std::unique_lock<std::mutex> lock(ctx.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {{
+        vibeqc_tensor::error_text(error, size, "resident plan is busy"); return 1;
+    }}
+    try {{
+        ctx.check_device();
+        Metrics metrics;
+        metrics.owned_device_bytes = ctx.metrics.owned_device_bytes;
+        metrics.provider_retained_bytes = ctx.metrics.provider_retained_bytes;
+        metrics.prepare_device_delta = ctx.metrics.prepare_device_delta;
+        auto* p = ctx.arena;
+        cuda_check(cudaEventRecord(ctx.begin, ctx.stream));
+        cuda_check(cudaMemsetAsync(ctx.error, 0, sizeof(int), ctx.stream));
+        {validation_block}
+        {launches}
+        int arithmetic_error = 0;
+        cuda_check(cudaMemcpyAsync(&arithmetic_error, ctx.error, sizeof(int),
+                                   cudaMemcpyDeviceToHost, ctx.stream));
+        cuda_check(cudaEventRecord(ctx.end, ctx.stream));
+        cuda_check(cudaEventSynchronize(ctx.end));
+        float elapsed = 0;
+        cuda_check(cudaEventElapsedTime(&elapsed, ctx.begin, ctx.end));
+        metrics.device_ms = elapsed;
+        metrics.observed_device_delta = std::max(ctx.metrics.prepare_device_delta,
+                                                  ctx.device_delta());
+        *result = metrics;
+        if (arithmetic_error)
+            throw std::runtime_error(std::string(
+                arithmetic_error < 0 ? "tensor division by zero at step "
+                                     : "non-finite tensor at step ")
+                + std::to_string(std::abs(arithmetic_error) - 1));
+        (void)ctx;
+        {post_run}
+        return 0;
+    }} catch (const std::exception& e) {{
+        cudaStreamSynchronize(ctx.stream);
+        vibeqc_tensor::error_text(error, size, e.what()); return 1;
+    }}
 }}
 extern "C" int resident_download(void* pointer, size_t slot, void* host, size_t bytes,
                                  char* error, size_t size) {{
