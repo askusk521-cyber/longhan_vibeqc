@@ -43,6 +43,7 @@ def run(output, compiler, cache, *, compile_only=False):
         "numpy": np.__version__,
         "reference_sha256": file_hash(reference_path),
         "compiler_target": compiler.target.to_payload(),
+        "runtime_device": None,  # populated by first non-compile run
         "cases": [],
     }
 
@@ -97,6 +98,11 @@ def run(output, compiler, cache, *, compile_only=False):
                 "key": artifact.metadata["key"],
                 "binary_sha256": artifact.metadata["binary_sha256"],
             }
+            if manifest["runtime_device"] is None:
+                manifest["runtime_device"] = getattr(
+                    ordinary.executor, "device", None
+                )
+            record["runtime_device"] = manifest["runtime_device"]
             parity = []
             with PreparedResident(p, artifact) as resident:
                 resident.upload(feeds)
