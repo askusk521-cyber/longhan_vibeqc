@@ -62,6 +62,31 @@ def compile_resident(plan, compiler, cache, *, extension="", dependencies=()):
     # an installed wheel must both find them.
     header = asset_path("src/tensor/cuda_resident.cuh")
     paths = [*[Path(p) for p in dependencies], Path(emit_module.__file__), header]
+    # Every dependency gets a stable logical name so the identity is the same
+    # across different source-checkout prefixes, between source and installed-
+    # wheel layouts, and across platforms.  We normalise each path to:
+    #   - <repo-root>/<checkout-relative>  when inside the root checkout, or
+    #   - python/<package-relative>        when under the installed package.
+    root = Path(__file__).resolve().parents[2]
+    from vibeqc_compiler.common.paths import source_root as _source_root
+
+    def _logical_name(path):
+        try:
+            checkout = _source_root()
+        except ValueError:
+            # installed: normalise under the package tree
+            from vibeqc_compiler.common.paths import PACKAGE
+
+            rel = Path(os.path.relpath(path, PACKAGE)).as_posix()
+            return f"python/{rel}"
+        try:
+            rel = Path(os.path.relpath(path, checkout)).as_posix()
+            if not rel.startswith(".."):
+                return rel
+        except ValueError:
+            pass
+        return Path(os.path.relpath(path, root)).as_posix()
+
     identity = {
         "schema": RESIDENT_SCHEMA,
         "base": base.metadata["key"],
@@ -69,15 +94,7 @@ def compile_resident(plan, compiler, cache, *, extension="", dependencies=()):
         "generated": canonical_hash(source),
         "extension": canonical_hash(extension),
         "sources": {
-            name: file_hash(path)
-            for name, path in sorted(
-                (
-                    str(p).replace("\\", "/").rsplit("/python/", 1)[-1],
-                    p,
-                )
-                for p in paths
-                if p.is_file()
-            )
+            _logical_name(path): file_hash(path) for path in paths if path.is_file()
         },
     }
     key = canonical_hash(identity)
@@ -165,6 +182,19 @@ class DeviceTensor:
 
     def to_host(self):
         return self.owner.download(self)
+
+
+def _check_lease(owner, value):
+    """Validate a DeviceTensor lease: owner + readiness + generation.
+
+    Raises RuntimeError when the lease is stale (generation mismatch or the
+    plan is not ready), or ValueError when it belongs to another owner.
+    """
+    if value is None:
+        return
+    if value.owner is not owner:
+        raise ValueError("resident output owner mismatch")
+    value._step()  # checks _ready and generation
 
 
 class PreparedResident(PreparedCuda):
@@ -291,10 +321,15 @@ class PreparedResident(PreparedCuda):
             }, metrics
 
     def download(self, value, name=None):
-        """Download exactly one named output the caller asked for."""
+        """Download exactly one named output the caller asked for.
+
+        ``_check_lease`` validates ownership, readiness and the precise
+        generation recorded when the lease was returned by ``run``.  A
+        lease from run N is rejected after a later ``upload`` or ``run``
+        invalidated it.
+        """
         with self._lock:
-            if value is not None and value.owner is not self:
-                raise ValueError("resident output owner mismatch")
+            _check_lease(self, value)
             target = name if name is not None else value.name
             if value is not None and target != value.name:
                 raise ValueError("resident output name/target mismatch")

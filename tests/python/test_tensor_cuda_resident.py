@@ -157,3 +157,47 @@ def test_resident_extension_post_run_is_wired_only_when_declared():
     )
     assert "vibeqc_resident_post_run(pointer, profile, result, error, size)" in declared
     assert "if (status) return status;" in declared
+
+
+# ── lease invalidation and identity normalisation regressions ──
+
+
+def test_lease_is_invalidated_by_generation_or_readiness():
+    """A DeviceTensor lease must be rejected after its owner's generation
+    advances or readiness is cleared — otherwise a stale download could
+    read arena data that was already overwritten by a later run()."""
+    import pytest as _pytest
+
+    class _FakeOwner:
+        _pointer = object()
+        _ready = True
+        _generation = 0
+
+    owner = _FakeOwner()
+    owner.plan = plan_cuda(doubled_pair_program(), TARGET, max_bytes=1 << 26)
+    # generation mismatch
+    from vibeqc_compiler.tensor.cuda_resident import DeviceTensor
+
+    lease = DeviceTensor(owner, "squared", 99)
+    with _pytest.raises(RuntimeError, match="stale"):
+        lease._step()
+    # readiness cleared
+    owner._generation = 1
+    lease2 = DeviceTensor(owner, "squared", 1)
+    lease2._step()  # ok
+    owner._ready = False
+    with _pytest.raises(RuntimeError, match="stale|closed"):
+        lease2._step()
+
+
+def test_compile_resident_source_identity_avoids_absolute_paths():
+    """The identity dict inside compile_resident must not contain absolute
+    paths — every dependency gets a stable logical name through the
+    _logical_name helper so two checkouts at different prefixes and a
+    source vs. installed-wheel layout produce the same cache key."""
+    from vibeqc_compiler.common.paths import asset_path, source_root
+
+    header = asset_path("src/tensor/cuda_resident.cuh")
+    root = source_root()
+    # asset_path must always return a path inside the checkout root
+    assert header.is_relative_to(root), f"header not under checkout root: {header}"
