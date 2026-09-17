@@ -89,6 +89,12 @@ def resident_source(plan, *, prefix="", extension=""):
     for _, i in plan.outputs:
         if plan.steps[i].virtual:
             raise ValueError("resident outputs require materialized steps")
+    for i in plan.inputs:
+        step = plan.steps[i]
+        if step.virtual or step.last_use != len(plan.steps):
+            raise ValueError(
+                "resident inputs must be pinned for the full plan lifetime"
+            )
     base = emit_cuda(plan, symbol_prefix=prefix)
     validations, _vc = _validation_body(plan)
 

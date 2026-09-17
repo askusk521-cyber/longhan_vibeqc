@@ -132,7 +132,6 @@ def run(output, compiler, cache, *, compile_only=False):
                     # Also verify the new (current) leases work
                     for name, lease in new_leases.items():
                         resident.download(lease)
-                    stale_ok = True
 
             # 3. Error propagation
             bad = {k: np.asarray(v, copy=True) for k, v in feeds.items()}
@@ -143,7 +142,7 @@ def run(output, compiler, cache, *, compile_only=False):
                     rej.upload(bad)
                     rej.run()
                     nonfinite_ok = False
-                except RuntimeError:
+                except (RuntimeError, ValueError):
                     pass
 
             missing_ok = True

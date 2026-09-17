@@ -117,13 +117,17 @@ def compile_resident(plan, compiler, cache, *, extension="", dependencies=()):
             directory = Path(temporary)
             cu, library = directory / "resident.cu", directory / "program.so"
             cu.write_text(source)
+            # The generated TU includes "cuda_runtime.cuh" and the resident
+            # ABI includes "cuda_resident.cuh"; both live in the asset
+            # directory so the include search path works source and wheel.
+            # Extra ``dependencies`` headers must also be resolvable.
+            includes = (base.library.parent, header.parent) + tuple(
+                Path(d).parent.resolve() for d in dependencies
+            )
             result = compiler.compile_shared(
                 cu,
                 library,
-                # The generated TU includes "cuda_runtime.cuh" and the resident
-                # ABI includes "cuda_resident.cuh"; both live in the asset
-                # directory so the include search path works source and wheel.
-                includes=(base.library.parent, header.parent),
+                includes=includes,
                 libraries=("cublas",),
                 options=("--fmad=false",),
             )
