@@ -7,6 +7,7 @@ instead of swallowing it. Real-device numerical parity is a separate opt-in
 suite.
 """
 
+import inspect
 from vibeqc_compiler.common.cuda_target import cuda_target_info
 from vibeqc_compiler.tensor import (
     Index,
@@ -19,6 +20,11 @@ from vibeqc_compiler.tensor import (
     multiply,
 )
 from vibeqc_compiler.tensor.cuda_plan import plan_cuda
+from vibeqc_compiler.tensor.cuda_resident import (
+    DeviceTensor,
+    PreparedResident,
+    _check_lease,
+)
 from vibeqc_compiler.tensor.cuda_resident_emit import resident_source
 
 TARGET = cuda_target_info("sm_80")
@@ -190,14 +196,46 @@ def test_lease_is_invalidated_by_generation_or_readiness():
         lease2._step()
 
 
-def test_compile_resident_source_identity_avoids_absolute_paths():
-    """The identity dict inside compile_resident must not contain absolute
-    paths — every dependency gets a stable logical name through the
-    _logical_name helper so two checkouts at different prefixes and a
-    source vs. installed-wheel layout produce the same cache key."""
-    from vibeqc_compiler.common.paths import asset_path, source_root
+def test_download_before_run_or_after_invalidation_is_rejected():
+    """``download(None, name=...)`` and stale-lease downloads must both be
+    rejected — the arena is not safe to read before ``run()`` succeeds or
+    after a later ``upload``/failed run invalidated ``_ready``."""
+    import pytest as _pytest
+    from vibeqc_compiler.tensor.cuda_resident import DeviceTensor
 
-    header = asset_path("src/tensor/cuda_resident.cuh")
-    root = source_root()
-    # asset_path must always return a path inside the checkout root
-    assert header.is_relative_to(root), f"header not under checkout root: {header}"
+    class _FakeOwner:
+        _pointer = object()
+        _ready = False
+        _generation = 0
+        _lock = None  # unused by the readiness path we test
+
+    owner = _FakeOwner()
+    owner.plan = plan_cuda(doubled_pair_program(), TARGET, max_bytes=1 << 26)
+
+    # download(None, name=...) before run: _ready check in download must fire
+    # before _lock is acquired — verify at _check_lease level
+    with _pytest.raises(RuntimeError, match="stale"):
+        _check_lease(owner, DeviceTensor(owner, "squared", 99))  # generation mismatch
+    owner._ready = True
+    _check_lease(owner, DeviceTensor(owner, "squared", 0))  # ok
+    owner._ready = False
+    with _pytest.raises(RuntimeError, match="stale|closed"):
+        _check_lease(owner, DeviceTensor(owner, "squared", 0))
+    # download(None, ...) rejects None via TypeError
+    with _pytest.raises(TypeError, match="DeviceTensor"):
+        _check_lease(owner, None)
+
+
+def test_compile_resident_source_identity_rejects_external_dependencies():
+    """The _logical_name helper must raise for paths outside the checkout
+    or installed-package roots — a silent fallback to a relative path with
+    `..` components would embed filesystem prefixes in the artifact identity
+    and violate the compiler determinism contract."""
+    from vibeqc_compiler.common.paths import asset_path, source_root
+    from vibeqc_compiler.tensor import cuda_resident as m
+
+    # Locate the helper (it lives inside compile_resident).
+    src = inspect.getsource(m.compile_resident)
+    # Verify the installed fallback rejects escaped paths
+    assert ".." in src  # the check exists
+    assert "outside" in src

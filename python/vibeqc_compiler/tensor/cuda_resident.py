@@ -78,14 +78,23 @@ def compile_resident(plan, compiler, cache, *, extension="", dependencies=()):
             from vibeqc_compiler.common.paths import PACKAGE
 
             rel = Path(os.path.relpath(path, PACKAGE)).as_posix()
+            if rel.startswith(".."):
+                raise ValueError(
+                    f"resident dependency {path} is not inside the installed package root"
+                )
             return f"python/{rel}"
         try:
             rel = Path(os.path.relpath(path, checkout)).as_posix()
-            if not rel.startswith(".."):
-                return rel
         except ValueError:
-            pass
-        return Path(os.path.relpath(path, root)).as_posix()
+            raise ValueError(
+                f"cannot normalise resident dependency {path}: outside source checkout"
+            ) from None
+        if rel.as_posix().startswith(".."):
+            raise ValueError(
+                f"resident dependency {path} is outside the source checkout;"
+                " pass an absolute or checkout-relative dependency path"
+            )
+        return rel.as_posix()
 
     identity = {
         "schema": RESIDENT_SCHEMA,
@@ -189,9 +198,11 @@ def _check_lease(owner, value):
 
     Raises RuntimeError when the lease is stale (generation mismatch or the
     plan is not ready), or ValueError when it belongs to another owner.
+    ``value`` must be a non-None ``DeviceTensor`` — the name-only download
+    path checks readiness separately.
     """
     if value is None:
-        return
+        raise TypeError("download requires a DeviceTensor lease; pass name=... only with a valid lease")
     if value.owner is not owner:
         raise ValueError("resident output owner mismatch")
     value._step()  # checks _ready and generation
@@ -329,6 +340,13 @@ class PreparedResident(PreparedCuda):
         invalidated it.
         """
         with self._lock:
+            if value is None:
+                if not self._pointer:
+                    raise RuntimeError("resident plan is closed")
+                if not self._ready:
+                    raise RuntimeError(
+                        "no resident run has completed yet; pass a valid DeviceTensor lease"
+                    )
             _check_lease(self, value)
             target = name if name is not None else value.name
             if value is not None and target != value.name:
