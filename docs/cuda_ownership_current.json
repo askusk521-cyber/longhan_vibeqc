@@ -167,7 +167,7 @@
       "fallback": 0,
       "oracle": 10,
       "performance_exception": 163,
-      "runtime": -5504,
+      "runtime": -5419,
       "scientific": 2107
     },
     "reclassified_files": [
@@ -3528,21 +3528,21 @@
       "subsystem": "runtime"
     },
     {
+      "bytes": 4320,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 85,
+        "scientific": 0
+      },
       "path": "src/tensor/cuda_resident.cuh",
+      "physical_lines": 100,
       "reason": "Resident span transfer and checked device-to-device copy over the existing tensor Context owner; host-side allocation-bound and lock contracts with no scientific equations.",
       "regions": [],
       "role": "runtime",
-      "subsystem": "runtime",
-      "code_lines": {
-        "runtime": 99,
-        "scientific": 0,
-        "oracle": 0,
-        "fallback": 0,
-        "performance_exception": 0
-      },
-      "physical_lines": 99,
-      "bytes": 4420,
-      "sha256": "98d40852ad1988158ee05cfeceb511ccf183fc70233c78540cdc1548f52757b7"
+      "sha256": "18258cd8b01f52e884c7b85a57eed0bf089f1997a3b7e602fbe4fe36d9bd7ca3",
+      "subsystem": "runtime"
     },
     {
       "bytes": 8064,
@@ -3935,7 +3935,7 @@
     "fallback": 0,
     "oracle": 10,
     "performance_exception": 253,
-    "runtime": 10168,
+    "runtime": 10154,
     "scientific": 12209
   },
   "migration_ledger": {
@@ -4187,7 +4187,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4345,
+      "runtime": 4430,
       "scientific": 5
     },
     "scf_tensor": {
