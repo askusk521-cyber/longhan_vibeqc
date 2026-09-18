@@ -7,6 +7,15 @@ written before any assembly code exists, so the term list and the sign
 conventions are fixed in one place instead of being reverse-engineered from
 three different providers later.
 
+## Current implementation status
+
+The integration in `tools/vibeqc_hessian/analytic.py` is **PySCF-backed validation
+scaffolding**, not a complete native VibeQC Hessian. PySCF reconstructs its SCF
+state and supplies first-order H1/S1 data. Native RHF snapshot consumption,
+compiler/native first-derivative RHS construction and a no-PySCF integration
+regression remain blocking work. The diagnostic checks below do not close A2
+or #180 and do not expose a public Hessian API.
+
 ## Scope of this slice
 
 Slice A targets a **tiny dense analytic RHF Hessian** with component checks, on
@@ -281,12 +290,12 @@ STO-3G. No complete-method performance or generated-provider claim is made.
 
 See the [reference-boundary rationale](../.agents/notes/implemented/numerics/2026-09-17-hessian-reference-boundary.md).
 
-## Complete analytic integration (A2, closes #414's "full analytic integration remains open")
+## PySCF-backed analytic scaffold (native A2 remains open)
 
 The reference path above keeps every integral finite-differenced and CPHF
 dense, so it is an independent oracle but does not exercise the production
-boundary that #180 step 4 asks for.  This section wires the two hard
-dependencies back in and checks the assembled total against PySCF's analytic
+boundary that #180 step 4 asks for. This diagnostic wires parts of the two
+dependencies together and checks the assembled total against PySCF's analytic
 Hessian, on the same three fixtures as the reference path:
 
 * **core / pulay / two_electron** are consumed from the #178 generated
@@ -315,8 +324,9 @@ however. For each nuclear displacement it now:
 
 The bounded integration driver currently gets the analytic first-order matrices
 from PySCF make_h1/libcint. This is an analytic provider, not the displaced-
-geometry System.derive path used by the A1 oracle. It can later be replaced by
-a native generated matrix adapter without changing the RHS contract.
+geometry System.derive path used by the A1 oracle. Replacing both this provider and the PySCF-created SCF reference with native
+producers is required before claiming native A2 completion; it is not an
+optional performance follow-up. The existing RHS contract must be preserved.
 
 The symmetric metric gauge reconstructs the occupied-column coefficient
 response as U_ai = x_ia.T - S_ai/2 and U_ij = -S_ij/2 before the relaxation

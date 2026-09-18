@@ -1,21 +1,17 @@
-"""Complete analytic RHF Hessian via the shared #178 and #179 layers (issue #180, A2).
+"""PySCF-backed analytic RHF Hessian validation scaffold (native A2 incomplete).
 
-PR #414 (A1) shipped the component formula as a *reference-only* oracle and
-was merged with "full analytic integration remains open."  This module closes
-that gap: every frozen-skeleton component is consumed from the #178 generated
-second-integral providers, the electronic relaxation is solved through #179's
-shared matrix-free RHF response operator and its true-residual GMRES, and the
-nucleus-nucleus term uses the closed-form Coulomb second derivative.  The whole
-tensor is cross-checked in two complementary ways:
+This bounded diagnostic combines generated #178 second-integral providers,
+the shared #179 response operator/GMRES and closed-form nuclear derivatives.
+It does not complete the native Hessian integration left open by #414/#180:
+PySCF reconstructs the SCF reference and supplies analytic H1/S1 matrices
+inside the integration path, rather than only serving as a test oracle.
+Native RHF snapshot input and compiler/native first-derivative RHS producers
+are still required, together with a no-PySCF integration regression.
 
-* the semi-numerical A1 oracle remains independent of this response path, and
-* PySCF analytic RHF Hessian provides an end-to-end total-Hessian gate.
-
-The response first-order matrices below come from PySCF analytic RHF
-make_h1/libcint derivatives, so the second comparison is not an independent
-first-order-provider check. It is nevertheless useful as a total-Hessian
-cross-check; crucially, no coordinate finite difference feeds the A2 response.
-
+The A1 finite-difference reference and PySCF total Hessian are useful diagnostic
+cross-checks. Agreement does not prove a complete native producer chain, and
+the PySCF total is not an independent analytic first-order-provider reference.
+No public/native Hessian or HVP capability is provided here.
 
 Measured on this machine (CPU, generated C++ second-integral kernels):
 
