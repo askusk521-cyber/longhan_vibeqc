@@ -24,6 +24,8 @@ struct RhfGraphCaptureResult {
  * Scientific launch order remains in the HF driver. This owner is limited to
  * capture lifecycle, graph instantiation/upload, replay, and teardown so graph
  * mechanics can change without rebuilding the direct numerical orchestration.
+ * Callback exceptions end capture and release any abandoned graph before rethrow;
+ * the borrowed stream remains reusable by teardown or a later retry.
  */
 class RhfIterationGraphs {
  public:

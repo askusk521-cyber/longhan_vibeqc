@@ -37,7 +37,17 @@ RhfGraphCaptureResult RhfIterationGraphs::capture(cudaStream_t stream, cudaGraph
   }
   if (error != cudaSuccess) return {VIBEQC_STATUS_SUCCESS, error};
 
-  const vibeqc_status body_status = body();
+  vibeqc_status body_status = VIBEQC_STATUS_SUCCESS;
+  try {
+    body_status = body();
+  } catch (...) {
+    // Preserve the original exception while releasing the stream's capture
+    // state. Teardown and a later retry must not inherit an abandoned capture.
+    cudaGraph_t abandoned_graph = nullptr;
+    (void)cudaStreamEndCapture(stream, &abandoned_graph);
+    if (abandoned_graph != nullptr) (void)cudaGraphDestroy(abandoned_graph);
+    throw;
+  }
   if (body_status != VIBEQC_STATUS_SUCCESS) {
     cudaGraph_t abandoned_graph = nullptr;
     (void)cudaStreamEndCapture(stream, &abandoned_graph);
