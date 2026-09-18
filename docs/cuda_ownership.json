@@ -653,6 +653,13 @@
       "regions": []
     },
     {
+      "path": "src/scf/cuda/rhf_graph.hpp",
+      "reason": "Host-only RAII contract for direct-HF CUDA Graph capture, executable lifetime, upload and replay; no scientific equations or device kernels.",
+      "regions": [],
+      "role": "runtime",
+      "subsystem": "runtime"
+    },
+    {
       "path": "src/scf/cuda/runtime_support.hpp",
       "role": "runtime",
       "subsystem": "runtime",
