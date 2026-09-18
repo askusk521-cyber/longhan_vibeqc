@@ -268,47 +268,24 @@ def test_invariances(name):
 
 
 # ---------------------------------------------------------------------------
-# 7. the full (nmo, nocc) response space is actually needed (honest negative)
+# 7. exact elimination preserves the full dense response and Hessian
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["h2", "water_sdf"])
-def test_full_response_space_needed(name):
-    """Solve the 1st-order CPHF two ways -- the full (nmo, nocc) space and the
-    nonredundant (nvir, nocc) virtual block with the occupied block frozen at
-    its metric-gauge base -- and compare both the response and the assembled
-    Hessian.  On H2 (1 occ x 1 virt) the two coincide; on water_sdf (5 occ,
-    7 virt) the frozen occupied block leaves the induced density of the
-    virtual columns incomplete, which shows up in both mo1 and the total.
-    """
+@pytest.mark.parametrize("name", ["h2", "water", "water_sdf"])
+def test_reduced_response_matches_full_space(name):
+    """Known occupied metric response belongs on the reduced virtual RHS."""
     mol = fixture_mol(name)
     mol.build()
     s = System(mol)
     s.derive()
     h1ao = ref_h1ao(s)
-    H_full = hessian_total(s)  # default: full (nmo, nocc) CPHF
-    H_vironly = hessian_total(s, mo1e1_fn=_first_order_mo1_e1_vir_only)
+    mo1_full, e1_full = _first_order_mo1_e1(s, h1ao)
+    mo1_reduced, e1_reduced = _first_order_mo1_e1_vir_only(s, h1ao)
+    np.testing.assert_allclose(mo1_reduced, mo1_full, atol=2e-10, rtol=2e-10)
+    np.testing.assert_allclose(e1_reduced, e1_full, atol=2e-10, rtol=2e-10)
+    H_full = hessian_total(s)
+    H_reduced = hessian_total(s, mo1e1_fn=_first_order_mo1_e1_vir_only)
+    np.testing.assert_allclose(H_reduced, H_full, atol=2e-9, rtol=2e-10)
     H_fd = fd_hessian(mol, h=1e-4)
-    mo1_full, _ = _first_order_mo1_e1(s, h1ao)
-    mo1_viro, _ = _first_order_mo1_e1_vir_only(s, h1ao)
-    mo1_gap = np.abs(mo1_full - mo1_viro).max()
-    diff_full = np.abs(H_full - H_fd).max()
-    diff_vironly = np.abs(H_vironly - H_fd).max()
-    print(
-        f"[{name}] full vs FD={diff_full:.3e}  vir-only vs FD={diff_vironly:.3e}  "
-        f"|mo1 full - mo1 vir-only|={mo1_gap:.3e}"
-    )
-    assert diff_full < 5e-3, (
-        f"{name}: full-space Hessian off from FD by {diff_full:.3e}"
-    )
-    if name == "water_sdf":
-        assert diff_vironly > diff_full, (
-            f"{name}: vir-only ({diff_vironly:.3e}) not worse than full ({diff_full:.3e})"
-        )
-        assert mo1_gap > 1e-3, (
-            f"{name}: mo1 full/vir-only nearly identical ({mo1_gap:.3e})"
-        )
-    else:
-        assert mo1_gap < 1e-6, (
-            f"{name}: 1x1 CPHF should be identical, got {mo1_gap:.3e}"
-        )
+    assert np.abs(H_full - H_fd).max() < 5e-3

@@ -246,7 +246,13 @@ provider chain. That integration must consume #178 generated second-integral
 blocks and #179's shared response operator/solver. The dense reference stays
 independent so it can test that future implementation. The occupied CPHF block
 is fixed by the metric gauge, and its induced density contributes to the virtual
-response; a correctly constructed reduced occupied/virtual solve is equivalent; `_first_order_mo1_e1_vir_only` implements that reduced (nvir, nocc) solve with the occupied block frozen at its metric-gauge base, and the integration tests use the two together to show the full response space is genuinely needed on multi-virtual molecules.
+response. `_first_order_mo1_e1_vir_only` implements the equivalent reduced
+(nvir, nocc) solve: the known occupied metric response is eliminated into the
+right-hand side as `b_v - F_vo b_o`. Independent dense full/reduced regressions
+compare orbital response, occupied-energy response and the assembled Hessian
+for H2, water and the multi-virtual d-shell fixture. These tests establish the
+need to include the occupied metric contribution, not a need to iterate the
+redundant full response space.
 
 `System.derive()` differences fresh-molecule integrals. `hessian_components()`
 returns nuclear, core, overlap/Pulay, two-electron and relaxation contributions.

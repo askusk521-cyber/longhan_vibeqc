@@ -325,15 +325,12 @@ def _first_order_mo1_e1(s, h1ao):
 
 
 def _first_order_mo1_e1_vir_only(s, h1ao):
-    """Same as :func:`_first_order_mo1_e1` but the CPHF is solved on the
-    nonredundant (nvir, nocc) virtual block only, with the occupied block held
-    at its metric-gauge base value. The virtual block is then refined from the
-    full induced Fock exactly as in the full-space path.
+    """Equivalent dense solve on the nonredundant virtual/occupied block.
 
-    On a 1x1 system (H2) this is identical to the full (nmo, nocc) solve; on a
-    multi-virtual system the frozen occupied block leaves the induced density
-    of the virtual columns incomplete, which is the measurable difference that
-    ``test_full_response_space_needed`` isolates.
+    The occupied response is known from the metric gauge. Eliminating it from
+    ``(I + F) x = b`` gives ``(I + F_vv) x_v = b_v - F_vo b_o``;
+    fixing its value never licenses dropping its induced Fock contribution.
+    This reference path verifies equivalence without using the full dense solve.
     """
     C = s.C
     eps = s.eps
@@ -374,10 +371,20 @@ def _first_order_mo1_e1_vir_only(s, h1ao):
             Fvv = np.zeros((dim, dim))
             for col in range(dim):
                 mo1 = np.zeros((nmo, nocc))
-                mo1[virt, :].ravel()[col] = 1.0
+                # Advanced indexing followed by ravel() returns a copy.
+                # Write through actual row/column indices to seed this basis vector.
+                mo1[virt[col // nocc], col % nocc] = 1.0
                 Fvv[:, col] = F(mo1)[virt, :].ravel()
             matrix = np.eye(dim) + Fvv
-            Xv = np.linalg.solve(matrix, mo1base[virt, :].ravel())
+            occupied_response = np.zeros((nmo, nocc))
+            occupied_response[occ, :] = mo1base[occ, :]
+            rhs = (mo1base - F(occupied_response))[virt, :].ravel()
+            Xv = np.linalg.solve(matrix, rhs)
+            residual = np.linalg.norm(matrix @ Xv - rhs, ord=np.inf)
+            if not np.isfinite(Xv).all() or residual > 1e-10 * (
+                1 + np.linalg.norm(rhs, ord=np.inf)
+            ):
+                raise RuntimeError("reduced CPHF true residual exceeds tolerance")
             mo1 = np.zeros((nmo, nocc))
             mo1[virt, :] = Xv.reshape(nvirt, nocc)
             mo1[occ, :] = mo1base[occ, :]  # frozen at base (not iterated)
