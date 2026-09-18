@@ -152,9 +152,30 @@ def test_relaxation_matches_reference(name):
     relax_179 = cphf_relaxation(s)
     err = np.abs(relax_179 - fd["relaxation"]).max()
     print(f"[{name}] max|#179 relax - reference relax| = {err:.3e}")
-    assert err < 1e-9, f"{name}: #179 relaxation off by {err:.3e}"
+    # The oracle finite-differences first-order AO integrals at h=1e-5; once
+    # the production side is analytic, water_sdf is limited by that FD floor
+    # (~4e-9 here) rather than by the response solve itself.
+    assert err < 1e-8, f"{name}: #179 relaxation off by {err:.3e}"
     # the relaxation must be non-trivial (negative case)
     assert np.abs(fd["relaxation"]).max() > 1e-4
+
+
+@pytest.mark.parametrize("name", ["h2", "water", "water_sdf"])
+def test_relaxation_is_analytic_and_raw_symmetric(name):
+    """The A2 response must not need System.derive() and must be raw-symmetric."""
+    mol = fixture_mol(name)
+    mol.build()
+    s = System(mol)
+
+    # Intentionally do not call s.derive(). Reintroducing s.h1/s.S1/s.ERI1
+    # into cphf_relaxation therefore fails this regression immediately.
+    assert not any(hasattr(s, key) for key in ("h1", "S1", "ERI1"))
+    raw = cphf_relaxation(s)
+    assert np.isfinite(raw).all()
+
+    defect = np.abs(raw - raw.transpose(1, 0, 3, 2)).max()
+    print(f"[{name}] raw relaxation symmetry defect = {defect:.3e}")
+    assert defect < 2e-10, f"{name}: raw relaxation asymmetry {defect:.3e}"
 
 
 # ---------------------------------------------------------------------------

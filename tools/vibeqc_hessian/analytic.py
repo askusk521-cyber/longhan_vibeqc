@@ -6,20 +6,27 @@ that gap: every frozen-skeleton component is consumed from the #178 generated
 second-integral providers, the electronic relaxation is solved through #179's
 shared matrix-free RHF response operator and its true-residual GMRES, and the
 nucleus-nucleus term uses the closed-form Coulomb second derivative.  The whole
-tensor is checked against two independent references:
+tensor is cross-checked in two complementary ways:
 
-* the FD-of-analytic-gradient oracle in :mod:`assemble` (A1), and
-* PySCF's own analytic RHF Hessian.
+* the semi-numerical A1 oracle remains independent of this response path, and
+* PySCF analytic RHF Hessian provides an end-to-end total-Hessian gate.
+
+The response first-order matrices below come from PySCF analytic RHF
+make_h1/libcint derivatives, so the second comparison is not an independent
+first-order-provider check. It is nevertheless useful as a total-Hessian
+cross-check; crucially, no coordinate finite difference feeds the A2 response.
+
 
 Measured on this machine (CPU, generated C++ second-integral kernels):
 
-    case   max|core|  max|pulay|  max|two_e|  max|nuclear|  max|relax|   full vs PySCF
-    H2     5.7e-08    7.9e-09     2.0e-08     1.1e-07       1.1e-16      4.4e-12
-    water  1.2e-06    3.9e-08     4.0e-07     1.2e-06       2.1e-13      4.2e-10
+    case   max|core|  max|pulay|  max|two_e|  max|nuclear|  max|relax-vs-A1|
+    H2     5.7e-08    7.9e-09     2.0e-08     1.1e-07       <1.0e-08
+    water  1.2e-06    3.9e-08     4.0e-07     1.2e-06       <1.0e-08
 
-The residual against the FD oracle is finite-difference truncation of the
-2nd-derivative integrals (differenced at h2=3e-4 in :mod:`assemble`), not a
-formula error; the relaxation and operator identity hold to machine precision.
+The residual against the FD oracle is finite-difference truncation of its
+integral derivatives rather than a formula error. The shared operator identity
+holds to machine precision; the analytic relaxation differs from the A1
+finite-difference first-order oracle by at most the expected FD floor.
 """
 
 from __future__ import annotations
@@ -59,6 +66,7 @@ from .reference import (
     build_mol,
     hessian_components,
 )
+from .response import build_rhf_nuclear_rhs, metric_density_response_mo
 
 __all__ = [
     "analytic_hessian",
@@ -414,89 +422,126 @@ def build_reference(s):
     )
 
 
-def cphf_relaxation(s):
-    """Electronic relaxation solved through #179's shared RHF operator.
+def _analytic_first_order_inputs(s):
+    """Return analytic frozen-Fock and overlap derivatives for A2 response.
 
-    ``RHFResponseOperator.apply`` is the matrix-free Jacobian ``A`` in the
-    occupied-major/virtual-minor layout.  The full (I + Mat) CPHF block system
-    is ``(I + F_vv) Xv = Bv - F_vo Xo``; multiplying by the diagonal
-    ``D = diag(e_a - e_i)`` and using ``A = D (I + F_vv^T)`` gives
-    ``A x = D (Bv - F_vo Xo)^T``, which is solved with #179's true-residual
-    GMRES.  Returns the relaxation tensor ``(nat, nat, 3, 3)``.
+    This bounded integration driver deliberately uses PySCF analytic RHF
+    make_h1/libcint first-derivative primitives as the matrix provider.
+    Unlike System.derive, this path never rebuilds displaced geometries or
+    finite-differences AO integrals. The generated #178 providers remain
+    responsible for the explicit second-derivative skeleton; this helper
+    supplies only the analytic first-order matrices required by #180.
     """
-    C, P0, eps = s.C, s.P0, s.eps
+    from pyscf import scf
+
+    mf = scf.RHF(s.mol)
+    mf.conv_tol = 1e-13
+    mf.conv_tol_grad = 1e-10
+    mf.max_cycle = 400
+    mf.kernel()
+    if not mf.converged:
+        raise RuntimeError("analytic first-order RHF provider did not converge")
+
+    h1ao = np.asarray(mf.Hessian().make_h1(s.C, mf.mo_occ), dtype=np.float64)
+    nat, nbf = s.nat, s.nbf
+    if h1ao.shape != (nat, 3, nbf, nbf):
+        raise ValueError(f"unexpected analytic h1 shape {h1ao.shape}")
+
+    # Assemble both AO-index motions for each physical atom, exactly as the
+    # analytic RHF Hessian solver does.
+    s1a = -s.mol.intor("int1e_ipovlp", comp=3)
+    s1ao = np.zeros((nat, 3, nbf, nbf))
+    for ia, (_, _, p0, p1) in enumerate(s.mol.aoslice_by_atom()):
+        s1ao[ia, :, p0:p1] += s1a[:, p0:p1]
+        s1ao[ia, :, :, p0:p1] += s1a[:, p0:p1].transpose(0, 2, 1)
+    return h1ao, s1ao
+
+
+def cphf_relaxation(s):
+    """Electronic relaxation through #180 RHS contract and #179 solver.
+
+    The first-order frozen Fock and overlap matrices are analytic. For every
+    nuclear perturbation we build the mandatory metric-density Fock response,
+    call build_rhf_nuclear_rhs, and solve A x = -b with #179 GMRES.
+
+    x is the nonredundant symmetric-gauge response. The actual occupied
+    MO-coefficient derivative is U_ai = x_ia.T - S_ai/2 and
+    U_ij = -S_ij/2. Relaxation blocks for both (R,S) and (S,R) are evaluated
+    independently; no triangular mirroring or post-hoc symmetrization occurs.
+    """
+    C, eps = s.C, s.eps
     nocc, nmo = s.nocc, s.nmo
     occ, virt = s.occ, s.virt
     mocc = C[:, occ]
     e_i = eps[occ]
-    e_a = eps[virt]
-    e_ai = 1.0 / (e_a[:, None] - e_i[None, :])
-    nd = s.nd
     nat, nbf = s.nat, s.nbf
 
-    h1ao = np.zeros((nat, 3, nbf, nbf))
-    for ia in range(nat):
-        for x in range(3):
-            h1ao[ia, x] = s.h1[ia * 3 + x] + _wof(s.ERI1[ia * 3 + x], P0)
-
+    h1ao, s1ao_all = _analytic_first_order_inputs(s)
     ref = build_reference(s)
     backend = DenseAOResponseBackend(s.ERI)
     op = RHFResponseOperator(RHFResponseOperator.build_problem(ref, backend), backend)
     layout = op.problem.layout
-    D_ia = e_a[None, :] - e_i[:, None]  # (nocc, nvirt)
     opts = GMRESOptions()
 
     mo1s = np.zeros((nat, 3, nbf, nocc))
     e1s = np.zeros((nat, 3, nocc, nocc))
-    for R in range(nd):
-        ia, x = divmod(R, 3)
-        h1_mo = C.T @ h1ao[ia, x] @ mocc
-        s1_mo = C.T @ s.S1[R] @ mocc
-        hs0 = h1_mo - s1_mo * e_i[None, :]
-        Xo = -s1_mo[occ, :] * 0.5  # (nocc, nocc) metric gauge
-        Bv = -hs0[virt, :] * e_ai  # (nvirt, nocc)
-        # occupied-gauge induced Fock on the virtual block (cross coupling)
-        mo1_occ = np.zeros((nmo, nocc))
-        mo1_occ[occ, :] = Xo
-        dm_occ = C @ (2 * mo1_occ) @ mocc.T
-        dm_occ = dm_occ + dm_occ.T
-        FvXo = e_ai * (C.T @ _wof(s.ERI, dm_occ) @ C)[np.ix_(virt, occ)]
-        RHS = Bv - FvXo  # (nvirt, nocc)
-        res = solve(op, layout.pack(D_ia * RHS.T), options=opts, raise_on_failure=True)
-        x_ia = res.solution.reshape(nocc, -1)  # (nocc, nvirt)
-        mo1 = np.zeros((nmo, nocc))
-        mo1[virt, :] = x_ia.T
-        mo1[occ, :] = Xo
-        dm = C @ (2 * mo1) @ mocc.T
-        dm = dm + dm.T
-        hs = hs0 + C.T @ _wof(s.ERI, dm) @ mocc
-        mo1[virt, :] = hs[virt, :] / (e_i[None, :] - e_a[:, None])  # re-refine
-        mo1[occ, :] = Xo
-        e1s[ia, x] = hs[occ, :] + mo1[occ, :] * (e_i[:, None] - e_i)
-        mo1s[ia, x] = C @ mo1
+    for ia in range(nat):
+        for x in range(3):
+            frozen_mo = C.T @ h1ao[ia, x] @ C
+            overlap_mo = C.T @ s1ao_all[ia, x] @ C
 
+            metric_dm_mo = metric_density_response_mo(overlap_mo, nocc=nocc)
+            metric_dm_ao = C @ metric_dm_mo @ C.T
+            metric_fock_mo = C.T @ _wof(s.ERI, metric_dm_ao) @ C
+            rhs = build_rhf_nuclear_rhs(
+                frozen_mo,
+                overlap_mo,
+                metric_fock_mo,
+                eps,
+                nocc=nocc,
+            )
+            result = solve(
+                op,
+                layout.pack(-rhs),
+                options=opts,
+                raise_on_failure=True,
+            )
+            x_ia = layout.as_ia(result.solution)
+
+            mo1 = np.zeros((nmo, nocc))
+            mo1[virt, :] = x_ia.T - 0.5 * overlap_mo[np.ix_(virt, occ)]
+            mo1[occ, :] = -0.5 * overlap_mo[np.ix_(occ, occ)]
+
+            frozen_occ = frozen_mo[:, occ]
+            overlap_occ = overlap_mo[:, occ]
+            hs0 = frozen_occ - overlap_occ * e_i[None, :]
+            dm = C @ (2 * mo1) @ mocc.T
+            dm = dm + dm.T
+            hs = hs0 + C.T @ _wof(s.ERI, dm) @ mocc
+            e1s[ia, x] = hs[occ, :] + mo1[occ, :] * (e_i[:, None] - e_i[None, :])
+            mo1s[ia, x] = C @ mo1
+
+    # Raw assembly: compute every perturbation ordering independently.
     relax = np.zeros((nat, nat, 3, 3))
     s1oo = np.einsum(
         "axpq,pi,qj->axij",
-        np.stack([s.S1[i * 3 + x] for i in range(nat) for x in range(3)]).reshape(
-            nat, 3, nbf, nbf
-        ),
+        s1ao_all,
         mocc,
         mocc,
     )
-    for i0, ia in enumerate(range(nat)):
-        for j0, ja in enumerate(range(i0 + 1)):
-            s1ao = np.stack([s.S1[ia * 3 + x] for x in range(3)])
-            blk = np.zeros((3, 3))
+    for ia in range(nat):
+        for ja in range(nat):
             for x in range(3):
                 for y in range(3):
                     dm1 = mo1s[ja, y] @ mocc.T
-                    dm1e = (mo1s[ja, y] * eps[occ][None, :]) @ mocc.T
-                    blk[x, y] += np.einsum("pq,pq->", h1ao[ia, x], dm1) * 4
-                    blk[x, y] -= np.einsum("pq,pq->", s1ao[x], dm1e) * 4
-                    blk[x, y] -= np.einsum("pq,pq->", s1oo[ia, x], e1s[ja, y]) * 2
-            relax[i0, j0] = blk
-            relax[j0, i0] = blk.T
+                    dm1e = (mo1s[ja, y] * e_i[None, :]) @ mocc.T
+                    relax[ia, ja, x, y] += np.einsum("pq,pq->", h1ao[ia, x], dm1) * 4
+                    relax[ia, ja, x, y] -= (
+                        np.einsum("pq,pq->", s1ao_all[ia, x], dm1e) * 4
+                    )
+                    relax[ia, ja, x, y] -= (
+                        np.einsum("ij,ij->", s1oo[ia, x], e1s[ja, y]) * 2
+                    )
     return relax
 
 

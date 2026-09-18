@@ -295,43 +295,62 @@ Hessian, on the same three fixtures as the reference path:
   (`analytic.py::nuclear_closed_form`), which is exact and carries no
   finite-difference step.
 
-### The #179 operator identity
+### #180 RHS / #179 response boundary
 
-#179's `apply` is the Jacobian `A` in the occupied-major/virtual-minor
-layout.  The reference solves the full `(I + Mat)` block system
-`(I + F_vv) Xv = Bv - F_vo Xo`.  Multiplying by the diagonal
-`D = diag(e_a - e_i)` and using the identity
+#179 apply remains the occupied-major/virtual-minor RHF Jacobian, and its
+explicit tiny-system identity against the dense A1 response matrix is retained
+as a diagnostic. The A2 assembly no longer hand-builds a transformed CPHF RHS,
+however. For each nuclear displacement it now:
 
-```text
-A = D (I + F_vv^T)
-```
+1. obtains analytic first-order frozen-Fock and overlap matrices;
+2. builds the known metric-density connection and its induced RHF Fock;
+3. passes those three MO-space terms through build_rhf_nuclear_rhs; and
+4. solves the returned contract directly as A x = -b through #179 GMRES.
 
-(holds to machine precision: h2 0.0, water 2.2e-16, water_sdf 1.8e-15)
-collapses the block system into the single matrix-free solve
-`A x = D (Bv - F_vo Xo)^T`.  The `F_vo Xo` term is the occupied-gauge
-induced Fock on the virtual block; it is what H2 (a 1×1 block) hides, and it
-is exactly the cross-coupling that keeps the full-space CPHF correct on the
-multi-virtual fixtures.
+The bounded integration driver currently gets the analytic first-order matrices
+from PySCF make_h1/libcint. This is an analytic provider, not the displaced-
+geometry System.derive path used by the A1 oracle. It can later be replaced by
+a native generated matrix adapter without changing the RHS contract.
+
+The symmetric metric gauge reconstructs the occupied-column coefficient
+response as U_ai = x_ia.T - S_ai/2 and U_ij = -S_ij/2 before the relaxation
+contraction. The older A = D(I + F_vv^T) relation remains covered as an
+operator-equivalence test rather than as a second hand-written production RHS.
+
+### Raw response symmetry
+
+Relaxation now evaluates every ordered atom pair independently. No triangle is
+mirrored and no post-hoc symmetrization occurs before the acceptance gate.
+A regression intentionally constructs System(mol) without calling derive();
+reintroducing h1, S1, or ERI1 finite-difference inputs therefore fails before a
+numerical comparison can hide the source regression.
 
 ### Measured (not fitted)
 
 | check | h2 | water STO-3G | water s+p+d |
 |---|---|---|---|
-| A = D(I+F_vv^T) | 0.0 | 2.2e-16 | 1.8e-15 |
-| #179 relax − reference relax | 1.1e-16 | 2.1e-13 | 1.2e-12 |
-| #178 core − FD | 5.7e-8 | 1.2e-6 | (gated) |
-| #178 pulay − FD | 7.9e-9 | 3.9e-8 | (gated) |
-| #178 two_electron − FD | 2.0e-8 | 4.0e-7 | (gated) |
-| nuclear closed form − FD | 1.1e-7 | 1.2e-6 | 1.2e-6 |
-| **total integrated − PySCF analytic** | **4.4e-12** | **4.1e-10** | **5.0e-5 (gated)** |
+| A = D(I+F_vv^T) diagnostic | 0.0 | 2.2e-16 | 1.8e-15 |
+| analytic relax - semi-numerical A1 relax | <1e-8 | <1e-8 | 4.2e-9 |
+| raw relaxation symmetry defect | 2.8e-17 | 3.1e-14 | 9.7e-12 |
+| #178 core - FD | 5.7e-8 | 1.2e-6 | (gated) |
+| #178 pulay - FD | 7.9e-9 | 3.9e-8 | (gated) |
+| #178 two_electron - FD | 2.0e-8 | 4.0e-7 | (gated) |
+| nuclear closed form - FD | 1.1e-7 | 1.2e-6 | 1.2e-6 |
 
-The total integrated Hessian matches PySCF's independent analytic RHF Hessian
-to `~4e-10` on genuine water and `~4e-12` on H2 — far below the reference
-path's finite-difference floor — because the nuclear term is now closed-form
-and the relaxation is solved to a `2e-11` GMRES residual rather than a dense
-inverse.  The `water_sdf` two-electron row is gated behind
-`VIBEQC_HESSIAN_SLOW=1`: its ERI second-derivative provider is Python-looped
-over the 5^4 shell quartets and the dddd quartet alone is 6^4 = 1296 AO
-components, so the integrated total for that case takes tens of minutes on
-CPU.  The relaxation for the same case is fast (`1.2e-12` in `~0.3 s`) and
-runs in the default suite.  Tests: `tests/python/test_hessian_analytic.py`.
+The total-Hessian tests retain their existing PySCF analytic acceptance gates;
+the table above only reports measurements rechecked for this response change.
+
+The full PySCF analytic Hessian remains a useful end-to-end cross-check, but it
+is no longer described as an independent first-order-provider reference because
+the bounded A2 response path also consumes PySCF analytic H1 matrices. The A1
+semi-numerical oracle remains independent of that source. Its finite-difference
+first-derivative floor is now visible in the water s+p+d relaxation comparison:
+at h=1e-5 the difference is about 4.1e-9, while smaller steps increase
+cancellation error. The response-vs-A1 gate is therefore 1e-8.
+
+The water_sdf two-electron row remains gated behind VIBEQC_HESSIAN_SLOW=1
+because its generated ERI second-derivative provider is the long pole. Tests:
+tests/python/test_hessian_analytic.py.
+
+See the implemented response-boundary rationale in
+../.agents/notes/implemented/numerics/2026-09-19-hessian-analytic-response-boundary.md.
