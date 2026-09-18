@@ -1,8 +1,7 @@
 """Complete analytic RHF Hessian through the shared #178/#179 layers (PR A2).
 
 PR #414 (A1) shipped the component formula as a *reference-only* oracle and
-was merged with "full analytic integration remains open."  These tests close
-that gap.  They check, for the same molecules A1 already exercises, that:
+was merged with "full analytic integration remains open."  These tests cover the bounded diagnostic integration, not a native endpoint.  They check, for the same molecules A1 already exercises, that:
 
 * the #178 generated second-integral providers reproduce the frozen-skeleton
   components (core, pulay, two_electron) that A1's finite-difference oracle
@@ -12,7 +11,7 @@ that gap.  They check, for the same molecules A1 already exercises, that:
   full-response-space CPHF that A1's reference uses;
 * the shared operator identity ``A = D (I + F_vv^T)`` holds (the algebra that
   turns A1's dense block system into #179's single matrix-free solve);
-* the assembled total matches PySCF's independent analytic RHF Hessian.
+* the assembled total matches PySCF's analytic RHF Hessian as an end-to-end cross-check.
 
 The water fixtures mirror the reference ``test_hessian_reference.py`` so the reference
 and the integrated path are checked on identical molecules.  The ``water_sdf``
@@ -24,6 +23,7 @@ default suite.
 """
 
 import os
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -216,7 +216,7 @@ def test_nuclear_closed_form(name):
 
 
 # ---------------------------------------------------------------------------
-# 5. full integrated Hessian vs PySCF's independent analytic RHF Hessian
+# 5. full integrated Hessian vs PySCF's analytic RHF Hessian as an end-to-end cross-check
 # ---------------------------------------------------------------------------
 
 
@@ -289,3 +289,35 @@ def test_reduced_response_matches_full_space(name):
     np.testing.assert_allclose(H_reduced, H_full, atol=2e-9, rtol=2e-10)
     H_fd = fd_hessian(mol, h=1e-4)
     assert np.abs(H_full - H_fd).max() < 5e-3
+
+
+@pytest.mark.parametrize("nbf", [13, 18])
+@pytest.mark.parametrize("entry", [analytic_hessian, cphf_relaxation])
+def test_analytic_response_domain_rejected_before_provider_work(nbf, entry):
+    # A reference System may have 18 AOs, but the shared dense response
+    # oracle is hard-bounded to 12. No SCF/provider work is needed to refuse.
+    with pytest.raises(ValueError, match="analytic.*12 AOs"):
+        entry(SimpleNamespace(nbf=nbf))
+
+
+@pytest.mark.parametrize(
+    "relax",
+    [
+        0.0,
+        np.zeros((6, 6)),
+        np.zeros((2, 2, 3, 3), complex),
+        np.full((2, 2, 3, 3), np.nan),
+        np.full((2, 2, 3, 3), np.inf),
+    ],
+)
+def test_analytic_hessian_rejects_invalid_relaxation_before_providers(
+    monkeypatch, relax
+):
+    def unexpected_provider(system):
+        pytest.fail("invalid relaxation reached expensive provider work")
+
+    monkeypatch.setattr(
+        "tools.vibeqc_hessian.analytic.provider_components", unexpected_provider
+    )
+    with pytest.raises(ValueError, match="relaxation.*finite real.*shape"):
+        analytic_hessian(SimpleNamespace(nbf=2, nat=2), relax=relax)

@@ -360,3 +360,16 @@ tests/python/test_hessian_analytic.py.
 
 See the implemented response-boundary rationale in
 ../.agents/notes/implemented/numerics/2026-09-19-hessian-analytic-response-boundary.md.
+
+### Analytic diagnostic admission
+
+`analytic_hessian` and `cphf_relaxation` accept at most **12 AOs**, matching
+the shared dense response oracle. Larger systems are rejected before any
+first- or second-derivative provider work. The separate finite-difference
+`System` reference retains its 18-AO limit; that is not the analytic domain.
+An explicitly supplied relaxation must be a finite real tensor with shape
+`(natoms, natoms, 3, 3)`; scalar broadcasting is not an accepted Hessian.
+The PySCF total comparison is an end-to-end analytic cross-check, not a fully
+independent analytic reference: the integrated response also uses PySCF
+analytic first-order matrices. Independent finite-difference comparisons
+remain separate checks.

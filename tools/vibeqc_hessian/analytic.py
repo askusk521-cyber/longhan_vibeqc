@@ -457,6 +457,12 @@ def _analytic_first_order_inputs(s):
     return h1ao, s1ao
 
 
+def _validate_analytic_domain(s):
+    """Honor the shared dense response oracle's independently bounded domain."""
+    if not 1 <= s.nbf <= 12:
+        raise ValueError("analytic Hessian integration is bounded to 12 AOs")
+
+
 def cphf_relaxation(s):
     """Electronic relaxation through #180 RHS contract and #179 solver.
 
@@ -469,6 +475,7 @@ def cphf_relaxation(s):
     U_ij = -S_ij/2. Relaxation blocks for both (R,S) and (S,R) are evaluated
     independently; no triangular mirroring or post-hoc symmetrization occurs.
     """
+    _validate_analytic_domain(s)
     C, eps = s.C, s.eps
     nocc, nmo = s.nocc, s.nmo
     occ, virt = s.occ, s.virt
@@ -631,11 +638,25 @@ def fixture_mol(name):
 def analytic_hessian(s, *, relax=None):
     """Return every component plus the total from the shared #178/#179 layers.
 
+    This diagnostic integration is bounded to 12 AOs. A supplied relaxation
+    must be a finite real (natoms, natoms, 3, 3) tensor.
+
     ``core``/``pulay``/``two_electron`` come from the #178 second-integral
     providers, ``nuclear`` from the closed-form Coulomb second derivative, and
     ``relaxation`` from #179's matrix-free RHF operator (or the supplied
     ``relax`` tensor, e.g. to swap in the FD oracle).
     """
+    _validate_analytic_domain(s)
+    if relax is not None:
+        relax = np.asarray(relax)
+        if (
+            relax.shape != (s.nat, s.nat, 3, 3)
+            or np.iscomplexobj(relax)
+            or not np.isfinite(relax).all()
+        ):
+            raise ValueError(
+                "relaxation must be finite real with shape (natoms, natoms, 3, 3)"
+            )
     comp = provider_components(s)
     comp["nuclear"] = nuclear_closed_form(s)
     comp["relaxation"] = relax if relax is not None else cphf_relaxation(s)
