@@ -1,6 +1,6 @@
 # Decision: separate direct-HF bucket lifetime from CUDA Graph lifetime
 
-Status: implemented
+Status: implemented; production acceptance pending
 Date: 2026-09-18
 
 ## Problem
@@ -59,24 +59,33 @@ warm-cache semantics and split-provider Graph route.
 ## Evidence
 
 Baseline master `91dfd97` has `cuda_rhf.cpp` at 4,892 lines / 276,146 bytes.
-The final source tree has the driver at 4,452 lines / 255,625 bytes,
+The current PR head has the driver at 4,452 lines / 255,625 bytes,
 `rhf_bucket.cpp` at 357 lines / 16,167 bytes, its private header at 121 lines /
 5,517 bytes, and `rhf_graph.cpp` / `.hpp` at 81 / 57 lines. The structure audit
 checks 221 modules with zero errors and its dedicated Python suite passes 104
 checks. Ordinary-C++ syntax validation passes for both new owners and the
 remaining driver against the CUDA 12.9 XsyevBatched API contract.
 
-Production acceptance on RTX 5090 / driver 580.95.05, GCC 11.4 and NVCC 12.9.86:
+Production acceptance is still pending on the exact PR head. The available local
+node does not expose CUDA 12.9+, so this note does not infer values from generic
+green CI, an older SHA, or development-only compile samples. #240 must remain
+open until a suitable CUDA 12.9+ environment records all of the following on
+the final SHA:
 
-- clean Release build: {{CLEAN_BUILD}}
-- shared library: {{LIB_SIZE}}
-- device-link evidence: {{DEVICE_LINK}}
-- Graph-owner incremental rebuild: {{GRAPH_INCREMENTAL}}
-- bucket-owner incremental rebuild: {{BUCKET_INCREMENTAL}}
-- driver incremental rebuild: {{DRIVER_INCREMENTAL}}
-- native/runtime gate: {{NATIVE_TESTS}}
-- Python endpoint gate: {{PYTHON_TESTS}}
-- weighted/reference gate: {{WEIGHTED_TESTS}}
+- clean Release build: pending exact-head measurement
+- shared-library size: pending exact-head measurement
+- device-link evidence: pending exact-head measurement
+- Graph-owner incremental rebuild set: pending exact-head measurement
+- bucket-owner incremental rebuild set: pending exact-head measurement
+- driver incremental rebuild set: pending exact-head measurement
+- native/runtime gate: pending exact-head measurement
+- Python endpoint gate: pending exact-head measurement
+- weighted/reference gate: pending exact-head measurement
+
+After those measurements are captured, replace the pending entries with the
+commands/results and promote this note's production-acceptance status. Until
+then, this record documents the implemented ownership split only and is not a
+#240 closeout record.
 
 ## Consequences
 
