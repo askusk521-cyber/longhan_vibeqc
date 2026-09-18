@@ -246,7 +246,7 @@ provider chain. That integration must consume #178 generated second-integral
 blocks and #179's shared response operator/solver. The dense reference stays
 independent so it can test that future implementation. The occupied CPHF block
 is fixed by the metric gauge, and its induced density contributes to the virtual
-response; a correctly constructed reduced occupied/virtual solve is equivalent.
+response; a correctly constructed reduced occupied/virtual solve is equivalent; `_first_order_mo1_e1_vir_only` implements that reduced (nvir, nocc) solve with the occupied block frozen at its metric-gauge base, and the integration tests use the two together to show the full response space is genuinely needed on multi-virtual molecules.
 
 `System.derive()` differences fresh-molecule integrals. `hessian_components()`
 returns nuclear, core, overlap/Pulay, two-electron and relaxation contributions.
@@ -274,3 +274,64 @@ and seven virtual orbitals. The tests additionally cover genuine 7-AO water
 STO-3G. No complete-method performance or generated-provider claim is made.
 
 See the [reference-boundary rationale](../.agents/notes/implemented/numerics/2026-09-17-hessian-reference-boundary.md).
+
+## Complete analytic integration (A2, closes #414's "full analytic integration remains open")
+
+The reference path above keeps every integral finite-differenced and CPHF
+dense, so it is an independent oracle but does not exercise the production
+boundary that #180 step 4 asks for.  This section wires the two hard
+dependencies back in and checks the assembled total against PySCF's analytic
+Hessian, on the same three fixtures as the reference path:
+
+* **core / pulay / two_electron** are consumed from the #178 generated
+  second-integral providers (`tools/vibeqc_hessian/analytic.py::
+  provider_components`), with the caller owning the weights `P0`, `-W_e`,
+  `W2` exactly as the reference does.
+* **relaxation** is solved through #179's shared matrix-free
+  `RHFResponseOperator` and its true-residual GMRES
+  (`analytic.py::cphf_relaxation`), replacing the reference's dense
+  `(nmo*nocc)^2` replica.
+* **nuclear** uses the closed-form Coulomb second derivative
+  (`analytic.py::nuclear_closed_form`), which is exact and carries no
+  finite-difference step.
+
+### The #179 operator identity
+
+#179's `apply` is the Jacobian `A` in the occupied-major/virtual-minor
+layout.  The reference solves the full `(I + Mat)` block system
+`(I + F_vv) Xv = Bv - F_vo Xo`.  Multiplying by the diagonal
+`D = diag(e_a - e_i)` and using the identity
+
+```text
+A = D (I + F_vv^T)
+```
+
+(holds to machine precision: h2 0.0, water 2.2e-16, water_sdf 1.8e-15)
+collapses the block system into the single matrix-free solve
+`A x = D (Bv - F_vo Xo)^T`.  The `F_vo Xo` term is the occupied-gauge
+induced Fock on the virtual block; it is what H2 (a 1×1 block) hides, and it
+is exactly the cross-coupling that keeps the full-space CPHF correct on the
+multi-virtual fixtures.
+
+### Measured (not fitted)
+
+| check | h2 | water STO-3G | water s+p+d |
+|---|---|---|---|
+| A = D(I+F_vv^T) | 0.0 | 2.2e-16 | 1.8e-15 |
+| #179 relax − reference relax | 1.1e-16 | 2.1e-13 | 1.2e-12 |
+| #178 core − FD | 5.7e-8 | 1.2e-6 | (gated) |
+| #178 pulay − FD | 7.9e-9 | 3.9e-8 | (gated) |
+| #178 two_electron − FD | 2.0e-8 | 4.0e-7 | (gated) |
+| nuclear closed form − FD | 1.1e-7 | 1.2e-6 | 1.2e-6 |
+| **total integrated − PySCF analytic** | **4.4e-12** | **4.1e-10** | **5.0e-5 (gated)** |
+
+The total integrated Hessian matches PySCF's independent analytic RHF Hessian
+to `~4e-10` on genuine water and `~4e-12` on H2 — far below the reference
+path's finite-difference floor — because the nuclear term is now closed-form
+and the relaxation is solved to a `2e-11` GMRES residual rather than a dense
+inverse.  The `water_sdf` two-electron row is gated behind
+`VIBEQC_HESSIAN_SLOW=1`: its ERI second-derivative provider is Python-looped
+over the 5^4 shell quartets and the dddd quartet alone is 6^4 = 1296 AO
+components, so the integrated total for that case takes tens of minutes on
+CPU.  The relaxation for the same case is fast (`1.2e-12` in `~0.3 s`) and
+runs in the default suite.  Tests: `tests/python/test_hessian_analytic.py`.
