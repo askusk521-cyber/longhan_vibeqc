@@ -5,10 +5,11 @@ control and stationary force assembly now have explicit interfaces in
 `src/scf/reference/`, `src/scf/initial_guess/`, `src/scf/solver/` and
 `src/scf/gradient/`.
 They retain the original loop order, occupation factors, Jacobi thresholds,
-overlap rejection threshold, and UHF frontier-rotation policy. Issue #240
-remains open for host graph/bucket control and the final production
-build/runtime gates below. The retained scientific kernels now have bounded
-CUDA owners; the remaining direct host driver compiles as ordinary C++.
+overlap rejection threshold, and UHF frontier-rotation policy. The final #240
+host-control slice separates bucket/cache lifetime and CUDA Graph mechanics
+from the direct numerical launch driver. The retained scientific kernels have
+bounded CUDA owners, while the remaining direct launch driver compiles as
+ordinary C++; final production acceptance is recorded in the closing section.
 
 ## Responsibility inventory
 
@@ -28,8 +29,8 @@ and `cuda_ownership_current.json`, under #231.
 | `rhf.cpp`: compatibility entry points | Public RHF/UHF CPU/CUDA wrappers and CPU-build CUDA stubs | Keep existing method/ABI signatures, failure behavior and per-item ordering. |
 | `cuda_rhf.cu`: scientific reference/fallback/specializations | `Dual`, `Dual3`, `MixedPrecisionFloat`, angular/Hermite/Coulomb workspaces, primitive/contracted one-/two-electron values and gradients, order-specific Fock/force kernels | Retained one-electron and direct numerical families now have bounded shared headers and CUDA launch owners. The #231 classifications and arithmetic are preserved; no scientific formulas are retired by the move. |
 | `cuda_rhf.cu`: queues, work descriptors and compaction | `ActiveShellQuartetTile`, `DirectTileValidationRecord`, `PsssResidentTask`, pair bounds, descriptor validation, bounded page ranges and queue kernels | Host partitioning and page ranges use `cuda/queue_plan.*`. Device validation, density bounds, compaction, generated/resident tasks, bounded pages, scans and diagnostics now have separate `cuda/direct_*` owners. Fused native consumers use `direct_bounded_dddd.cu`, `direct_bounded_exact_force.cu` and `direct_bounded_fallback.cu`; host launch sequencing remains in the C++ driver. |
-| `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution lives in `cuda/eigensolver.cpp` / `eigensolver_kernels.cu`. Shared matrix, density, DIIS, convergence and state kernels now have separate `cuda/scf_*_kernels.*` owners; public/direct basis transforms use `basis_transform_kernels.*`. Scientific integral/Fock kernels now have separate CUDA owners; host bucket control remains in `cuda_rhf.cpp`. |
-| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Packed/POD contracts and host topology/arena planning already have separate owners. DF source/export uses `cuda/df_source*` / `df_integral_export*`. Stream/graph/arena lifetime uses `cuda/resources.*`; matrix-library execution borrows `matrix_library.*`. Direct J/K host ownership uses `direct_jk.cpp` / `direct_jk_plan.hpp`; one-electron host exports use `one_electron_export*.cpp`. Graph construction and bucket dispatch now compile as `cuda_rhf.cpp`; their finer responsibility split remains pending. |
+| `cuda_rhf.cu`: generic SCF kernels and libraries | Density/Fock/update/convergence kernels, inactive-eigensolver profiles and launch selection | Generic eigensolver execution lives in `cuda/eigensolver.cpp` / `eigensolver_kernels.cu`. Shared matrix, density, DIIS, convergence and state kernels now have separate `cuda/scf_*_kernels.*` owners; public/direct basis transforms use `basis_transform_kernels.*`. Scientific integral/Fock kernels now have separate CUDA owners; the residual driver owns only direct-HF launch/dataflow composition. |
+| `cuda_rhf.cu`: host planning and replay | `DeviceBatch`, `HostBatch`, `ArenaLayout`, `CudaResources`, `CudaRhfBucketPlan`, integral source implementation, graph construction and bucket dispatch | Packed/POD contracts and host topology/arena planning have separate owners. DF source/export uses `cuda/df_source*` / `df_integral_export*`. Stream/library/arena lifetime stays in `cuda/resources.*`; `cuda/rhf_graph.*` exclusively owns direct-HF Graph capture/instantiate/upload/replay/destruction. `cuda/rhf_bucket.*` owns the opaque plan, topology/options admission, retry policy, diagnostics and warm-state cache lifecycle. Direct J/K host ownership uses `direct_jk.cpp` / `direct_jk_plan.hpp`; one-electron host exports use `one_electron_export*.cpp`. `cuda_rhf.cpp` consumes these interfaces and retains the coupled numerical launch order. |
 | Former `cuda_density_fitting.cu`: metric and storage planning | `SetupBuffers`, `CudaDensityFittingJkPlan`, checked sizes, cuSOLVER setup, plan creation/release and diagnostics | Extracted to `cuda/df_plan*`, `df_setup_internal.hpp`, `df_runtime.*` and `df_metric_kernels.*`. The public handle remains opaque; source transfer and retained metric factors keep their single owner. |
 | Former `cuda_density_fitting.cu`: J/K execution | `build_coulomb`, `build_exchange`, tile gather/transpose/reduction kernels, RHF/UHF host/device/item entry points | Extracted to `cuda/df_coulomb.cpp`, `df_exchange.cpp`, `df_jk*`. Resident, host-backed and source-backed execution retain the same provider semantics and memory sub-budget. |
 | Former `cuda_density_fitting.cu`: force integration | `execute_cuda_density_fitting_generated_force_response` | The adapter now lives in `cuda/df_force_response.cpp`. The #205 source-backed response borrows device factors through `df_response_weights.*` / `df_gradient_bridge.*`; the host-value compatibility adapter retains its CPU metric path. |
@@ -52,10 +53,18 @@ This is a review target, not a claim that legacy source units already pass a
 structural-size gate. At the baseline, `rhf.cpp` contains 3,413 lines / 165,000
 bytes, `cuda_rhf.cu` 19,754 lines / 1,048,372 bytes, and
 `cuda_density_fitting.cu` 3,098 lines / 160,928 bytes. The original DF unit is now
-removed; its largest replacement is the 549-line setup transaction. The large
-direct host unit (`cuda_rhf.cpp`, 4,865 lines after MP2 integration) still exceeds the target and
-remains unfinished work under #240. Its graph/bucket coupling explains the staged extraction,
-not an exemption from the issue's final acceptance criteria.
+removed; its largest replacement is the 549-line setup transaction. At the final
+#240 host-control baseline `91dfd97`, `cuda_rhf.cpp` was 4,892 lines / 276,146
+bytes. The final slice reduces it to 4,452 lines / 255,625 bytes and moves
+bucket/cache ownership to a 357-line implementation plus a 119-line private
+plan contract, while Graph lifecycle/replay is an 81-line implementation plus
+a 58-line interface. The residual driver remains above the 600-line review
+target intentionally: one arena and one captured SCF iteration couple its
+provider launches, matrix products, convergence launches, force finalization and
+error order. Splitting that numerical launch sequence further would require a
+wide callback/context facade without an independent lifetime or rebuild owner.
+The dependency guard therefore treats it as a documented legacy orchestration
+exception rather than using file splitting as the acceptance criterion.
 
 ## Direct-native integration with MP2
 
@@ -85,7 +94,7 @@ integration evidence separately from the historical pre-MP2 cold-build,
 incremental-build, binary-size and matched-runtime measurements below. The
 integration reused existing build trees and supplies no new cold-build claim.
 
-## Validation and remaining acceptance
+## Validation history and final acceptance
 
 The first extraction is checked with the existing RHF/UHF, direct/DF, spherical,
 warm-batch, proposal, precision, and public native CPU tests. CUDA builds and
@@ -860,3 +869,90 @@ retains the complete touched-object and relink lists. No unrelated CUDA source
 is recompiled. The angular-force exclusion therefore preserves its standalone
 compiler contract during both cold and incremental builds. Full #240 remains
 open for the host graph/bucket decomposition and its final combined inventory.
+
+
+## Final direct-HF host-control boundary (#240 closeout)
+
+The final slice starts from master `91dfd97`. It separates the two remaining
+host-control lifetimes without moving equations or changing launch order:
+
+| Owner | Current responsibility | Physical lines | Bytes |
+| --- | --- | ---: | ---: |
+| `scf/cuda_rhf.cpp` | Coupled direct-HF numerical launch/dataflow composition and final result assembly | 4,452 | 255,625 |
+| `scf/cuda/rhf_bucket.cpp` | Plan admission/rebuild, topology/options identity, retry, diagnostics, warm-cache lifecycle and basis-layout inspection | 357 | 16,167 |
+| `scf/cuda/rhf_bucket_internal.hpp` | Private opaque-plan state and the narrow driver contract | 121 | 5,517 |
+| `scf/cuda/rhf_graph.cpp` | Graph capture, instantiate/upload, replay and destruction | 81 | 3,224 |
+| `scf/cuda/rhf_graph.hpp` | Graph-owner interface/result contract | 57 | 2,137 |
+| `scf/cuda/resources.cpp` | Stream, library-workspace and numeric-arena teardown | 47 | 1,686 |
+
+At the starting tree, `cuda_rhf.cpp` was 4,892 lines / 276,146 bytes and
+`resources.*` also owned the four direct-HF Graph handles. Graph destruction
+still precedes stream destruction: `CudaRhfBucketPlan` declares resources first
+and Graph ownership second, so reverse member destruction tears Graphs down on
+the owning device before the stream/library owner. The graph owner reproduces
+the existing first-setup synchronize/capture/instantiate/upload ordering,
+including the split ordinary-eigensolver pre/post Graph route. The bucket owner
+retains the exact option/topology admission and native-matrix retry conditions.
+
+The residual 4,452-line driver is the explicit size-guard exception for this
+issue. It no longer owns plan admission/cache lifetime, Graph handles or Graph
+API mechanics, queue implementations, direct numerical kernels, one-electron
+kernels, generic SCF device kernels, eigensolver implementation, DF replay,
+resource teardown, or matrix-library ownership. Its remaining body is one
+scientific execution transaction over the same arena pointers and capture
+closures; further splitting would introduce a wide context/callback interface
+without an independent lifetime or meaningful incremental-rebuild owner.
+
+The final maintained-source inventory (physical lines, generated build output
+excluded) is led by:
+
+| Source unit | Lines | Bytes |
+| --- | ---: | ---: |
+| `src/scf/cuda_rhf.cpp` | 4,452 | 255,625 |
+| `src/scf/rhf.cpp` | 3,234 | 165,992 |
+| `src/scf/cuda/df_gradient_bridge.cu` | 1,524 | 89,981 |
+| `src/scf/cuda/df_response_weights.cu` | 1,270 | 76,072 |
+| `src/integrals/s_integrals.cpp` | 1,192 | 57,405 |
+| `src/scf/density_fitting.cpp` | 1,097 | 55,286 |
+| `src/posthf/bridge.cpp` | 916 | 50,925 |
+| `src/methods/dft_method.cpp` | 841 | 36,881 |
+| `src/scf/cuda/df_plan_setup.cpp` | 823 | 44,440 |
+| `src/dft/cuda_grid.cu` | 751 | 36,560 |
+
+This inventory makes the remaining exception explicit rather than hiding it:
+`cuda_rhf.cpp` is still large, but its former host lifetime and Graph policy
+have independent owners and dependency guards. `rhf.cpp` is the separate CPU
+HF implementation already decomposed under the earlier #240 slices; the DF
+units have their own documented owners and acceptance records.
+
+`tools/check_scf_structure.py` now audits dedicated `cuda_hf_bucket` and
+`cuda_hf_graph` owners. Tests reject Graph-to-bucket/policy/numerical edges,
+bucket-to-device-implementation edges, and method-driver dependencies in both
+new owners. The current audit checks 221 SCF modules with zero dependency
+errors; `tests/python/test_scf_structure.py` passes 104 tests. A CUDA 12.9 API
+syntax pass also compiles `rhf_graph.cpp`, `rhf_bucket.cpp` and `cuda_rhf.cpp`
+as ordinary C++ against the required XsyevBatched declarations.
+
+### Final production acceptance
+
+The final candidate is configured from an empty `cuda-release-sm120` build tree
+with GCC 11.4, NVCC 12.9.86, Release `-O3`, `sm_120`, production fast-compile
+disabled, compiler cache disabled, two CUDA compile jobs and four total Ninja
+jobs. The host is an RTX 5090 with driver 580.95.05. These are build/runtime
+acceptance measurements, not a performance claim.
+
+| Acceptance item | Result |
+| --- | --- |
+| Clean production build | {{CLEAN_BUILD}} |
+| Shared library size | {{LIB_SIZE}} |
+| Direct-native device link | {{DEVICE_LINK}} |
+| Representative incremental Graph-owner edit | {{GRAPH_INCREMENTAL}} |
+| Representative incremental bucket-owner edit | {{BUCKET_INCREMENTAL}} |
+| Representative incremental driver edit | {{DRIVER_INCREMENTAL}} |
+| Native CTest/runtime gate | {{NATIVE_TESTS}} |
+| Python endpoint/runtime gate | {{PYTHON_TESTS}} |
+| Weighted-integral/reference gate | {{WEIGHTED_TESTS}} |
+
+The exact final Git SHA and post-commit CI/check status are recorded on #240 and
+the closing pull request so the repository record remains authoritative even
+when documentation-only edits follow the measured candidate tree.
