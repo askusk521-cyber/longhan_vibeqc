@@ -9,7 +9,7 @@ overlap rejection threshold, and UHF frontier-rotation policy. The final #240
 host-control slice separates bucket/cache lifetime and CUDA Graph mechanics
 from the direct numerical launch driver. The retained scientific kernels have
 bounded CUDA owners, while the remaining direct launch driver compiles as
-ordinary C++; final production acceptance is recorded in the closing section.
+ordinary C++; the closing section tracks the remaining production acceptance as pending.
 
 ## Responsibility inventory
 
@@ -871,7 +871,7 @@ compiler contract during both cold and incremental builds. Full #240 remains
 open for the host graph/bucket decomposition and its final combined inventory.
 
 
-## Final direct-HF host-control boundary (#240 closeout)
+## Final direct-HF host-control boundary (#240 implementation; production acceptance pending)
 
 The final slice starts from master `91dfd97`. It separates the two remaining
 host-control lifetimes without moving equations or changing launch order:
@@ -933,26 +933,28 @@ errors; `tests/python/test_scf_structure.py` passes 104 tests. A CUDA 12.9 API
 syntax pass also compiles `rhf_graph.cpp`, `rhf_bucket.cpp` and `cuda_rhf.cpp`
 as ordinary C++ against the required XsyevBatched declarations.
 
-### Final production acceptance
+### Pending production acceptance
 
-The final candidate is configured from an empty `cuda-release-sm120` build tree
-with GCC 11.4, NVCC 12.9.86, Release `-O3`, `sm_120`, production fast-compile
-disabled, compiler cache disabled, two CUDA compile jobs and four total Ninja
-jobs. The host is an RTX 5090 with driver 580.95.05. These are build/runtime
-acceptance measurements, not a performance claim.
+The ownership split above is implemented, but #240 remains open until the exact
+final PR tree is measured in a suitable CUDA 12.9+ production environment.
+Generic green CI, older-SHA measurements and development-only compile samples
+must not be substituted for these gates. When that environment is available,
+use an empty `cuda-release-sm120` build tree with the production toolchain and
+record the exact command/result receipts against the final SHA.
 
-| Acceptance item | Result |
+| Acceptance item | Current status |
 | --- | --- |
-| Clean production build | {{CLEAN_BUILD}} |
-| Shared library size | {{LIB_SIZE}} |
-| Direct-native device link | {{DEVICE_LINK}} |
-| Representative incremental Graph-owner edit | {{GRAPH_INCREMENTAL}} |
-| Representative incremental bucket-owner edit | {{BUCKET_INCREMENTAL}} |
-| Representative incremental driver edit | {{DRIVER_INCREMENTAL}} |
-| Native CTest/runtime gate | {{NATIVE_TESTS}} |
-| Python endpoint/runtime gate | {{PYTHON_TESTS}} |
-| Weighted-integral/reference gate | {{WEIGHTED_TESTS}} |
+| Clean production build | Pending exact-final-SHA measurement |
+| Shared library size | Pending exact-final-SHA measurement |
+| Direct-native device link | Pending exact-final-SHA measurement |
+| Representative incremental Graph-owner edit | Pending exact-final-SHA measurement |
+| Representative incremental bucket-owner edit | Pending exact-final-SHA measurement |
+| Representative incremental driver edit | Pending exact-final-SHA measurement |
+| Native CTest/runtime gate | Pending exact-final-SHA measurement |
+| Python endpoint/runtime gate | Pending exact-final-SHA measurement |
+| Weighted-integral/reference gate | Pending exact-final-SHA measurement |
 
-The exact final Git SHA and post-commit CI/check status are recorded on #240 and
-the closing pull request so the repository record remains authoritative even
-when documentation-only edits follow the measured candidate tree.
+After those measurements exist, replace the pending statuses with the exact
+toolchain/host identity, commands and results, then promote this section to a
+production-acceptance record. Until then, neither this document nor the PR
+claims completion of #240.
