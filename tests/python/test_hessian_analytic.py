@@ -99,6 +99,9 @@ def test_raw_total_invariants(case):
         np.full((2, 2, 3, 3), np.nan),
         np.full((2, 2, 3, 3), np.inf),
         np.ones((2, 2, 3, 3), dtype=complex),
+        np.full((2, 2, 3, 3), "x", dtype=object),
+        np.full((2, 2, 3, 3), "x"),
+        np.full((2, 2, 3, 3), np.datetime64("2026-09-19")),
     ],
 )
 def test_invalid_relaxation_rejected_before_provider_work(relax, monkeypatch):

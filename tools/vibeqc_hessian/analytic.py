@@ -486,7 +486,7 @@ def analytic_hessian(s, *, relax=None):
         relax = np.asarray(relax)
         if (
             relax.shape != (s.nat, s.nat, 3, 3)
-            or np.iscomplexobj(relax)
+            or relax.dtype.kind not in "biuf"
             or not np.isfinite(relax).all()
         ):
             raise ValueError(
