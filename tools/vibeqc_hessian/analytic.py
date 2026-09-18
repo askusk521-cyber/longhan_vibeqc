@@ -60,8 +60,17 @@ _COMPILE_CACHE: dict = {}
 def _compile_cached(
     key, build_ir, ir_extra, adapter, cache, output_indices, component_indices
 ):
-    ck = key + (tuple(sorted(output_indices)),) + (tuple(sorted(component_indices)),)
-    if ck not in _COMPILE_CACHE:
+    # The directory owns artifact lifetime; the compiler and ordered subsets
+    # are part of execution/layout identity, not interchangeable cache hints.
+    ck = (
+        Path(cache).resolve(),
+        adapter,
+        key,
+        tuple(output_indices),
+        tuple(component_indices),
+    )
+    artifact = _COMPILE_CACHE.get(ck)
+    if artifact is None or not artifact.native.library.is_file():
         ir = build_ir(**ir_extra)
         _COMPILE_CACHE[ck] = compile_second_derivative(
             ir,
