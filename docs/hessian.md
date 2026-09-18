@@ -9,12 +9,11 @@ three different providers later.
 
 ## Current implementation status
 
-The integration in `tools/vibeqc_hessian/analytic.py` is **PySCF-backed validation
-scaffolding**, not a complete native VibeQC Hessian. PySCF reconstructs its SCF
-state and supplies first-order H1/S1 data. Native RHF snapshot consumption,
-compiler/native first-derivative RHS construction and a no-PySCF integration
-regression remain blocking work. The diagnostic checks below do not close A2
-or #180 and do not expose a public Hessian API.
+The native CPU tools path now consumes a VibeQC RHF snapshot and generated
+first/second integral derivatives, with native J/K response. PySCF is confined
+to external comparison oracles. The qualified small-system domain and remaining
+#180 production/GPU/HVP work are described below; a tiny analytic Hessian does
+not close the whole Hessian/HVP roadmap or expose a public Calculator API.
 
 ## Scope of this slice
 
@@ -290,96 +289,104 @@ STO-3G. No complete-method performance or generated-provider claim is made.
 
 See the [reference-boundary rationale](../.agents/notes/implemented/numerics/2026-09-17-hessian-reference-boundary.md).
 
-## PySCF-backed analytic scaffold (native A2 remains open)
+## Bounded native CPU analytic RHF integration
 
-The reference path above keeps every integral finite-differenced and CPHF
-dense, so it is an independent oracle but does not exercise the production
-boundary that #180 step 4 asks for. This diagnostic wires parts of the two
-dependencies together and checks the assembled total against PySCF's analytic
-Hessian, on the same three fixtures as the reference path:
+`NativeRHFState` and `analytic_hessian` provide a native-input tools integration
+for **at most 12 Cartesian AOs and four atoms**, with a closed-shell, all-electron,
+conventional unscreened RHF reference. The supported integral primitives cover
+s/p/d/f; end-to-end default tests qualify H2 and STO-3G water, while the 12-AO
+custom d-shell case is an explicitly requested slow test. This is not a public
+production-size Hessian, CUDA Hessian, DFT/DF/ECP/UHF Hessian, or molecular HVP
+capability. Those remain separate #180 acceptance items.
 
-* **core / pulay / two_electron** are consumed from the #178 generated
-  second-integral providers (`tools/vibeqc_hessian/analytic.py::
-  provider_components`), with the caller owning the weights `P0`, `-W_e`,
-  `W2` exactly as the reference does.
-* **relaxation** is solved through #179's shared matrix-free
-  `RHFResponseOperator` and its true-residual GMRES
-  (`analytic.py::cphf_relaxation`), replacing the reference's dense
-  `(nmo*nocc)^2` replica.
-* **nuclear** uses the closed-form Coulomb second derivative
-  (`analytic.py::nuclear_closed_form`), which is exact and carries no
-  finite-difference step.
+### State and derivative ownership
 
-### #180 RHS / #179 response boundary
+The calculation side requires no PySCF installation and imports no Hessian
+reference oracle. The chain is:
 
-#179 apply remains the occupied-major/virtual-minor RHF Jacobian, and its
-explicit tiny-system identity against the dense A1 response matrix is retained
-as a diagnostic. The A2 assembly no longer hand-builds a transformed CPHF RHS,
-however. For each nuclear displacement it now:
+1. `NativeSource` owns the native geometry/basis and integral source.
+   `export_rhf` runs the existing native CPU RHF solver and exports a checked
+   immutable `ReferenceSnapshot`. Its existing small-system bridge canonicalizes
+   the final Fock with NumPy on the CPU and records the measured physical/density
+   residuals; it is not a GPU-resident or generated SCF implementation.
+2. `NativeRHFState` binds that same snapshot to its live source. Geometry, basis,
+   representation, Hamiltonian, electron count, dimension, and source lifetime
+   are checked. Hessian helpers do not rerun SCF or manufacture convergence data.
+3. `first_order.generated_first_order` obtains S/T/V and ERI first derivatives
+   from the existing compiler DAGs. The explicit CPU first-component adapter
+   emits bounded Cartesian component subsets and streams primitive contractions
+   through the native runtime template. It introduces no new integral recurrence.
+4. ERI first derivatives are immediately contracted with the fixed reference
+   density into the frozen-Fock perturbation. Nuclear-attraction operator-center
+   motion and all basis-center motions are accumulated onto physical atoms.
+   No molecular `3N * NAO^4` first-derivative tensor is retained.
+5. `build_rhf_nuclear_rhs` constructs the symmetric-gauge RHS, including the
+   known metric-density Fock term. #179 `RHFResponseOperator` / true-residual
+   GMRES uses `NativeJKBackend`, not the dense AO response oracle.
+6. The explicit second-derivative skeleton uses #178 generated providers.
+   Two-electron energy weights are folded per shell quartet rather than stored
+   as a molecular four-index tensor. Nuclear repulsion is closed-form.
+   Relaxation evaluates every ordered atom/axis pair independently; raw symmetry
+   is checked without copying one triangle onto the other.
 
-1. obtains analytic first-order frozen-Fock and overlap matrices;
-2. builds the known metric-density connection and its induced RHF Fock;
-3. passes those three MO-space terms through build_rhf_nuclear_rhs; and
-4. solves the returned contract directly as A x = -b through #179 GMRES.
+The known occupied response is `U_ij = -S_ij/2`; the virtual response is
+`U_ai = x_ia.T - S_ai/2`. Exact elimination of the known occupied block is
+algebraically equivalent to the full redundant reference solve. It is the
+occupied metric contribution, not redundant iteration, that must be retained.
 
-The bounded integration driver currently gets the analytic first-order matrices
-from PySCF make_h1/libcint. This is an analytic provider, not the displaced-
-geometry System.derive path used by the A1 oracle. Replacing both this provider and the PySCF-created SCF reference with native
-producers is required before claiming native A2 completion; it is not an
-optional performance follow-up. The existing RHS contract must be preserved.
+### Usage and resource boundaries
 
-The symmetric metric gauge reconstructs the occupied-column coefficient
-response as U_ai = x_ia.T - S_ai/2 and U_ij = -S_ij/2 before the relaxation
-contraction. The older A = D(I + F_vv^T) relation remains covered as an
-operator-equivalence test rather than as a second hand-written production RHS.
+```python
+from tools.vibeqc_posthf.sources import NativeSource
+from tools.vibeqc_hessian import NativeRHFState, analytic_hessian
 
-### Raw response symmetry
+with NativeSource([(1, (0, 0, 0)), (1, (0, 0, 1.4))], basis="sto-3g") as source:
+    state = NativeRHFState.from_source(source, tolerance=1e-12)
+    components = analytic_hessian(state)
+    hessian = components["total"]  # (atom, atom, xyz, xyz), Eh / Bohr**2
+```
 
-Relaxation now evaluates every ordered atom pair independently. No triangle is
-mirrored and no post-hoc symmetrization occurs before the acceptance gate.
-A regression intentionally constructs System(mol) without calling derive();
-reintroducing h1, S1, or ERI1 finite-difference inputs therefore fails before a
-numerical comparison can hide the source regression.
+The caller owns `source` lifetime and must keep it open while evaluating a
+Hessian. State-bound first-order matrices are cached as immutable arrays;
+a changed geometry requires a new source/state. Compiler artifacts are cached
+under `.artifacts` by default; pass `cache=...` to `from_source` to choose a
+separate writable location. A C++ compiler is required for the generated kernels.
 
-### Measured (not fitted)
+First-component records and component outputs have an explicit numeric budget.
+The complete tools integration still retains all coordinate H1/S1 and response
+vectors, the full molecular Hessian, and the existing tiny native SCF workspace.
+It does not claim #180's global memory-budgeted production assembly or a
+matrix-free molecular HVP. Python orchestration and cold compilation can be
+expensive; no performance advantage is asserted.
 
-| check | h2 | water STO-3G | water s+p+d |
-|---|---|---|---|
-| A = D(I+F_vv^T) diagnostic | 0.0 | 2.2e-16 | 1.8e-15 |
-| analytic relax - semi-numerical A1 relax | <1e-8 | <1e-8 | 4.2e-9 |
-| raw relaxation symmetry defect | 2.8e-17 | 3.1e-14 | 9.7e-12 |
-| #178 core - FD | 5.7e-8 | 1.2e-6 | (gated) |
-| #178 pulay - FD | 7.9e-9 | 3.9e-8 | (gated) |
-| #178 two_electron - FD | 2.0e-8 | 4.0e-7 | (gated) |
-| nuclear closed form - FD | 1.1e-7 | 1.2e-6 | 1.2e-6 |
+An optional supplied `relax` tensor must be finite, real and exactly
+`(natoms, natoms, 3, 3)`. It is a diagnostic component override, not evidence
+that a native electronic-response solve occurred. Unsupported state domains and
+closed/mismatched sources fail before derivative-provider execution.
 
-The total-Hessian tests retain their existing PySCF analytic acceptance gates;
-the table above only reports measurements rechecked for this response change.
+### Verification
 
-The full PySCF analytic Hessian remains a useful end-to-end cross-check, but it
-is no longer described as an independent first-order-provider reference because
-the bounded A2 response path also consumes PySCF analytic H1 matrices. The A1
-semi-numerical oracle remains independent of that source. Its finite-difference
-first-derivative floor is now visible in the water s+p+d relaxation comparison:
-at h=1e-5 the difference is about 4.1e-9, while smaller steps increase
-cancellation error. The response-vs-A1 gate is therefore 1e-8.
+`tests/python/test_hessian_analytic.py` checks the following separately:
 
-The water_sdf two-electron row remains gated behind VIBEQC_HESSIAN_SLOW=1
-because its generated ERI second-derivative provider is the long pole. Tests:
-tests/python/test_hessian_analytic.py.
+- A fresh-process test blocks imports of PySCF and the semi-numerical Hessian
+  reference, and forbids the dense native derivative and dense AO response
+  oracles while running the complete native H2 chain.
+- Generated frozen-Fock/overlap perturbations are compared against an independent
+  native derivative oracle used only on the assertion side.
+- The final Hessian and individual components are compared with optional external
+  PySCF analytic and finite-difference references at the same exact basis records.
+- Three-step directional differences of VibeQC analytic forces independently
+  test the total Hessian; raw symmetry and per-axis translation identities are
+  checked before any presentation operation.
+- Wrong relaxation tensors, out-of-domain sizes, unrelated references, repeated
+  SCF attempts, and closed sources are explicitly tested. The earlier reduced
+  CPHF regression still verifies orbital, occupied-energy and Hessian equivalence.
 
-See the implemented response-boundary rationale in
-../.agents/notes/implemented/numerics/2026-09-19-hessian-analytic-response-boundary.md.
+`tests/python/test_first_derivatives_native.py` separately checks generated
+primitive components, Cartesian normalization and coincident-center scatter,
+metadata/resource rejection, late-chunk failure isolation, and native output
+publication. PySCF-dependent comparisons may skip when the optional oracle is
+not installed; the no-oracle native test must not skip for that reason.
 
-### Analytic diagnostic admission
-
-`analytic_hessian` and `cphf_relaxation` accept at most **12 AOs**, matching
-the shared dense response oracle. Larger systems are rejected before any
-first- or second-derivative provider work. The separate finite-difference
-`System` reference retains its 18-AO limit; that is not the analytic domain.
-An explicitly supplied relaxation must be a finite real tensor with shape
-`(natoms, natoms, 3, 3)`; scalar broadcasting is not an accepted Hessian.
-The PySCF total comparison is an end-to-end analytic cross-check, not a fully
-independent analytic reference: the integrated response also uses PySCF
-analytic first-order matrices. Independent finite-difference comparisons
-remain separate checks.
+See the [native first-order source decision](../.agents/notes/implemented/numerics/2026-09-19-hessian-native-first-order-sources.md)
+for the superseded PySCF-backed integration design and its replacement.

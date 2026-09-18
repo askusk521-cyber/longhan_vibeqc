@@ -1,28 +1,12 @@
-"""PySCF-backed analytic RHF Hessian validation scaffold (native A2 incomplete).
+"""Bounded native CPU analytic RHF Hessian through the #178/#179 layers.
 
-This bounded diagnostic combines generated #178 second-integral providers,
-the shared #179 response operator/GMRES and closed-form nuclear derivatives.
-It does not complete the native Hessian integration left open by #414/#180:
-PySCF reconstructs the SCF reference and supplies analytic H1/S1 matrices
-inside the integration path, rather than only serving as a test oracle.
-Native RHF snapshot input and compiler/native first-derivative RHS producers
-are still required, together with a no-PySCF integration regression.
+SCF state, S/T/V and ERI values come from VibeQC. First-order nuclear sources
+are generated from the existing compiler DAGs, explicit second derivatives
+use #178, and #179 solves orbital response with streamed native J/K actions.
+PySCF and the semi-numerical oracle are confined to external validation.
 
-The A1 finite-difference reference and PySCF total Hessian are useful diagnostic
-cross-checks. Agreement does not prove a complete native producer chain, and
-the PySCF total is not an independent analytic first-order-provider reference.
-No public/native Hessian or HVP capability is provided here.
-
-Measured on this machine (CPU, generated C++ second-integral kernels):
-
-    case   max|core|  max|pulay|  max|two_e|  max|nuclear|  max|relax-vs-A1|
-    H2     5.7e-08    7.9e-09     2.0e-08     1.1e-07       <1.0e-08
-    water  1.2e-06    3.9e-08     4.0e-07     1.2e-06       <1.0e-08
-
-The residual against the FD oracle is finite-difference truncation of its
-integral derivatives rather than a formula error. The shared operator identity
-holds to machine precision; the analytic relaxation differs from the A1
-finite-difference first-order oracle by at most the expected FD floor.
+This is a tools integration for at most 12 Cartesian AOs/four atoms, not a
+public production-size, CUDA, DF, ECP, DFT or matrix-free molecular HVP endpoint.
 """
 
 from __future__ import annotations
@@ -50,18 +34,11 @@ from vibeqc_compiler.integral.second_order_layout import (
 )
 from vibeqc_compiler.integral.shell_spec import cartesian_components
 
-from tools.vibeqc_posthf.reference import ReferenceSnapshot
-from tools.vibeqc_response.backends import DenseAOResponseBackend
+from tools.vibeqc_response.backends import NativeJKBackend
 from tools.vibeqc_response.krylov import GMRESOptions, solve
 from tools.vibeqc_response.operators import RHFResponseOperator
-from tools.vibeqc_validation.f_shell_numerics import _normalized_primitives
 
-from .reference import (
-    System,
-    _wof,
-    build_mol,
-    hessian_components,
-)
+from .native import NativeRHFState
 from .response import build_rhf_nuclear_rhs, metric_density_response_mo
 
 __all__ = [
@@ -70,30 +47,14 @@ __all__ = [
     "cphf_relaxation",
     "nuclear_closed_form",
     "provider_components",
-    "validate",
 ]
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPILE_CACHE: dict = {}
 
 
 # ---------------------------------------------------------------------------
 # #178 second-integral provider driver
 # ---------------------------------------------------------------------------
-
-
-def _mol_inputs(mol):
-    """Enumerate every contracted Cartesian shell with normalized primitives."""
-    mol.build()
-    shells = []
-    for ai, (tag, xyz) in enumerate(mol.atom):
-        for shell in mol.basis[tag]:
-            l = shell[0]
-            prims = [[float(a), float(c)] for a, c in shell[1:]]
-            shells.append(
-                {"atom_index": ai, "angular_momentum": int(l), "primitives": prims}
-            )
-    return {"shells": shells, "coordinates": mol.atom_coords().tolist()}
 
 
 def _compile_cached(
@@ -119,7 +80,7 @@ def _tile_components(count, chunk=64):
 
 def _scatter(full, ci, center_atoms, data):
     """Scatter a dense (k3, k3) kernel result to a (nat, nat, 3, 3) tensor."""
-    nat = data["mol"].natm
+    nat = data["state"].nat
     k = len(ci)
     mapping = SecondAtomMap(ci, center_atoms)
     blk = mapping.scatter_hessian(full.reshape(k * 3, k * 3))
@@ -180,48 +141,44 @@ def _run_kernel_summed(
 
 
 def _provider_data(s):
-    mol = s.mol
-    C, P0, eps = s.C, s.P0, s.eps
-    nocc = s.nocc
-    W_e = sum(2 * eps[k] * np.outer(C[:, k], C[:, k]) for k in range(nocc))
-    W2 = 0.5 * np.einsum("uv,ls->uvls", P0, P0) - 0.25 * np.einsum(
-        "ul,vs->uvls", P0, P0
-    )
-    adapter = CppCompilerAdapter(Path(shutil.which("c++")))
+    _validate_analytic_domain(s)
+    C, eps = s.C, s.eps
+    W_e = (C[:, : s.nocc] * (2 * eps[: s.nocc])) @ C[:, : s.nocc].T
+    adapter = CppCompilerAdapter(Path(shutil.which("c++") or "c++"))
     return {
-        "mol": mol,
-        "inputs": _mol_inputs(mol),
+        "state": s,
+        "shells": s.source.shells,
+        "primitives": s.primitives,
         "adapter": adapter,
-        "cache": _REPO_ROOT / ".artifacts/second-cache",
+        "cache": s.cache / "second-cache",
         "W_e": W_e,
-        "W2": W2,
+        "density": s.P0,
     }
 
 
 def _run_one_electron(data, family, weight):
     """Provider output for a one-electron family: (nat, nat, 3, 3)."""
-    mol = data["mol"]
-    inputs = data["inputs"]
-    nat = mol.natm
+    state = data["state"]
+    nat = state.nat
     adapter, cache = data["adapter"], data["cache"]
-    shells = inputs["shells"]
+    shells = data["shells"]
     nbas = len(shells)
-    loc = mol.ao_loc_nr()
-    z = mol.atom_charges()
+    loc = state.offsets
+    z = state.Z
     total = np.zeros((nat, nat, 3, 3))
     for a in range(nbas):
         for b in range(nbas):
-            la = shells[a]["angular_momentum"]
-            lb = shells[b]["angular_momentum"]
+            la = shells[a].angular_momentum
+            lb = shells[b].angular_momentum
             na = len(cartesian_components(la))
             nb = len(cartesian_components(lb))
             wa = weight[loc[a] : loc[a] + na, loc[b] : loc[b] + nb].reshape(na, nb)
             prims = (
-                _normalized_primitives(shells[a]),
-                _normalized_primitives(shells[b]),
+                data["primitives"][a],
+                data["primitives"][b],
             )
-            ca_atom = shells[a]["atom_index"]
-            cb_atom = shells[b]["atom_index"]
+            ca_atom = shells[a].atom_index
+            cb_atom = shells[b].atom_index
             if family == "nuclear_attraction":
                 for N in range(nat):  # operator nucleus is the third center
                     ir_extra = {
@@ -234,9 +191,9 @@ def _run_one_electron(data, family, weight):
                     key = (family, la, lb, float(z[N]))
                     centers = np.array(
                         [
-                            mol.atom_coords()[ca_atom],
-                            mol.atom_coords()[cb_atom],
-                            mol.atom_coords()[N],
+                            state.coords[ca_atom],
+                            state.coords[cb_atom],
+                            state.coords[N],
                         ]
                     )
                     total += _run_kernel_summed(
@@ -259,9 +216,7 @@ def _run_one_electron(data, family, weight):
                     "_center_atoms": (ca_atom, cb_atom),
                 }
                 key = (family, la, lb)
-                centers = np.array(
-                    [mol.atom_coords()[ca_atom], mol.atom_coords()[cb_atom]]
-                )
+                centers = np.array([state.coords[ca_atom], state.coords[cb_atom]])
                 total += _run_kernel_summed(
                     data,
                     key,
@@ -277,44 +232,43 @@ def _run_one_electron(data, family, weight):
     return total
 
 
-def _run_eri(data, weight):
+def _run_eri(data, density):
     """Provider output for the four-center ERI family: (nat, nat, 3, 3)."""
-    mol = data["mol"]
-    inputs = data["inputs"]
-    nat = mol.natm
+    state = data["state"]
+    nat = state.nat
     adapter, cache = data["adapter"], data["cache"]
-    shells = inputs["shells"]
+    shells = data["shells"]
     nbas = len(shells)
-    loc = mol.ao_loc_nr()
+    loc = state.offsets
     total = np.zeros((nat, nat, 3, 3))
     for a in range(nbas):
         for b in range(nbas):
             for c in range(nbas):
                 for d in range(nbas):
-                    la = shells[a]["angular_momentum"]
-                    lb = shells[b]["angular_momentum"]
-                    lc = shells[c]["angular_momentum"]
-                    ld = shells[d]["angular_momentum"]
+                    la = shells[a].angular_momentum
+                    lb = shells[b].angular_momentum
+                    lc = shells[c].angular_momentum
+                    ld = shells[d].angular_momentum
                     na = len(cartesian_components(la))
                     nb = len(cartesian_components(lb))
                     nc = len(cartesian_components(lc))
                     nd = len(cartesian_components(ld))
-                    w4 = weight[
-                        loc[a] : loc[a] + na,
-                        loc[b] : loc[b] + nb,
-                        loc[c] : loc[c] + nc,
-                        loc[d] : loc[d] + nd,
-                    ].reshape(na, nb, nc, nd)
-                    prims = tuple(
-                        _normalized_primitives(shells[i]) for i in (a, b, c, d)
+                    sa, sb, sc, sd = (slice(loc[i], loc[i + 1]) for i in (a, b, c, d))
+                    # Fold only this shell's density weights, never molecular N^4 W2.
+                    w4 = 0.5 * np.einsum(
+                        "uv,wx->uvwx", density[sa, sb], density[sc, sd]
                     )
-                    ca, cb, cc, cd = (shells[x]["atom_index"] for x in (a, b, c, d))
+                    w4 -= 0.25 * np.einsum(
+                        "uw,vx->uvwx", density[sa, sc], density[sb, sd]
+                    )
+                    prims = tuple(data["primitives"][i] for i in (a, b, c, d))
+                    ca, cb, cc, cd = (shells[x].atom_index for x in (a, b, c, d))
                     centers = np.array(
                         [
-                            mol.atom_coords()[ca],
-                            mol.atom_coords()[cb],
-                            mol.atom_coords()[cc],
-                            mol.atom_coords()[cd],
+                            state.coords[ca],
+                            state.coords[cb],
+                            state.coords[cc],
+                            state.coords[cd],
                         ]
                     )
                     ir_extra = {
@@ -351,7 +305,7 @@ def provider_components(s):
         data, "nuclear_attraction", P0
     )
     pulay = -_run_one_electron(data, "overlap", data["W_e"])
-    two_electron = _run_eri(data, data["W2"])
+    two_electron = _run_eri(data, data["density"])
     return {"core": core, "pulay": pulay, "two_electron": two_electron}
 
 
@@ -390,73 +344,23 @@ def nuclear_closed_form(s):
 
 
 def build_reference(s):
-    """Build a validated RHF ReferenceSnapshot for #179 from an :class:`System`."""
-    C, S0 = s.C, s.S0
-    hcore = s.mol.intor("int1e_kin_cart") + s.mol.intor("int1e_nuc")
-    # Fock only needs to pass snapshot validation (the operator rebuilds J/K
-    # from the ERI backend); use PySCF's own converged Fock for consistency.
-    from pyscf import scf
-
-    mf = scf.RHF(s.mol)
-    mf.conv_tol = 1e-13
-    mf.max_cycle = 400
-    mf.kernel()
-    nocc, nmo = s.nocc, s.nmo
-    return ReferenceSnapshot(
-        overlap=S0,
-        hcore=hcore,
-        fock=mf.get_fock(),
-        coefficients=C,
-        orbital_energies=s.eps,
-        occupations=np.concatenate([2 * np.ones(nocc), np.zeros(nmo - nocc)]),
-        electron_count=2 * nocc,
-        reference_energy=float(mf.e_tot),
-        scf_residual=1e-12,
-        geometry_hash="hessian-a2",
-        basis_hash="hessian-a2",
-        generation_id="hessian-a2",
-    )
+    """Reuse the caller's validated native snapshot without rerunning SCF."""
+    _validate_analytic_domain(s)
+    return s.reference
 
 
 def _analytic_first_order_inputs(s):
-    """Return analytic frozen-Fock and overlap derivatives for A2 response.
-
-    This bounded integration driver deliberately uses PySCF analytic RHF
-    make_h1/libcint first-derivative primitives as the matrix provider.
-    Unlike System.derive, this path never rebuilds displaced geometries or
-    finite-differences AO integrals. The generated #178 providers remain
-    responsible for the explicit second-derivative skeleton; this helper
-    supplies only the analytic first-order matrices required by #180.
-    """
-    from pyscf import scf
-
-    mf = scf.RHF(s.mol)
-    mf.conv_tol = 1e-13
-    mf.conv_tol_grad = 1e-10
-    mf.max_cycle = 400
-    mf.kernel()
-    if not mf.converged:
-        raise RuntimeError("analytic first-order RHF provider did not converge")
-
-    h1ao = np.asarray(mf.Hessian().make_h1(s.C, mf.mo_occ), dtype=np.float64)
-    nat, nbf = s.nat, s.nbf
-    if h1ao.shape != (nat, 3, nbf, nbf):
-        raise ValueError(f"unexpected analytic h1 shape {h1ao.shape}")
-
-    # Assemble both AO-index motions for each physical atom, exactly as the
-    # analytic RHF Hessian solver does.
-    s1a = -s.mol.intor("int1e_ipovlp", comp=3)
-    s1ao = np.zeros((nat, 3, nbf, nbf))
-    for ia, (_, _, p0, p1) in enumerate(s.mol.aoslice_by_atom()):
-        s1ao[ia, :, p0:p1] += s1a[:, p0:p1]
-        s1ao[ia, :, :, p0:p1] += s1a[:, p0:p1].transpose(0, 2, 1)
-    return h1ao, s1ao
+    """Generated S/T/V/ERI contractions, tied to the same native SCF density."""
+    _validate_analytic_domain(s)
+    return s.first_order_inputs
 
 
 def _validate_analytic_domain(s):
-    """Honor the shared dense response oracle's independently bounded domain."""
-    if not 1 <= s.nbf <= 12:
-        raise ValueError("analytic Hessian integration is bounded to 12 AOs")
+    if not isinstance(s, NativeRHFState):
+        raise TypeError(
+            "analytic Hessian requires NativeRHFState, not an oracle System"
+        )
+    s.validate()
 
 
 def cphf_relaxation(s):
@@ -481,10 +385,14 @@ def cphf_relaxation(s):
 
     h1ao, s1ao_all = _analytic_first_order_inputs(s)
     ref = build_reference(s)
-    backend = DenseAOResponseBackend(s.ERI)
+    backend = NativeJKBackend(s.source)
     op = RHFResponseOperator(RHFResponseOperator.build_problem(ref, backend), backend)
     layout = op.problem.layout
     opts = GMRESOptions()
+
+    def induced_fock(density):
+        coulomb, exchange = backend.coulomb_exchange(density)
+        return coulomb - 0.5 * exchange
 
     mo1s = np.zeros((nat, 3, nbf, nocc))
     e1s = np.zeros((nat, 3, nocc, nocc))
@@ -495,7 +403,7 @@ def cphf_relaxation(s):
 
             metric_dm_mo = metric_density_response_mo(overlap_mo, nocc=nocc)
             metric_dm_ao = C @ metric_dm_mo @ C.T
-            metric_fock_mo = C.T @ _wof(s.ERI, metric_dm_ao) @ C
+            metric_fock_mo = C.T @ induced_fock(metric_dm_ao) @ C
             rhs = build_rhf_nuclear_rhs(
                 frozen_mo,
                 overlap_mo,
@@ -520,7 +428,7 @@ def cphf_relaxation(s):
             hs0 = frozen_occ - overlap_occ * e_i[None, :]
             dm = C @ (2 * mo1) @ mocc.T
             dm = dm + dm.T
-            hs = hs0 + C.T @ _wof(s.ERI, dm) @ mocc
+            hs = hs0 + C.T @ induced_fock(dm) @ mocc
             e1s[ia, x] = hs[occ, :] + mo1[occ, :] * (e_i[:, None] - e_i[None, :])
             mo1s[ia, x] = C @ mo1
 
@@ -546,84 +454,6 @@ def cphf_relaxation(s):
                         np.einsum("ij,ij->", s1oo[ia, x], e1s[ja, y]) * 2
                     )
     return relax
-
-
-def fixture_mol(name):
-    """Return one of the A2 fixtures (Bohr, Cartesian).
-
-    ``h2``: 2 AO / 1 occ / 1 virt.  ``water``: genuine STO-3G O (7 AO /
-    5 occ / 2 virt).  ``water_sdf``: custom s+p+d O (12 AO / 5 occ / 7 virt),
-    the multi-virtual stress case.  These mirror A1's test fixtures so the
-    same molecule is checked in both the reference and the integrated path.
-    """
-    _S = [
-        [
-            0,
-            (3.425250914, 0.1543289673),
-            (0.6239137298, 0.5353281423),
-            (0.168855404, 0.4446345422),
-        ]
-    ]
-    if name == "h2":
-        return build_mol(
-            [(1, [0.0, 0.0, 0.0]), (1, [0.1, 0.2, 1.4])],
-            {"H0": list(_S), "H1": list(_S)},
-            0,
-            0,
-        )
-    if name == "water":
-        _O = [
-            [
-                0,
-                (130.7093214, 0.1543289673),
-                (23.80886605, 0.5353281423),
-                (6.443608313, 0.4446345422),
-            ],
-            [
-                0,
-                (5.033151319, -0.09996722919),
-                (1.169596125, 0.3995128261),
-                (0.38038896, 0.7001154689),
-            ],
-            [
-                1,
-                (5.033151319, 0.155916275),
-                (1.169596125, 0.6076837186),
-                (0.38038896, 0.3919573931),
-            ],
-        ]
-        return build_mol(
-            [(8, [0.0, 0.0, 0.0]), (1, [0.0, 0.958, 0.587]), (1, [0.0, -0.958, 0.587])],
-            {"O0": list(_O), "H1": list(_S), "H2": list(_S)},
-            0,
-            0,
-        )
-    if name == "water_sdf":
-        _O = [
-            [
-                0,
-                (18.5950316763, 0.0499684015),
-                (5.6203025291, 0.1505027689),
-                (1.3720603452, 0.4117903918),
-                (0.3434943771, 0.4106611356),
-            ],
-            [
-                1,
-                (7.1153375795, 0.0102428309),
-                (2.0218099978, 0.0314286582),
-                (0.5271803969, 0.0814495192),
-                (0.1703101032, 0.1646776769),
-                (0.0628267133, 0.2917579986),
-            ],
-            [2, (0.0628267133, 0.1506938663), (0.0351485943, 0.2198166377)],
-        ]
-        return build_mol(
-            [(8, [0.0, 0.0, 0.0]), (1, [0.0, 0.958, 0.587]), (1, [0.0, -0.958, 0.587])],
-            {"O0": list(_O), "H1": list(_S), "H2": list(_S)},
-            0,
-            0,
-        )
-    raise ValueError(f"unknown A2 fixture {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -665,41 +495,3 @@ def analytic_hessian(s, *, relax=None):
     )
     comp["total"] = total
     return comp
-
-
-def validate(name):
-    """Run the full A2 integration for a fixture in {h2, water, water_sdf}."""
-    mol = fixture_mol(name)
-    mol.build()
-    s = System(mol)
-    s.derive()
-    fd = hessian_components(s)  # A1 FD oracle
-    comp = analytic_hessian(s)
-    from pyscf import scf
-
-    mf = scf.RHF(mol)
-    mf.conv_tol = 1e-13
-    mf.kernel()
-    H_pyscf = mf.Hessian().kernel()
-    print(
-        f"=== {name}: #180 A2 complete analytic Hessian (nbf={s.nbf}, nocc={s.nocc}) ==="
-    )
-    print("  per-component |#178/#179/closed-form - FD oracle|:")
-    for key in ("nuclear", "core", "pulay", "two_electron", "relaxation"):
-        print(f"    {key:13s} = {np.abs(comp[key] - fd[key]).max():.3e}")
-    print(
-        f"  total - FD oracle           = {np.abs(comp['total'] - sum(fd[k] for k in ('nuclear', 'core', 'pulay', 'two_electron', 'relaxation'))).max():.3e}"
-    )
-    print(
-        f"  total vs PySCF analytic     = {np.abs(comp['total'] - H_pyscf).max():.3e}"
-    )
-    print(
-        f"  (FD oracle vs PySCF analytic = {np.abs(sum(fd[k] for k in ('nuclear', 'core', 'pulay', 'two_electron', 'relaxation')) - H_pyscf).max():.3e})"
-    )
-    return comp, fd, H_pyscf
-
-
-if __name__ == "__main__":
-    import sys
-
-    validate(sys.argv[1] if len(sys.argv) > 1 else "h2")

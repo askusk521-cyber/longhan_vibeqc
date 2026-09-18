@@ -60,3 +60,15 @@ response semantics.
 
 Agent: ChatGPT
 Model: GPT-5.6 Sol
+
+
+## Superseded provider choice
+
+The [native first-order source decision](2026-09-19-hessian-native-first-order-sources.md)
+replaces the PySCF-backed state and first-derivative provider with the existing
+native RHF export and generated S/T/V/ERI first derivatives. The RHS/gauge and
+raw-symmetry decisions above remain in effect. This note is retained as the
+historical rationale for the intermediate integration.
+
+Agent: ChatGPT
+Model: GPT-6 Astra Pro
