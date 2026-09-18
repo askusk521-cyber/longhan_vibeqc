@@ -284,23 +284,6 @@
       "subsystem": "xc"
     },
     {
-      "bytes": 4209,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 66,
-        "scientific": 0
-      },
-      "path": "src/dft/cuda_xc.hpp",
-      "physical_lines": 100,
-      "reason": "Borrowed arena, device-buffer/stream result and density-generation contracts with an exact resource request; no scientific equations.",
-      "regions": [],
-      "role": "runtime",
-      "sha256": "43619d809f06c927d2615a5be7e03cd36816bfc2dd74a47ca28b405c79e471c7",
-      "subsystem": "xc"
-    },
-    {
       "bytes": 7655,
       "code_lines": {
         "fallback": 0,
@@ -325,6 +308,23 @@
       ],
       "role": "runtime",
       "sha256": "ff0fbe6bc6c2a2c20b9c1f22d242dbcd24f56ab35d25275440dc14d380cebb15",
+      "subsystem": "xc"
+    },
+    {
+      "bytes": 4209,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 66,
+        "scientific": 0
+      },
+      "path": "src/dft/cuda_xc.hpp",
+      "physical_lines": 100,
+      "reason": "Borrowed arena, device-buffer/stream result and density-generation contracts with an exact resource request; no scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "43619d809f06c927d2615a5be7e03cd36816bfc2dd74a47ca28b405c79e471c7",
       "subsystem": "xc"
     },
     {
@@ -634,6 +634,67 @@
       "role": "runtime",
       "sha256": "252642dc8d74659b54f2138c9419501c06691c1832badabd19fe67ba8ad6c8a4",
       "subsystem": "runtime"
+    },
+    {
+      "bytes": 2093,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 12,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda_direct_jk_device.hpp",
+      "physical_lines": 38,
+      "reason": "Borrowed direct-provider stream, resident matrix and numerical-status contract; no new J/K dispatch or scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "2f1db7f73b28fc28c265225d85391f45a7e160f69a5572f927f73ad5d2b5cb68",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 19897,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 429,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda_eigensolver_probe.cu",
+      "physical_lines": 464,
+      "reason": "Diagnostic generic dense eigensolver experiments, synchronization and library comparisons.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "628596452c9bfb391c91d4f1efe75025a928630d23baaec6daf0426b2271ccdb",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 6590,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 117,
+        "scientific": 26
+      },
+      "path": "src/scf/cuda_fock.cu",
+      "physical_lines": 159,
+      "reason": "Dense bucket owner and stable execution interface.",
+      "regions": [
+        {
+          "code_lines": 26,
+          "first_line": 11,
+          "last_line": 38,
+          "reason": "Concrete cached-tensor RHF J/K contraction equation.",
+          "role": "scientific",
+          "start": "__global__ void rhf_fock_bucket_kernel",
+          "stop": "struct CudaFockBucketHandle"
+        }
+      ],
+      "role": "runtime",
+      "sha256": "93330967c98637368a8c219295d170bb0af34aa64fc0229b95975f4131bd9449",
+      "subsystem": "scf_tensor"
     },
     {
       "bytes": 10461,
@@ -2039,23 +2100,6 @@
       "subsystem": "direct_integrals"
     },
     {
-      "bytes": 3966,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 0,
-        "scientific": 67
-      },
-      "path": "src/scf/cuda/direct_native_pair_order2.cuh",
-      "physical_lines": 97,
-      "reason": "Retained native direct numerical family extracted from cuda_rhf.cu, preserving original arithmetic, templates, workspace layout and scientific classification. Existing generated/exception selectors are unchanged.",
-      "regions": [],
-      "role": "scientific",
-      "sha256": "f866f85d0a4ba565115b4d66bc00ddb48704a875dcb91b365a51cae277a4087b",
-      "subsystem": "direct_integrals"
-    },
-    {
       "bytes": 4165,
       "code_lines": {
         "fallback": 0,
@@ -2073,20 +2117,20 @@
       "subsystem": "direct_integrals"
     },
     {
-      "bytes": 6328,
+      "bytes": 3966,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
         "runtime": 0,
-        "scientific": 118
+        "scientific": 67
       },
-      "path": "src/scf/cuda/direct_native_pair_order3.cuh",
-      "physical_lines": 146,
+      "path": "src/scf/cuda/direct_native_pair_order2.cuh",
+      "physical_lines": 97,
       "reason": "Retained native direct numerical family extracted from cuda_rhf.cu, preserving original arithmetic, templates, workspace layout and scientific classification. Existing generated/exception selectors are unchanged.",
       "regions": [],
       "role": "scientific",
-      "sha256": "438067cedf40db48b3ba1a1e9da27d23144938c66225162040a0acfc18527aea",
+      "sha256": "f866f85d0a4ba565115b4d66bc00ddb48704a875dcb91b365a51cae277a4087b",
       "subsystem": "direct_integrals"
     },
     {
@@ -2104,6 +2148,23 @@
       "regions": [],
       "role": "scientific",
       "sha256": "6ccb867032bdca53984f776c8c3c9bae1e922914da563b787303924b070e453e",
+      "subsystem": "direct_integrals"
+    },
+    {
+      "bytes": 6328,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 0,
+        "scientific": 118
+      },
+      "path": "src/scf/cuda/direct_native_pair_order3.cuh",
+      "physical_lines": 146,
+      "reason": "Retained native direct numerical family extracted from cuda_rhf.cu, preserving original arithmetic, templates, workspace layout and scientific classification. Existing generated/exception selectors are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "sha256": "438067cedf40db48b3ba1a1e9da27d23144938c66225162040a0acfc18527aea",
       "subsystem": "direct_integrals"
     },
     {
@@ -2620,23 +2681,6 @@
       "subsystem": "direct_integrals"
     },
     {
-      "bytes": 1628,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 32,
-        "scientific": 0
-      },
-      "path": "src/scf/cuda/eigensolver.hpp",
-      "physical_lines": 46,
-      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
-      "regions": [],
-      "role": "runtime",
-      "sha256": "fdec2080f754c8794ccd9defd98ce9c4e76512f0985f4ccad4881b64338f123e",
-      "subsystem": "runtime"
-    },
-    {
       "bytes": 21658,
       "code_lines": {
         "fallback": 0,
@@ -2668,6 +2712,23 @@
       "regions": [],
       "role": "runtime",
       "sha256": "4ed275be10ac532685b61d1103c59bda3b26d0499424bdb07acf81bcc5696a95",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 1628,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 32,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/eigensolver.hpp",
+      "physical_lines": 46,
+      "reason": "Extracted generic eigensolver, native launch or index/timing boundary; no molecular integral arithmetic. Host dispatch now compiles separately.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "fdec2080f754c8794ccd9defd98ce9c4e76512f0985f4ccad4881b64338f123e",
       "subsystem": "runtime"
     },
     {
@@ -2970,23 +3031,6 @@
       "subsystem": "one_electron_derivatives"
     },
     {
-      "bytes": 4229,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 0,
-        "scientific": 75
-      },
-      "path": "src/scf/cuda/one_electron_native_attraction.cuh",
-      "physical_lines": 86,
-      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
-      "regions": [],
-      "role": "scientific",
-      "sha256": "0a263695aebc9be75246007954d9f7bef46476468b664178622e793460074976",
-      "subsystem": "one_electron_derivatives"
-    },
-    {
       "bytes": 7315,
       "code_lines": {
         "fallback": 0,
@@ -3001,6 +3045,23 @@
       "regions": [],
       "role": "scientific",
       "sha256": "d14b53744be01737ac0d7ef1ddfae7575df8ae8f019e553a5746b2fd2463cd53",
+      "subsystem": "one_electron_derivatives"
+    },
+    {
+      "bytes": 4229,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 0,
+        "scientific": 75
+      },
+      "path": "src/scf/cuda/one_electron_native_attraction.cuh",
+      "physical_lines": 86,
+      "reason": "Retained one-electron derivative/force numerical implementation or workspace from cuda_rhf.cu. The separate generated value owner and derivative performance exceptions are unchanged.",
+      "regions": [],
+      "role": "scientific",
+      "sha256": "0a263695aebc9be75246007954d9f7bef46476468b664178622e793460074976",
       "subsystem": "one_electron_derivatives"
     },
     {
@@ -3123,20 +3184,37 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 1920,
+      "bytes": 1501,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 34,
+        "runtime": 30,
         "scientific": 0
       },
       "path": "src/scf/cuda/resources.hpp",
-      "physical_lines": 55,
+      "physical_lines": 48,
       "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
       "regions": [],
       "role": "runtime",
-      "sha256": "9968a5815e0a86083e64fc224aa701f060d4ebea8c39d672ed1ac93a672e05e7",
+      "sha256": "5723430a05f36f726453b8cd4e5bf873450e08e07bd84057bcc12c1231baa0a8",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 2137,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 37,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/rhf_graph.hpp",
+      "physical_lines": 57,
+      "reason": "Host-only RAII contract for direct-HF CUDA Graph capture, executable lifetime, upload and replay; no scientific equations or device kernels.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "7c069d030f0a2dd75e51441f3cd5253accfa3696466b6ac46f09568ab68603e8",
       "subsystem": "runtime"
     },
     {
@@ -3426,67 +3504,6 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 2093,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 12,
-        "scientific": 0
-      },
-      "path": "src/scf/cuda_direct_jk_device.hpp",
-      "physical_lines": 38,
-      "reason": "Borrowed direct-provider stream, resident matrix and numerical-status contract; no new J/K dispatch or scientific equations.",
-      "regions": [],
-      "role": "runtime",
-      "sha256": "2f1db7f73b28fc28c265225d85391f45a7e160f69a5572f927f73ad5d2b5cb68",
-      "subsystem": "runtime"
-    },
-    {
-      "bytes": 19897,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 429,
-        "scientific": 0
-      },
-      "path": "src/scf/cuda_eigensolver_probe.cu",
-      "physical_lines": 464,
-      "reason": "Diagnostic generic dense eigensolver experiments, synchronization and library comparisons.",
-      "regions": [],
-      "role": "runtime",
-      "sha256": "628596452c9bfb391c91d4f1efe75025a928630d23baaec6daf0426b2271ccdb",
-      "subsystem": "runtime"
-    },
-    {
-      "bytes": 6590,
-      "code_lines": {
-        "fallback": 0,
-        "oracle": 0,
-        "performance_exception": 0,
-        "runtime": 117,
-        "scientific": 26
-      },
-      "path": "src/scf/cuda_fock.cu",
-      "physical_lines": 159,
-      "reason": "Dense bucket owner and stable execution interface.",
-      "regions": [
-        {
-          "code_lines": 26,
-          "first_line": 11,
-          "last_line": 38,
-          "reason": "Concrete cached-tensor RHF J/K contraction equation.",
-          "role": "scientific",
-          "start": "__global__ void rhf_fock_bucket_kernel",
-          "stop": "struct CudaFockBucketHandle"
-        }
-      ],
-      "role": "runtime",
-      "sha256": "93330967c98637368a8c219295d170bb0af34aa64fc0229b95975f4131bd9449",
-      "subsystem": "scf_tensor"
-    },
-    {
       "bytes": 16764,
       "code_lines": {
         "fallback": 0,
@@ -3761,7 +3778,7 @@
     "fallback": 0,
     "oracle": 15,
     "performance_exception": 253,
-    "runtime": 10164,
+    "runtime": 10197,
     "scientific": 12749
   },
   "migration_ledger": {
@@ -4023,7 +4040,7 @@
       "fallback": 0,
       "oracle": 0,
       "performance_exception": 0,
-      "runtime": 4430,
+      "runtime": 4463,
       "scientific": 5
     },
     "scf_tensor": {
