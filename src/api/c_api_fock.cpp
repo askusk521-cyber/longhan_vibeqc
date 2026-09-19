@@ -502,8 +502,7 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
       std::vector<double> energy_occ(occupied_matrix, 0.0);
       std::vector<double> energy_virt(virtual_matrix, 0.0);
       for (std::size_t i = 0; i < o; ++i) energy_occ[i * o + i] = orbital_energies[i];
-      for (std::size_t a = 0; a < v; ++a)
-        energy_virt[a * v + a] = orbital_energies[o + a];
+      for (std::size_t a = 0; a < v; ++a) energy_virt[a * v + a] = orbital_energies[o + a];
       resident_cuda(cudaMemcpyAsync(owner->coefficients, column_major.data(),
                                     matrix * sizeof(double), cudaMemcpyHostToDevice,
                                     owner->stream));
