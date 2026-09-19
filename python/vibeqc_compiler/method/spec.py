@@ -18,7 +18,14 @@ from vibeqc_compiler.xc.spec import COMPONENTS, FunctionalSpec
 from vibeqc_compiler.xc.spec import VERSION as XC_VERSION
 
 from .basis_binding import BasisBinding, r2scan3c_def2_mtzvpp_h_ar
-from .dispersion import D3Spec, D4Spec, DispersionCorrectionPrimitive, r2scan3c_d4_eeq
+from .dispersion import (
+    D3Spec,
+    D4Spec,
+    DispersionCorrectionPrimitive,
+    pbe0_d3_bj_spec,
+    pbe_d3_bj_spec,
+    r2scan3c_d4_eeq,
+)
 from .gcp import GCPSpec, GeometricCounterpoisePrimitive, r2scan3c_gcp
 from .nonlocal_correlation import (
     NonlocalCorrelationPrimitive,
@@ -507,6 +514,17 @@ METHOD_CATALOG = MappingProxyType(
             "PBE0",
             (("GGA_X_PBE", Fraction(3, 4)), ("GGA_C_PBE", Fraction(1))),
             exact_exchange=Fraction(1, 4),
+        ),
+        "PBE-D3(BJ)": MethodSpec(
+            "PBE-D3(BJ)",
+            (("GGA_X_PBE", Fraction(1)), ("GGA_C_PBE", Fraction(1))),
+            dispersion=pbe_d3_bj_spec(),
+        ),
+        "PBE0-D3(BJ)": MethodSpec(
+            "PBE0-D3(BJ)",
+            (("GGA_X_PBE", Fraction(3, 4)), ("GGA_C_PBE", Fraction(1))),
+            exact_exchange=Fraction(1, 4),
+            dispersion=pbe0_d3_bj_spec(),
         ),
         "CAM-B3LYP": MethodSpec(
             "CAM-B3LYP",

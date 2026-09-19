@@ -7,6 +7,10 @@ can import lightweight contracts without importing NumPy/TensorIR.
 from importlib import import_module
 
 _EXPORTS = {
+    "D3_RADII_SHA256": ".dispersion",
+    "D3_TABLE_SHA256": ".dispersion",
+    "pbe0_d3_bj_spec": ".dispersion",
+    "pbe_d3_bj_spec": ".dispersion",
     "BasisBinding": ".basis_binding",
     "CorrectionProvenance": ".correction",
     "CorrectionResult": ".correction",
