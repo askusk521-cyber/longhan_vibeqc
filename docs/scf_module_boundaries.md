@@ -55,10 +55,10 @@ bytes, `cuda_rhf.cu` 19,754 lines / 1,048,372 bytes, and
 `cuda_density_fitting.cu` 3,098 lines / 160,928 bytes. The original DF unit is now
 removed; its largest replacement is the 549-line setup transaction. At the final
 #240 host-control baseline `91dfd97`, `cuda_rhf.cpp` was 4,892 lines / 276,146
-bytes. The final slice reduces it to 4,452 lines / 255,625 bytes and moves
-bucket/cache ownership to a 357-line implementation plus a 119-line private
-plan contract, while Graph lifecycle/replay is an 81-line implementation plus
-a 58-line interface. The residual driver remains above the 600-line review
+bytes. The final slice gives bucket/cache and Graph lifecycles separate owners.
+Their current line and byte measurements are listed once in the final table
+below rather than repeated in this summary.
+The residual driver remains above the 600-line review
 target intentionally: one arena and one captured SCF iteration couple its
 provider launches, matrix products, convergence launches, force finalization and
 error order. Splitting that numerical launch sequence further would require a
@@ -684,8 +684,10 @@ Aggregate sampled compilation changes from 31.465 to
 code, while narrowing implementation rebuilds. These are development samples,
 not full cold-build, production resource, device-link or runtime acceptance.
 
-The full issue still requires direct scientific/force ownership, host bucket and
-graph decomposition, and production build/device-link/runtime acceptance.
+At this historical extraction stage, direct scientific/force ownership, host
+bucket/graph decomposition and production acceptance remained unfinished.
+The final section below describes the implemented split and the separate
+production acceptance that is still pending.
 
 
 Actual implementation-only comment edits to `one_electron_force_reference.cu`
@@ -720,8 +722,8 @@ owner is 386 lines. Existing J/K and weighted-ERI fragments now compile as
 
 `cuda_rhf.cu` becomes the ordinary C++ file `cuda_rhf.cpp`, decreasing from
 11,384 to 4,792 lines. It contains no device/kernel declarations or CUDA launch
-syntax. Its graph/bucket responsibilities still exceed the structural target
-and remain separate follow-up work. Numerical headers reject host plans and
+syntax. At that historical stage, Graph/bucket responsibilities remained
+follow-up work; the final owners below now implement that split. Numerical headers reject host plans and
 queue policy; consumer owners reject host resource lifetime; the C++ driver
 has an explicit launch-interface include allowlist. The ownership census
 excludes this ordinary C++ driver. That classification change retires no
@@ -798,8 +800,8 @@ Standalone compilation adds aggregate work and binary storage. Bounded linking
 reduces duplication while retaining per-owner source compilation. These
 samples do not establish complete cold-build or runtime acceptance. Fresh
 whole-library Release builds, incremental object probes and endpoint runtime
-checks are recorded separately when completed. Full #240 also requires the
-remaining host graph/bucket decomposition.
+checks are recorded separately when completed. Host Graph/bucket decomposition
+was also open at that historical stage; its current implementation is below.
 
 The optimized changed objects were also linked against the identical untouched
 development components to isolate this extraction's compiler effects. These
@@ -867,8 +869,9 @@ All timings include the shared library and dependent executable relinks.
 [`incremental.json`](../benchmarks/results/scf-direct-native-rtx5090/incremental.json)
 retains the complete touched-object and relink lists. No unrelated CUDA source
 is recompiled. The angular-force exclusion therefore preserves its standalone
-compiler contract during both cold and incremental builds. Full #240 remains
-open for the host graph/bucket decomposition and its final combined inventory.
+compiler contract during both cold and incremental builds. At that historical
+stage, host Graph/bucket decomposition remained open. The final section below
+records its implementation; production acceptance is still pending.
 
 
 ## Final direct-HF host-control boundary (#240 implementation; production acceptance pending)
@@ -879,10 +882,10 @@ host-control lifetimes without moving equations or changing launch order:
 | Owner | Current responsibility | Physical lines | Bytes |
 | --- | --- | ---: | ---: |
 | `scf/cuda_rhf.cpp` | Coupled direct-HF numerical launch/dataflow composition and final result assembly | 4,452 | 255,625 |
-| `scf/cuda/rhf_bucket.cpp` | Plan admission/rebuild, topology/options identity, retry, diagnostics, warm-cache lifecycle and basis-layout inspection | 357 | 16,167 |
+| `scf/cuda/rhf_bucket.cpp` | Plan admission/rebuild, topology/options identity, retry, diagnostics, warm-cache lifecycle and basis-layout inspection | 360 | 16,232 |
 | `scf/cuda/rhf_bucket_internal.hpp` | Private opaque-plan state and the narrow driver contract | 121 | 5,517 |
-| `scf/cuda/rhf_graph.cpp` | Graph capture, instantiate/upload, replay and destruction | 81 | 3,224 |
-| `scf/cuda/rhf_graph.hpp` | Graph-owner interface/result contract | 57 | 2,137 |
+| `scf/cuda/rhf_graph.cpp` | Graph capture, instantiate/upload, replay and destruction | 92 | 3,708 |
+| `scf/cuda/rhf_graph.hpp` | Graph-owner interface/result contract | 59 | 2,290 |
 | `scf/cuda/resources.cpp` | Stream, library-workspace and numeric-arena teardown | 47 | 1,686 |
 
 At the starting tree, `cuda_rhf.cpp` was 4,892 lines / 276,146 bytes and
@@ -909,14 +912,14 @@ excluded) is led by:
 | Source unit | Lines | Bytes |
 | --- | ---: | ---: |
 | `src/scf/cuda_rhf.cpp` | 4,452 | 255,625 |
-| `src/scf/rhf.cpp` | 3,234 | 165,992 |
-| `src/scf/cuda/df_gradient_bridge.cu` | 1,524 | 89,981 |
+| `src/scf/rhf.cpp` | 3,242 | 166,775 |
+| `src/scf/cuda/df_gradient_bridge.cu` | 1,523 | 89,865 |
 | `src/scf/cuda/df_response_weights.cu` | 1,270 | 76,072 |
 | `src/integrals/s_integrals.cpp` | 1,192 | 57,405 |
-| `src/scf/density_fitting.cpp` | 1,097 | 55,286 |
+| `src/scf/density_fitting.cpp` | 1,139 | 57,420 |
 | `src/posthf/bridge.cpp` | 916 | 50,925 |
-| `src/methods/dft_method.cpp` | 841 | 36,881 |
-| `src/scf/cuda/df_plan_setup.cpp` | 823 | 44,440 |
+| `src/methods/dft_method.cpp` | 911 | 40,461 |
+| `src/scf/cuda/df_plan_setup.cpp` | 830 | 44,843 |
 | `src/dft/cuda_grid.cu` | 751 | 36,560 |
 
 This inventory makes the remaining exception explicit rather than hiding it:
