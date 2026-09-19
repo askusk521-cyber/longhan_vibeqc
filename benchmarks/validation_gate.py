@@ -17,6 +17,11 @@ sys.path.insert(0, str(ROOT))
 
 import numpy as np
 
+try:
+    from benchmarks._retention import raw_output_path
+except ModuleNotFoundError:
+    from _retention import raw_output_path
+
 from benchmarks._support import environment_metadata
 from tools.vibeqc_validation.fixtures import (
     calculator_inputs,
@@ -462,7 +467,7 @@ def main():
     for child in (hf, run):
         child.add_argument(
             "--output",
-            type=Path,
+            type=raw_output_path,
             required=True,
             help="validated JSON evidence destination",
         )

@@ -16,6 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import numpy as np
+
+try:
+    from benchmarks._retention import raw_output_path
+except ModuleNotFoundError:
+    from _retention import raw_output_path
 from vibeqc import Calculator, Primitive, Shell
 from vibeqc.autotune import source_identity
 
@@ -35,8 +40,8 @@ def main():
     parser.add_argument("--maximum-bytes", type=int, default=128 << 10)
     parser.add_argument(
         "--output",
-        type=Path,
-        default=Path(".artifacts/benchmarks/one_electron_gradient_contract.json"),
+        type=raw_output_path,
+        default=str(Path(".artifacts/benchmarks/one_electron_gradient_contract.json")),
     )
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID"):

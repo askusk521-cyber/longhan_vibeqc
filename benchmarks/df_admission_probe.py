@@ -19,6 +19,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from benchmarks._retention import raw_output_path
+except ModuleNotFoundError:
+    from _retention import raw_output_path
+
 from benchmarks._cases import benchmark_cases
 from benchmarks.compare_gpu4pyscf_batch import (
     convergence_payload,
@@ -103,7 +108,7 @@ def main():
         default=1,
         help="Replicate the molecular fixture along x with 8-bohr separation",
     )
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=raw_output_path, required=True)
     parser.add_argument("--source-patch", type=Path, required=True)
     parser.add_argument("--warm-checkpoint-in", type=Path)
     args = parser.parse_args()

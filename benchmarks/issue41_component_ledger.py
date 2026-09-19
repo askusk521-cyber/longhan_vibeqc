@@ -20,6 +20,11 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+try:
+    from benchmarks._retention import raw_output_path
+except ModuleNotFoundError:
+    from _retention import raw_output_path
+
 VIBEQC_RANGE = ":vibeqc/warm/energy-plus-force"
 GPU4PYSCF_SCF_RANGE = ":gpu4pyscf/warm/scf"
 GPU4PYSCF_FORCE_RANGE = ":gpu4pyscf/warm/force"
@@ -319,8 +324,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--shell-profile", type=Path, required=True)
     parser.add_argument(
         "--output",
-        type=Path,
-        default=Path(".artifacts/benchmarks/issue41_component_ledger.json"),
+        type=raw_output_path,
+        default=str(Path(".artifacts/benchmarks/issue41_component_ledger.json")),
     )
     return parser
 
