@@ -32,6 +32,7 @@ class TensorScheduleSpace:
     fuse: tuple[bool, ...] = (True, False)
     recompute: tuple[bool, ...] = (False, True)
     direct_gemm: tuple[bool, ...] = (True, False)
+    layouts: tuple[bool, ...] = (False, True)
     threads: tuple[int, ...] = (128, 64, 256)
     tile_m: tuple[int, ...] = (128, 64, 32)
     tile_n: tuple[int, ...] = (128, 64, 32)
@@ -109,6 +110,9 @@ def execution_key(plan: TensorPlan) -> str:
     """
     payload = plan.to_payload()
     payload.pop("schedule")
+    # Planning diagnostics are provenance, not executable work. Physical layout
+    # changes remain represented by step layouts, GEMM kinds and layout_identity.
+    payload.pop("layout_planning", None)
     payload["threads"] = (
         plan.schedule.threads
         if any(

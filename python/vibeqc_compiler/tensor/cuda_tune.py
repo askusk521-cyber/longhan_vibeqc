@@ -128,7 +128,12 @@ def tune_cuda(
         raise ValueError("tuning duration must be positive and finite")
     if not np.isfinite(minimum_speedup) or minimum_speedup < 1:
         raise ValueError("minimum speedup must be finite and at least one")
-    if baseline.schedule.views or baseline.schedule.fuse or baseline.schedule.recompute:
+    if (
+        baseline.schedule.views
+        or baseline.schedule.fuse
+        or baseline.schedule.recompute
+        or baseline.schedule.layouts
+    ):
         raise ValueError("tuning requires an unfused CUDA baseline")
     started = time.monotonic()
     search = plan_schedule_search(baseline, schedules, search_limits)
