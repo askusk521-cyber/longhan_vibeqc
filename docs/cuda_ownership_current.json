@@ -3146,20 +3146,37 @@
       "subsystem": "runtime"
     },
     {
-      "bytes": 1920,
+      "bytes": 1501,
       "code_lines": {
         "fallback": 0,
         "oracle": 0,
         "performance_exception": 0,
-        "runtime": 34,
+        "runtime": 30,
         "scientific": 0
       },
       "path": "src/scf/cuda/resources.hpp",
-      "physical_lines": 55,
+      "physical_lines": 48,
       "reason": "Borrowed library interface or sole stream/graph/arena lifetime contract; host execution compiles in C++.",
       "regions": [],
       "role": "runtime",
-      "sha256": "9968a5815e0a86083e64fc224aa701f060d4ebea8c39d672ed1ac93a672e05e7",
+      "sha256": "5723430a05f36f726453b8cd4e5bf873450e08e07bd84057bcc12c1231baa0a8",
+      "subsystem": "runtime"
+    },
+    {
+      "bytes": 2290,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 37,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/rhf_graph.hpp",
+      "physical_lines": 59,
+      "reason": "Host-only RAII contract for direct-HF CUDA Graph capture, executable lifetime, upload and replay; no scientific equations or device kernels.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "ae879d6dc2347ecf0b11cb0392b100832a544a537b785652e829d3f31dec7da9",
       "subsystem": "runtime"
     },
     {
@@ -3809,11 +3826,11 @@
   ],
   "generated_bytes": 0,
   "maintained_code_lines": {
-    "runtime": 11666,
-    "scientific": 12044,
-    "oracle": 686,
     "fallback": 0,
-    "performance_exception": 884
+    "oracle": 686,
+    "performance_exception": 884,
+    "runtime": 11699,
+    "scientific": 12044
   },
   "migration_ledger": {
     "ao_grid": {
@@ -4046,103 +4063,103 @@
     }
   },
   "per_subsystem": {
-    "runtime": {
-      "runtime": 5059,
-      "scientific": 5,
-      "oracle": 0,
+    "ao_grid": {
       "fallback": 0,
-      "performance_exception": 0
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 582,
+      "scientific": 162
     },
     "cosx": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 0,
       "runtime": 313,
-      "scientific": 106,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 0
-    },
-    "ao_grid": {
-      "runtime": 582,
-      "scientific": 162,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 0
-    },
-    "xc": {
-      "runtime": 450,
-      "scientific": 639,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 0
+      "scientific": 106
     },
     "d4_dispersion": {
-      "runtime": 0,
-      "scientific": 0,
+      "fallback": 0,
       "oracle": 671,
-      "fallback": 0,
-      "performance_exception": 0
-    },
-    "ecp": {
-      "runtime": 290,
-      "scientific": 0,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 0
-    },
-    "low_rank": {
-      "runtime": 179,
-      "scientific": 65,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 0
-    },
-    "scf_tensor": {
-      "runtime": 2045,
-      "scientific": 817,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 97
-    },
-    "direct_integrals": {
-      "runtime": 1644,
-      "scientific": 7090,
-      "oracle": 0,
-      "fallback": 0,
-      "performance_exception": 0
+      "performance_exception": 0,
+      "runtime": 0,
+      "scientific": 0
     },
     "df_derivatives": {
-      "runtime": 843,
-      "scientific": 1398,
-      "oracle": 0,
       "fallback": 0,
-      "performance_exception": 0
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 843,
+      "scientific": 1398
     },
     "df_response_weights": {
-      "runtime": 0,
-      "scientific": 1103,
-      "oracle": 15,
       "fallback": 0,
-      "performance_exception": 0
+      "oracle": 15,
+      "performance_exception": 0,
+      "runtime": 0,
+      "scientific": 1103
     },
     "df_values": {
-      "runtime": 226,
-      "scientific": 168,
-      "oracle": 0,
       "fallback": 0,
-      "performance_exception": 0
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 226,
+      "scientific": 168
+    },
+    "direct_integrals": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 1644,
+      "scientific": 7090
+    },
+    "ecp": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 290,
+      "scientific": 0
+    },
+    "low_rank": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 179,
+      "scientific": 65
     },
     "one_electron_derivatives": {
-      "runtime": 0,
-      "scientific": 491,
-      "oracle": 0,
       "fallback": 0,
-      "performance_exception": 787
+      "oracle": 0,
+      "performance_exception": 787,
+      "runtime": 0,
+      "scientific": 491
     },
     "one_electron_values": {
-      "runtime": 35,
-      "scientific": 0,
-      "oracle": 0,
       "fallback": 0,
-      "performance_exception": 0
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 35,
+      "scientific": 0
+    },
+    "runtime": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 5092,
+      "scientific": 5
+    },
+    "scf_tensor": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 97,
+      "runtime": 2045,
+      "scientific": 817
+    },
+    "xc": {
+      "fallback": 0,
+      "oracle": 0,
+      "performance_exception": 0,
+      "runtime": 450,
+      "scientific": 639
     }
   },
   "schema": "vibeqc.cuda-ownership-report.v1"
