@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "molecule/basis.hpp"
-#include "runtime/bounded_workspace.hpp"
 #include "runtime/resource_usage.hpp"
 #include "scf/cuda/direct_constants.hpp"
 #include "scf/cuda/direct_tile_validation.hpp"
@@ -76,18 +75,7 @@ CudaRhfBasisLayoutStats inspect_rhf_cuda_basis_layout(const std::vector<core::Sy
     throw std::invalid_argument("systems cannot be represented by one CUDA RHF bucket");
   }
 
-  std::size_t expanded_primitive_references = 0;
-  for (const core::System& system : systems) {
-    for (const core::Shell& shell : system.shells) {
-      std::size_t shell_references = 0;
-      if (!vibeqc::runtime::checked_multiply(molecule::cartesian_count(shell.angular_momentum),
-                                             shell.primitives.size(), shell_references) ||
-          !vibeqc::runtime::checked_add(expanded_primitive_references, shell_references,
-                                        expanded_primitive_references)) {
-        throw std::overflow_error("expanded CUDA primitive reference count overflowed");
-      }
-    }
-  }
+  const auto expanded_primitive_references = checked_expanded_primitive_references(systems);
 
   const std::size_t device_basis_bytes =
       host.system_shell_offsets.size() * sizeof(std::int64_t) +

@@ -316,3 +316,14 @@ def test_hf_bucket_owner_cannot_import_device_implementation(tmp_path):
     errors = audit_scf_structure(tmp_path)["errors"]
     assert len(errors) == 1
     assert "forbidden cuda_hf_bucket dependency" in errors[0]
+
+
+def test_bucket_routes_overflow_checked_basis_counts_through_topology():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    bucket = (root / "src/scf/cuda/rhf_bucket.cpp").read_text()
+    topology = (root / "src/scf/cuda/topology.cpp").read_text()
+    assert '"runtime/bounded_workspace.hpp"' not in bucket
+    assert "checked_expanded_primitive_references(systems)" in bucket
+    assert "checked_multiply" in topology and "checked_add" in topology

@@ -424,7 +424,6 @@ CUDA_ALLOWED["cuda_direct_kernel_interfaces"] = (
 # implementations; the Graph owner knows only CUDA capture lifecycle.
 CUDA_MODULES["cuda_hf_bucket"] = ("rhf_bucket", "rhf_bucket_internal")
 CUDA_ALLOWED["cuda_hf_bucket"] = (
-    "runtime/bounded_workspace.hpp",
     "runtime/resource_usage.hpp",
     "molecule/basis.hpp",
     "scf/cuda/rhf_bucket.",
