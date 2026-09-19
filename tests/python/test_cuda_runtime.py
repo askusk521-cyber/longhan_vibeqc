@@ -62,7 +62,6 @@ def test_cuda_minimal_uhf_matches_cpu_reference():
     assert np.allclose(result.forces, reference.forces, atol=force_atol, rtol=0.0)
 
 
-
 def test_cuda_resident_rhf_response_matches_host_operator():
     """B2: keep RHF response operator/Krylov vectors resident on the CUDA stream."""
     from tools.vibeqc_posthf.export import export_rhf
@@ -81,9 +80,7 @@ def test_cuda_resident_rhf_response_matches_host_operator():
     )
     with NativeSource(atoms, basis=basis) as source:
         reference, _ = export_rhf(source, backend="cpu", tolerance=1e-12)
-        with CudaDirectJKBackend(
-            source, device_budget_bytes=64 << 20
-        ) as backend:
+        with CudaDirectJKBackend(source, device_budget_bytes=64 << 20) as backend:
             problem = RHFResponseOperator.build_problem(reference, backend)
             operator = RHFResponseOperator(problem, backend)
             vector = np.linspace(0.2, 0.2 * problem.dimension, problem.dimension)

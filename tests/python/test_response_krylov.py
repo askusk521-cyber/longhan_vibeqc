@@ -534,7 +534,6 @@ def test_unrepresentable_rhs_norm_is_rejected():
         solve(_MatrixOperator(np.eye(2), 2), np.full(2, np.finfo(float).max))
 
 
-
 def test_single_gmres_uses_bound_vector_engine_without_duplicate_solver():
     class Wrapped:
         def __init__(self, values):

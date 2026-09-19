@@ -28,7 +28,6 @@ from .operators import (
     RHFResponseOperator,
 )
 from .oracle import explicit_rhf_response_matrix, finite_rotation_jvp
-from .resident_cuda import CudaResidentRHFResponse
 from .problem import (
     ResponseCompatibilityError,
     ResponseProblem,
@@ -36,6 +35,7 @@ from .problem import (
     ResponseUnsupported,
     RotationLayout,
 )
+from .resident_cuda import CudaResidentRHFResponse
 from .uhf import (
     UHFReferenceSnapshot,
     UHFResponseOperator,

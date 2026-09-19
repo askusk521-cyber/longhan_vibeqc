@@ -122,9 +122,7 @@ def directional_rhf_response(
                 raise ValueError(
                     "direct J/K retained storage leaves no resident response budget"
                 )
-            restart = min(
-                operator.dimension, options.restart, options.max_iterations
-            )
+            restart = min(operator.dimension, options.restart, options.max_iterations)
             vector_slots = min(4096, max(8, 3 * restart + 32))
             resident_owner = stack.enter_context(
                 backend.resident_response(
