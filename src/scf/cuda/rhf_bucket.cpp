@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "molecule/basis.hpp"
-#include "runtime/resource_usage.hpp"
 #include "runtime/bounded_workspace.hpp"
+#include "runtime/resource_usage.hpp"
 #include "scf/cuda/direct_constants.hpp"
 #include "scf/cuda/direct_tile_validation.hpp"
 #include "scf/cuda/eigensolver_types.hpp"
