@@ -7,6 +7,7 @@
       "src/dft/cuda_ks_kernels.hpp",
       "src/dft/cuda_xc.hpp",
       "src/dft/cuda_xc_kernels.cuh",
+      "src/dft/dispersion/d4_reference.hpp",
       "src/dft/grid_task_view.cuh",
       "src/dft/xc_point.hpp",
       "src/integrals/ecp_cuda.cu",
@@ -14,6 +15,7 @@
       "src/runtime/cuda_architecture.hpp",
       "src/runtime/cuda_component_trace.hpp",
       "src/runtime/cuda_gaussian_products.cuh",
+      "src/runtime/cuda_graph_region.cuh",
       "src/runtime/cuda_subgroup.cuh",
       "src/runtime/strided_range.hpp",
       "src/scf/cuda/basis_transform_kernels.cu",
@@ -37,7 +39,9 @@
       "src/scf/cuda/df_shell_derivatives.cu",
       "src/scf/cuda/df_shell_derivatives.cuh",
       "src/scf/cuda/df_shell_diagnostics.cuh",
+      "src/scf/cuda/df_shell_dispatch.cuh",
       "src/scf/cuda/df_shell_kernel.cuh",
+      "src/scf/cuda/df_shell_launch.cuh",
       "src/scf/cuda/df_source_internal.hpp",
       "src/scf/cuda/df_source_kernels.cu",
       "src/scf/cuda/df_source_kernels.hpp",
@@ -162,13 +166,14 @@
       "src/scf/cuda/weighted_eri_kernels.hpp",
       "src/scf/cuda_direct_jk_device.hpp",
       "src/tensor/cuda_error.hpp",
+      "src/tensor/cuda_graph_context.cuh",
       "src/tensor/cuda_resident.cuh"
     ],
     "maintained_code_lines": {
       "fallback": 0,
-      "oracle": 15,
+      "oracle": 312,
       "performance_exception": 163,
-      "runtime": -5396,
+      "runtime": -5126,
       "scientific": 2666
     },
     "reclassified_files": [
@@ -1105,20 +1110,20 @@
     },
     {
       "path": "src/scf/cuda/df_shell_derivatives.cu",
-      "reason": "Compact shell task indexing, normalized sparse AO weight projection, shared-cache lifetime, cooperative reduction and generic gradient sink. All Gaussian geometry, moment polynomials, analytic differentiation and auxiliary-center recovery come from the existing extended compiler; no handwritten scientific evaluator. Unordered shell-pair traversal folds dense adjoints or consumes folded public AO pairs; the full ordered diagnostic remains available. Individual and bounded signature-packet entrypoints share one contraction helper and unchanged generated equations; block-prefix lookup and homogeneous primitive bounds change scheduling only.",
+      "reason": "Light host-only policy selection and ordered class dispatch. Numerical kernels are instantiated independently by generated per-class CUDA units; policy-only changes do not invalidate those objects.",
       "regions": [],
       "role": "runtime",
       "subsystem": "df_derivatives",
-      "physical_lines": 410,
+      "physical_lines": 104,
       "code_lines": {
-        "runtime": 379,
+        "runtime": 93,
         "scientific": 0,
         "oracle": 0,
         "fallback": 0,
         "performance_exception": 0
       },
-      "bytes": 22144,
-      "sha256": "600ce1de21e3ef2a8b0c8a7adac0bb8b03db31092726f4d11f7dcd4f8dd9ae0e"
+      "bytes": 5394,
+      "sha256": "1753aedcd92f39205e8c158704350a31a46ca7402741ab7ea64f3dd9be09691c"
     },
     {
       "path": "src/scf/cuda/df_shell_derivatives.cuh",
@@ -1155,21 +1160,55 @@
       "sha256": "308e6208eee7cfe09a3698c2c1c335e25f19ee8a8ff6f1a64aa058a689e22886"
     },
     {
+      "bytes": 946,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 23,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_shell_dispatch.cuh",
+      "physical_lines": 28,
+      "reason": "Host launch-context and class-entry ABI shared by the light dispatcher and independently compiled generated class launchers; no scientific equations.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "d9283f4775d72eff8bd91f84aa9f4e751cbee8c286036de67e7a2d12cb0f9cca",
+      "subsystem": "df_derivatives"
+    },
+    {
       "path": "src/scf/cuda/df_shell_kernel.cuh",
       "reason": "Shared production shell-packet execution templates, instantiated without scientific duplication by the derivative batch tuner. Normalized AO projection, compact task indexing, primitive traversal and reductions call compiler-owned polynomial/Rys mathematics.",
       "regions": [],
       "role": "runtime",
       "subsystem": "df_derivatives",
-      "physical_lines": 351,
+      "physical_lines": 355,
       "code_lines": {
-        "runtime": 314,
+        "runtime": 318,
         "scientific": 0,
         "oracle": 0,
         "fallback": 0,
         "performance_exception": 0
       },
-      "bytes": 18605,
-      "sha256": "7684d4d1530e7ef58e25692d22ffcd49632e9ee6f69e1c32a454178c72118932"
+      "bytes": 18690,
+      "sha256": "63f41e8abe95ddf2538048586ce4ff9713c319ab2ec26265ef92f3c186c0c6f7"
+    },
+    {
+      "bytes": 16679,
+      "code_lines": {
+        "fallback": 0,
+        "oracle": 0,
+        "performance_exception": 0,
+        "runtime": 298,
+        "scientific": 0
+      },
+      "path": "src/scf/cuda/df_shell_launch.cuh",
+      "physical_lines": 320,
+      "reason": "Unchanged generic shell launch, packet preparation, diagnostics and resource queries moved from the monolith. Compile-time schedule/Rys/screening instantiation is independent of production policy; mathematical implementations remain generated.",
+      "regions": [],
+      "role": "runtime",
+      "sha256": "ea9aed6a90240176cda86d3779c20c6cebd0eeb9c2831cad6a3b600892fb8a10",
+      "subsystem": "df_derivatives"
     },
     {
       "path": "src/scf/cuda/df_source_internal.hpp",
@@ -3644,7 +3683,7 @@
   "generated": [
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "one_electron_value_policy",
       "outputs": [
         "generated/generated_one_electron_policy.cuh"
@@ -3653,7 +3692,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "one_electron_values",
       "outputs": [
         "generated/generated_one_electron_values.cuh"
@@ -3662,7 +3701,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "one_electron_derivatives",
       "outputs": [
         "generated/generated_one_electron_derivatives.cuh"
@@ -3671,7 +3710,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_values",
       "outputs": [
         "generated/df_values.cuh"
@@ -3680,7 +3719,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_derivatives",
       "outputs": [
         "generated/generated_df_derivatives.cuh"
@@ -3689,7 +3728,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_shell_derivatives",
       "outputs": [
         "generated/generated_df_shell_derivatives.cuh"
@@ -3698,7 +3737,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_rys_roots",
       "outputs": [
         "generated/generated_df_rys.cuh"
@@ -3707,7 +3746,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_rys_shell",
       "outputs": [
         "generated/generated_df_rys_shell.cuh",
@@ -3717,7 +3756,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "weighted_eri",
       "outputs": [
         "generated/weighted_eri.cuh"
@@ -3726,7 +3765,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "aot_integrals",
       "outputs": [
         "generated/production_shell_kernels/**/*.cu",
@@ -3737,7 +3776,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "jit_tensor",
       "outputs": [],
       "owner": "python/vibeqc_compiler/tensor",
@@ -3745,7 +3784,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "jit_xc",
       "outputs": [],
       "owner": "python/vibeqc_compiler/xc",
@@ -3753,7 +3792,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "jit_dft",
       "outputs": [],
       "owner": "python/vibeqc_compiler/dft",
@@ -3761,7 +3800,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "jit_integral",
       "outputs": [],
       "owner": "python/vibeqc_compiler/integral",
@@ -3769,7 +3808,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "ao_grid_policy",
       "outputs": [
         "generated/generated_grid_policy.cu"
@@ -3779,7 +3818,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_policies",
       "outputs": [
         "generated/generated_df_policy.cuh",
@@ -3789,15 +3828,8 @@
       "owner": "python/vibeqc_compiler/integral/df_policy.py"
     },
     {
-      "files": [
-        {
-          "bytes": 35716,
-          "code_lines": 1238,
-          "path": "generated/generated_ecp_ao.cuh",
-          "sha256": "18eaccbc1d8a0e4f03659fdff6d55dfa254c5a9b0c32b7f55593c0ab18f9a112"
-        }
-      ],
-      "measurement": "explicit build",
+      "files": [],
+      "measurement": "not materialized",
       "name": "ecp_quadrature",
       "outputs": [
         "generated/generated_ecp_ao.cuh"
@@ -3806,7 +3838,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_derivative_production_policy",
       "outputs": [
         "generated/generated_df_production.hpp"
@@ -3815,7 +3847,7 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_sss_force_screening",
       "outputs": [
         "generated/generated_df_screening.cuh"
@@ -3824,17 +3856,28 @@
     },
     {
       "files": [],
-      "measurement": "explicit build",
+      "measurement": "not materialized",
       "name": "df_value_candidates",
       "outputs": [
         "generated/generated_df_value_candidates.cuh"
       ],
       "owner": "python/vibeqc_compiler/integral/df_value_candidates.py"
+    },
+    {
+      "files": [],
+      "measurement": "not materialized",
+      "name": "df_shell_class_units",
+      "outputs": [
+        "generated/df_shells/*.cu",
+        "generated/df_shells/*.cuh",
+        "generated/df_shells/*.hpp"
+      ],
+      "owner": "python/vibeqc_compiler/integral/df_shell_units.py"
     }
   ],
-  "generated_bytes": 35716,
+  "generated_bytes": 0,
   "maintained_code_lines": {
-    "runtime": 10408,
+    "runtime": 10447,
     "scientific": 12768,
     "oracle": 312,
     "fallback": 0,
@@ -4102,7 +4145,7 @@
       "performance_exception": 0
     },
     "df_derivatives": {
-      "runtime": 804,
+      "runtime": 843,
       "scientific": 1398,
       "oracle": 0,
       "fallback": 0,
