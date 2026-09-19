@@ -779,10 +779,9 @@ def _block_solve(operator, rhs, options):
         )
 
     # Expansion uses orthogonalized operator images rather than the projected
-    Galerkin residual.  This is required for indefinite/nonsymmetric
-    operators where the projected matrix can be singular even though the
-    operator is nonsingular.
-    """
+    # Galerkin residual. This is required for indefinite/nonsymmetric operators
+    # where the projected matrix can be singular even though the operator is
+    # nonsingular.
     b = np.asarray(rhs, dtype=np.float64)
     n, nrhs = b.shape
     max_columns = min(n, nrhs + options.max_iterations)
