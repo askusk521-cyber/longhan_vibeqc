@@ -55,8 +55,8 @@ cublasStatus_t cublasSetPointerMode_v2(cublasHandle_t handle, cublasPointerMode_
 cublasStatus_t cublasSetMathMode(cublasHandle_t handle, cublasMath_t mode);
 cublasStatus_t cublasDaxpy_v2(cublasHandle_t handle, int n, const double* alpha, const double* x,
                               int incx, double* y, int incy);
-cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double* x, int incx,
-                              double* y, int incy);
+cublasStatus_t cublasDcopy_v2(cublasHandle_t handle, int n, const double* x, int incx, double* y,
+                              int incy);
 cublasStatus_t cublasDdot_v2(cublasHandle_t handle, int n, const double* x, int incx,
                              const double* y, int incy, double* result);
 cublasStatus_t cublasDnrm2_v2(cublasHandle_t handle, int n, const double* x, int incx,

@@ -64,8 +64,13 @@ def test_cuda_minimal_uhf_matches_cpu_reference():
 
 def test_cuda_resident_rhf_response_matches_host_operator():
     """B2: keep RHF response operator/Krylov vectors resident on the CUDA stream."""
-    if os.environ.get("CUMETAL_ROOT") or os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1":
-        pytest.skip("resident RHF response requires explicitly allocated native NVIDIA CUDA")
+    if (
+        os.environ.get("CUMETAL_ROOT")
+        or os.environ.get("VIBEQC_RESOURCE_CUDA_TEST") != "1"
+    ):
+        pytest.skip(
+            "resident RHF response requires explicitly allocated native NVIDIA CUDA"
+        )
     from tools.vibeqc_posthf.export import export_rhf
     from tools.vibeqc_posthf.sources import NativeSource
     from tools.vibeqc_response import (
