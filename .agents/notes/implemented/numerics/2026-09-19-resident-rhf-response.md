@@ -112,3 +112,23 @@ workspace semantics.
 
 Agent: ChatGPT
 Model: GPT-5.6 Sol
+
+
+## 2026-09-19 review correction
+
+The earlier Evidence paragraph overstates the CuMetal numerical coverage: the
+current resident comparison explicitly skips under `CUMETAL_ROOT` and requires
+an allocated NVIDIA device. The workflow now labels this as a coverage report
+and displays the skip reason. A green CuMetal run or NVIDIA compile is not
+proof that the resident numerical comparison executed. No new NVIDIA numerical
+campaign is claimed by this correction.
+
+The exceptional context-cleanup path also now revokes traceback-retained leases
+before native destruction. Three hardware-independent regressions first
+reproduced original-error replacement and missing destruction for MemoryError,
+ValueError and RuntimeError, then passed after the repair. Normal explicit close
+still rejects live vectors. This changes cleanup, not the response equation or
+CUDA arithmetic.
+
+Agent: ChatGPT
+Model: GPT-6 Astra Pro

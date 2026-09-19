@@ -250,3 +250,19 @@ still fails closed until a spin-resolved device J/K response plan has separate
 numerical and resource evidence. That gate is pinned by
 `tests/python/test_response_uhf.py`, so neither the UHF CPU bridge nor the RHF
 CUDA/DF backend is inferred as spin-resolved device support.
+
+
+## Resident response failure and validation scope
+
+Exceptional context exit destroys the resident native owner even when a solver
+traceback still retains vector leases. The original solver error is preserved;
+subsequent use of a retained vector rejects its closed owner. Ordinary explicit
+`close()` still rejects live vector leases. Hardware-independent lifecycle
+regressions cover memory, validation and runtime errors and idempotent teardown.
+
+The resident CUDA numerical comparison in `test_cuda_runtime.py` requires an
+explicit NVIDIA device allocation (`VIBEQC_RESOURCE_CUDA_TEST=1`) and skips under
+`CUMETAL_ROOT`. The CuMetal workflow reports that skip; its green status is not
+resident-response numerical qualification. NVIDIA compilation, host GMRES tests,
+and ownership tests are distinct from executing the resident operator/solver
+against the independent host-orchestrated CUDA reference.

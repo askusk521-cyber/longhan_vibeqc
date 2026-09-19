@@ -336,8 +336,15 @@ class CudaResidentRHFResponse:
     def __enter__(self):
         return self
 
-    def __exit__(self, *_):
-        if self._live:
+    def __exit__(self, exc_type, _exc, _traceback):
+        if exc_type is not None:
+            # Solver traceback frames still own their vectors while unwinding.
+            # Revoke these leases before destroying the native owner instead of
+            # masking the original failure with a live-vector close error.
+            # Any retained vector now refers to a closed owner; later release
+            # is harmless because its slot is no longer in the live set.
+            self._live.clear()
+        elif self._live:
             import gc
 
             gc.collect()

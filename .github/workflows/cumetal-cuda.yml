@@ -203,7 +203,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: uv pip install --python .venv/bin/python pytest
 
-      - name: Run resident RHF response on the Apple GPU
+      # This NVIDIA-only test skips on CuMetal. Keep the skip visible rather
+      # than labeling a successful collection as resident GPU qualification.
+      - name: Report NVIDIA-only resident-response test coverage
         if: github.event_name == 'pull_request'
         timeout-minutes: 5
         env:
@@ -215,7 +217,7 @@ jobs:
         run: |
           .venv/bin/python -m pytest \
             tests/python/test_cuda_runtime.py::test_cuda_resident_rhf_response_matches_host_operator \
-            -vv -s
+            -vv -rs
 
       - name: Preserve CUDA test results
         if: always()
