@@ -15,14 +15,18 @@ on:
 permissions:
   contents: read
 
-# Keep only the newest validation for a pull request. Master pushes use their
-# unique run ID, so one merge never cancels another merge's validation record.
+env:
+  CCACHE_VERSION: "4.14"
+
+# Coalesce superseded PR and master-push runs separately. Scheduled/manual
+# qualification keeps its own run ID and is not cancelled by ordinary pushes.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event_name == 'push' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   cpu:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -38,8 +42,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install ccache
-        run: sudo apt-get update && sudo apt-get install --yes ccache
+      - name: Install ccache 4.14
+        run: |
+          archive="ccache-${CCACHE_VERSION}-linux-x86_64-glibc.tar.xz"
+          curl --fail --silent --show-error --location \
+            --output "/tmp/${archive}" \
+            "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/${archive}"
+          tar -xJf "/tmp/${archive}" -C /tmp
+          sudo install -m 0755 \
+            "/tmp/ccache-${CCACHE_VERSION}-linux-x86_64-glibc/ccache" \
+            /usr/local/bin/ccache
+          ccache --version
       - name: Restore ccache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -87,6 +100,7 @@ jobs:
   cuda-compile:
     name: CUDA 12.9 compile (sm_120)
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     env:
       CUDACXX: /usr/local/cuda-12.9/bin/nvcc
       LD_LIBRARY_PATH: /usr/local/cuda-12.9/lib64
@@ -104,10 +118,9 @@ jobs:
             https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring.deb
           sudo apt-get update
-      - name: Install CUDA 12.9 build dependencies and ccache
+      - name: Install CUDA 12.9 build dependencies
         run: |
           sudo apt-get install --yes \
-            ccache \
             cuda-nvcc-12-9 \
             cuda-cuobjdump-12-9 \
             cuda-cudart-dev-12-9 \
@@ -117,6 +130,16 @@ jobs:
             libnvjitlink-12-9 \
             python3-numpy
           "$CUDACXX" --version
+      - name: Install ccache 4.14
+        run: |
+          archive="ccache-${CCACHE_VERSION}-linux-x86_64-glibc.tar.xz"
+          curl --fail --silent --show-error --location \
+            --output "/tmp/${archive}" \
+            "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/${archive}"
+          tar -xJf "/tmp/${archive}" -C /tmp
+          sudo install -m 0755 \
+            "/tmp/ccache-${CCACHE_VERSION}-linux-x86_64-glibc/ccache" \
+            /usr/local/bin/ccache
           ccache --version
       - name: Restore CUDA ccache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -188,6 +211,9 @@ jobs:
 
   python:
     runs-on: ubuntu-24.04
+    # Full nightly/manual qualification includes expensive Hessian and Au replay.
+    # Keep routine PR/push feedback capped separately; do not truncate that tier.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 90 || 20 }}
     env:
       CCACHE_MAXSIZE: 1G
       # PySCF and NumPy can each fan out through BLAS/OpenMP. Keep those
@@ -207,8 +233,17 @@ jobs:
           version: "0.10.7"
           python-version: "3.11"
           enable-cache: true
-      - name: Install ccache
-        run: sudo apt-get update && sudo apt-get install --yes ccache
+      - name: Install ccache 4.14
+        run: |
+          archive="ccache-${CCACHE_VERSION}-linux-x86_64-glibc.tar.xz"
+          curl --fail --silent --show-error --location \
+            --output "/tmp/${archive}" \
+            "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/${archive}"
+          tar -xJf "/tmp/${archive}" -C /tmp
+          sudo install -m 0755 \
+            "/tmp/ccache-${CCACHE_VERSION}-linux-x86_64-glibc/ccache" \
+            /usr/local/bin/ccache
+          ccache --version
       - name: Restore ccache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -308,6 +343,7 @@ jobs:
           retention-days: 1
 
   upload-coverage:
+    timeout-minutes: 8
     needs: [cpu, python]
     if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
     # Coverage reporting is observability rather than a correctness gate. A
@@ -357,6 +393,7 @@ jobs:
 
   pass:
     name: Pass CI checks
+    timeout-minutes: 5
     needs: [cpu, cuda-compile, python]
     runs-on: ubuntu-24.04
     if: always()
