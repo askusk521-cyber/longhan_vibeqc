@@ -36,6 +36,28 @@ def _flat(coordinates, shape):
     )
 
 
+def _physical_index(layout, logical="z"):
+    if layout.is_c_contiguous:
+        return logical
+    return (
+        " + ".join(
+            f"({_coordinate(logical, layout.shape, axis)}) * {_integer(stride)}"
+            for axis, stride in enumerate(layout.element_strides)
+        )
+        or "0LL"
+    )
+
+
+def _logical_index(layout, physical="z"):
+    if layout.is_c_contiguous:
+        return physical
+    shape = tuple(layout.shape[axis] for axis in layout.order)
+    coordinates = [None] * len(shape)
+    for axis, logical_axis in enumerate(layout.order):
+        coordinates[logical_axis] = _coordinate(physical, shape, axis)
+    return _flat(coordinates, layout.shape)
+
+
 def _name(prefix, base):
     return f"{prefix}{base}"
 
@@ -206,7 +228,7 @@ __global__ void {_name(prefix, f"scatter_{i}")}(unsigned char* p, const {ty}* c,
     for (I z = I(blockIdx.x) * blockDim.x + threadIdx.x; z < tm*tn;
          z += I(blockDim.x) * gridDim.x) {{
         I row = m0 + z/tn, column = n0 + z%tn;
-        reinterpret_cast<{ty}*>(p + {step.offset})[{_group_map(g, g.output_labels)}] =
+        reinterpret_cast<{ty}*>(p + {step.offset})[{_physical_index(step.layout, _group_map(g, g.output_labels))}] =
             finite({mul}(finite(c[z], error, {i}), {scalar.literal(step.node.attrs["coefficient"])}), error, {i});
     }}
 }}
@@ -282,6 +304,15 @@ def emit_cuda(plan: TensorPlan, symbol_prefix: str = "") -> str:
     """
     import re
 
+    for step in plan.steps:
+        if not step.virtual and (
+            step.layout is None or step.layout.shape != step.node.spec.shape
+        ):
+            raise ValueError("materialized tensor layout must match its logical shape")
+    for i in (*plan.inputs, *(index for _, index in plan.outputs)):
+        if plan.steps[i].virtual or not plan.steps[i].layout.is_c_contiguous:
+            raise ValueError("tensor ABI inputs and outputs must use logical C-order")
+
     if not isinstance(symbol_prefix, str) or (
         symbol_prefix
         and not re.fullmatch(r"[A-Za-z_]\w*", symbol_prefix, flags=re.ASCII)
@@ -324,7 +355,7 @@ def emit_cuda(plan: TensorPlan, symbol_prefix: str = "") -> str:
         body = (
             _value(plan, i, prefix)
             if step.virtual
-            else f"return reinterpret_cast<const {ty}*>(p + {step.offset})[z];"
+            else f"return reinterpret_cast<const {ty}*>(p + {step.offset})[{_physical_index(step.layout)}];"
         )
         parts.append(
             f"__device__ inline {ty} {prefix}read_{i}(const unsigned char* p, I z, int* error) {{ {body} }}"
@@ -335,7 +366,7 @@ def emit_cuda(plan: TensorPlan, symbol_prefix: str = "") -> str:
 __global__ void {prefix}kernel_{i}(unsigned char* p, int* error) {{
     for (I z = I(blockIdx.x) * blockDim.x + threadIdx.x; z < {node.spec.size}LL;
          z += I(blockDim.x) * gridDim.x)
-        reinterpret_cast<{ty}*>(p + {step.offset})[z] = {prefix}evaluate_{i}(p, z, error);
+        reinterpret_cast<{ty}*>(p + {step.offset})[z] = {prefix}evaluate_{i}(p, {_logical_index(step.layout)}, error);
 }}""")
             elif step.gemm == "packed":
                 parts.append(_packing_kernels(plan, i, prefix))

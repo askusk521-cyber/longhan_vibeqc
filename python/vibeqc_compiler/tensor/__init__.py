@@ -47,6 +47,7 @@ from .ir import (
     sqrt,
     transpose,
 )
+from .layout import DenseLayout
 from .optimize import PASSES, optimize, rewrite
 from .packing import PackedLayout
 from .program import Program
@@ -59,6 +60,7 @@ __all__ = [
     "GENERATION_VERSION",
     "PASSES",
     "PRIMITIVES",
+    "DenseLayout",
     "DotTestResult",
     "Execution",
     "Index",
