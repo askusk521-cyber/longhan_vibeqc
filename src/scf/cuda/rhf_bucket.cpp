@@ -6,7 +6,7 @@
 
 #include "molecule/basis.hpp"
 #include "runtime/resource_usage.hpp"
-#include "scf/cuda/checked_layout.hpp"
+#include "runtime/bounded_workspace.hpp"
 #include "scf/cuda/direct_constants.hpp"
 #include "scf/cuda/direct_tile_validation.hpp"
 #include "scf/cuda/eigensolver_types.hpp"
@@ -80,10 +80,10 @@ CudaRhfBasisLayoutStats inspect_rhf_cuda_basis_layout(const std::vector<core::Sy
   for (const core::System& system : systems) {
     for (const core::Shell& shell : system.shells) {
       std::size_t shell_references = 0;
-      if (!checked_multiply(molecule::cartesian_count(shell.angular_momentum),
-                            shell.primitives.size(), shell_references) ||
-          !checked_add(expanded_primitive_references, shell_references,
-                       expanded_primitive_references)) {
+      if (!vibeqc::runtime::checked_multiply(molecule::cartesian_count(shell.angular_momentum),
+                                             shell.primitives.size(), shell_references) ||
+          !vibeqc::runtime::checked_add(expanded_primitive_references, shell_references,
+                                        expanded_primitive_references)) {
         throw std::overflow_error("expanded CUDA primitive reference count overflowed");
       }
     }
