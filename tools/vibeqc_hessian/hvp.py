@@ -155,6 +155,15 @@ def rhf_hvp(
     jk_transfer = response_diag.get("jk_provider")
     if jk_transfer is None:
         jk_transfer = {"backend": "cpu-native", "device_transfers": 0}
+    resident_transfer = response_diag.get("resident_response")
+    if resident_transfer is None:
+        resident_transfer = {
+            "backend": "host",
+            "h2d_bytes": 0,
+            "d2h_bytes": 0,
+            "synchronizations": 0,
+            "operator_actions": 0,
+        }
 
     diagnostics = {
         "source_identity": state.source.identity,
@@ -194,11 +203,18 @@ def rhf_hvp(
         "transfers": {
             "directional_first": deepcopy(first_transfer),
             "response_jk": deepcopy(jk_transfer),
+            "resident_response": deepcopy(resident_transfer),
             "second_integral_hvp": "host-only; no device transfers",
             "relaxation_first_integrals": "host-only; no device transfers",
             "nuclear": "host-only; no device transfers",
         },
         "solver_workspace_bytes": response_diag["solver_workspace_bytes"],
+        "retained_response_device_bytes": response_diag.get(
+            "retained_response_device_bytes", 0
+        ),
+        "response_device_budget_bytes": response_diag.get(
+            "response_device_budget_bytes", 0
+        ),
         "published_hvp_bytes": int(total.nbytes),
         "memory_scope": (
             "published HVP + directional-provider/solver diagnostics only; "

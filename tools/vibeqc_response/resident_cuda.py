@@ -11,6 +11,7 @@ from __future__ import annotations
 import ctypes as ct
 
 import numpy as np
+from vibeqc import _native
 from vibeqc.profiles import canonical_hash
 
 from .direct_cuda import CudaDirectJKBackend
@@ -182,7 +183,9 @@ class CudaResidentRHFResponse:
     def diagnostics(self):
         if self._closed or not self._handle:
             raise RuntimeError("resident RHF response owner is closed")
-        value = _Diagnostic(struct_size=ct.sizeof(_Diagnostic), abi_version=0)
+        value = _Diagnostic(
+            struct_size=ct.sizeof(_Diagnostic), abi_version=_native.ABI_VERSION
+        )
         status = self._lib.vibeqc_rhf_response_resident_get_diagnostic(
             self._handle, ct.byref(value)
         )

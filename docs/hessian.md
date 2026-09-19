@@ -21,10 +21,13 @@ The HVP keeps the existing `NativeRHFState` admission boundary (all-electron
 closed-shell conventional RHF, at most 12 Cartesian AOs/four atoms). Second
 integrals and the final relaxation contraction are currently CPU-generated.
 Directional H1/S1 and direct J/K may independently use their qualified CUDA
-providers, in which case the result is explicitly labelled mixed host/device;
-AO/MO transforms and Krylov remain host-side. There is still no public
-Calculator Hessian/HVP API, production-size memory claim, or all-device HVP
-claim. See
+providers. B2 additionally allows the iterative RHF response operator and
+Krylov vectors/orthogonalization to remain on that direct-J/K CUDA stream via
+`response_execution="cuda-resident"`. Nuclear/metric RHS construction and
+final D/W reconstruction remain host-side, while the B3 second-integral HVP
+and relaxation contractions are still CPU consumers. The result is therefore
+a mixed host/device HVP, not an all-device HVP. There is still no public
+Calculator Hessian/HVP API or production-size global-memory claim. See
 [the matrix-free RHF HVP decision note](../.agents/notes/implemented/numerics/2026-09-19-rhf-matrix-free-hvp.md).
 
 ## Scope of this slice
@@ -490,8 +493,11 @@ bilinear identity, dense #449 `H @ v`, and three-step reconverged-gradient
 checks are in `tests/python/test_hessian_hvp.py`.
 
 This closes B3 only within the declared small-system conventional-RHF tools
-domain. B2 device-resident AO/MO/Krylov execution, B4 bounded block/full
-Hessians, production-size qualification and DFT Hessians remain separate.
+domain. B2 now closes the iterative response residency slice: response vectors,
+orthogonalization, operator AO/MO transforms and direct J/K actions can stay on
+device under the existing #179 GMRES controller. RHS/reconstruction, B3
+second-integral/relaxation consumers, B4 bounded block/full Hessians,
+production-size qualification and DFT Hessians remain separately gated.
 See the [directional response decision](../.agents/notes/implemented/numerics/2026-09-19-directional-rhf-nuclear-response.md)
 and the [matrix-free HVP decision](../.agents/notes/implemented/numerics/2026-09-19-rhf-matrix-free-hvp.md).
 

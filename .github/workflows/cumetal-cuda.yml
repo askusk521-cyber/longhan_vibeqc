@@ -199,6 +199,24 @@ jobs:
           grep -q 'launch_success=true' /tmp/vibeqc-cuda-runtime.log
           grep -q 'PASS: CUDA runtime contracts' /tmp/vibeqc-cuda-runtime.log
 
+      - name: Install resident-response test dependency
+        if: github.event_name == 'pull_request'
+        run: uv pip install --python .venv/bin/python pytest
+
+      - name: Run resident RHF response on the Apple GPU
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 5
+        env:
+          CUMETAL_ROOT: /tmp/cumetal-install
+          DYLD_LIBRARY_PATH: /tmp/cuda-metal/build
+          VIBEQC_LIBRARY: ${{ github.workspace }}/build-cumetal/libvibeqc.dylib
+          CUMETAL_TRACE_GPU: "1"
+          PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}
+        run: |
+          .venv/bin/python -m pytest \
+            tests/python/test_cuda_runtime.py::test_cuda_resident_rhf_response_matches_host_operator \
+            -vv -s
+
       - name: Build CuMetal FP32 CodSpeed benchmark
         if: github.event_name != 'schedule'
         run: |
