@@ -42,10 +42,23 @@ _KIND = {
 }
 _DOUBLE = ct.POINTER(ct.c_double)
 _SIZE = ct.POINTER(ct.c_size_t)
+_UINT64 = ct.POINTER(ct.c_uint64)
 
 
 def pointer(array):
     return array.ctypes.data_as(_DOUBLE)
+
+
+_C_INT_MAX = 2 ** (8 * ct.sizeof(ct.c_int) - 1) - 1
+_C_SIZE_T_MAX = 2 ** (8 * ct.sizeof(ct.c_size_t)) - 1
+
+
+def _valid_cuda_device(value):
+    return type(value) is int and 0 <= value <= _C_INT_MAX
+
+
+def _valid_size_t_budget(value):
+    return type(value) is int and 1 <= value <= _C_SIZE_T_MAX
 
 
 class NativeSource:
@@ -224,6 +237,22 @@ class NativeSource:
             ct.c_size_t,
             ct.c_size_t,
             _DOUBLE,
+            ct.c_size_t,
+            ct.c_char_p,
+            ct.c_size_t,
+        ]
+        lib.vibeqc_posthf_one_electron_gradient_cuda_v1.argtypes = [
+            ct.c_void_p,
+            ct.c_int,
+            _DOUBLE,
+            _DOUBLE,
+            _DOUBLE,
+            ct.c_size_t,
+            ct.c_uint,
+            ct.c_size_t,
+            _DOUBLE,
+            ct.c_size_t,
+            _UINT64,
             ct.c_size_t,
             ct.c_char_p,
             ct.c_size_t,
@@ -498,11 +527,8 @@ class NativeSource:
             or not np.isfinite(value).all()
         ):
             raise ValueError("DF gradient tile range/weights are invalid")
-        if (
-            type(device_id) is not int
-            or device_id < 0
-            or type(stage_budget_bytes) is not int
-            or stage_budget_bytes < 1
+        if not _valid_cuda_device(device_id) or not _valid_size_t_budget(
+            stage_budget_bytes
         ):
             raise ValueError("DF gradient tile requires valid device/budget")
         gradient = np.empty((len(self.atoms), 3), dtype=np.float64)
@@ -522,6 +548,87 @@ class NativeSource:
             )
         return immutable(gradient)
 
+    def one_electron_gradient_cuda(
+        self,
+        *,
+        overlap_weights=None,
+        kinetic_weights=None,
+        attraction_weights=None,
+        device_id=0,
+        schedule=0,
+        stage_budget_bytes=128 << 20,
+    ):
+        """Contract fixed S/T/V AO cotangents with generated CUDA derivatives.
+
+        Each optional weight is a real finite ``[AO,AO]`` matrix. At least one
+        must be supplied. The stage budget is owned by the native generated
+        consumer; caller weights/output, source ownership, Python objects, CUDA
+        context and allocator rounding are excluded. Returned diagnostics are
+        measured by that consumer, not inferred from the requested budget.
+        """
+
+        def checked(name, weights):
+            if weights is None:
+                return None
+            raw = np.asarray(weights)
+            if np.iscomplexobj(raw):
+                raise ValueError(f"{name} one-electron gradient weights must be real")
+            value = np.ascontiguousarray(raw, dtype=np.float64)
+            if value.shape != (self.nbf, self.nbf) or not np.isfinite(value).all():
+                raise ValueError(
+                    f"{name} one-electron gradient requires finite [AO,AO] weights"
+                )
+            return value
+
+        blocks = tuple(
+            checked(name, value)
+            for name, value in (
+                ("overlap", overlap_weights),
+                ("kinetic", kinetic_weights),
+                ("attraction", attraction_weights),
+            )
+        )
+        if all(value is None for value in blocks):
+            raise ValueError("one-electron CUDA gradient requires at least one weight")
+        if (
+            not _valid_cuda_device(device_id)
+            or type(schedule) is not int
+            or schedule not in (0, 1, 2)
+            or not _valid_size_t_budget(stage_budget_bytes)
+        ):
+            raise ValueError(
+                "one-electron CUDA gradient requires valid device/schedule/budget"
+            )
+        gradient = np.empty((len(self.atoms), 3), dtype=np.float64)
+        resources = np.zeros(6, dtype=np.uint64)
+        pointers = tuple(None if value is None else pointer(value) for value in blocks)
+        with self._lock:
+            self._check_open()
+            self._call(
+                "vibeqc_posthf_one_electron_gradient_cuda_v1",
+                self._handle,
+                device_id,
+                *pointers,
+                self.nbf * self.nbf,
+                schedule,
+                stage_budget_bytes,
+                pointer(gradient),
+                gradient.size,
+                resources.ctypes.data_as(_UINT64),
+                resources.size,
+            )
+        names = (
+            "device_bytes",
+            "host_numeric_bytes",
+            "host_to_device_bytes",
+            "device_to_host_bytes",
+            "synchronous_uploads",
+            "stream_synchronizations",
+        )
+        return immutable(gradient), {
+            name: int(value) for name, value in zip(names, resources, strict=True)
+        }
+
     def weighted_eri_gradient_cuda(
         self, weights, *, device_id=0, stage_budget_bytes=128 << 20
     ):
@@ -540,11 +647,8 @@ class NativeSource:
         value = np.ascontiguousarray(raw_weights, dtype=np.float64)
         if value.shape != (self.nbf,) * 4 or not np.isfinite(value).all():
             raise ValueError("weighted ERI gradient requires finite [AO]*4 weights")
-        if (
-            type(device_id) is not int
-            or device_id < 0
-            or type(stage_budget_bytes) is not int
-            or stage_budget_bytes < 1
+        if not _valid_cuda_device(device_id) or not _valid_size_t_budget(
+            stage_budget_bytes
         ):
             raise ValueError("weighted ERI gradient requires valid device/budget")
         gradient = np.empty((len(self.atoms), 3), dtype=np.float64)
@@ -605,11 +709,8 @@ class NativeSource:
             raise ValueError(
                 "weighted ERI shell weights have the wrong shape or values"
             )
-        if (
-            type(device_id) is not int
-            or device_id < 0
-            or type(stage_budget_bytes) is not int
-            or stage_budget_bytes < 1
+        if not _valid_cuda_device(device_id) or not _valid_size_t_budget(
+            stage_budget_bytes
         ):
             raise ValueError("weighted ERI shell gradient requires valid device/budget")
         gradient = np.empty((4, 3), dtype=np.float64)

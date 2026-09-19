@@ -30,9 +30,11 @@ from .ccsd_t_api import (
 )
 from .complete_gradient import (
     BoundCCSDGradient,
+    CCSDGradientCapabilities,
     CCSDGradientOptions,
     CCSDGradientResult,
     complete_gradient_validation,
+    gradient_capabilities,
 )
 from .doubles import build_ccsd_program
 from .equations import amplitude_layouts, build_program
@@ -74,6 +76,7 @@ __all__ = [
     "BoundCCSDGradient",
     "BoundCCSDLambda",
     "BoundCCSDResponse",
+    "CCSDGradientCapabilities",
     "CCSDGradientOptions",
     "CCSDGradientResult",
     "CCSDLambdaPrograms",
@@ -107,6 +110,7 @@ __all__ = [
     "cpu_triples_tiles",
     "energy",
     "evaluate",
+    "gradient_capabilities",
     "method_capabilities",
     "rccsd_t_batch_energy",
     "rccsd_t_energy",
