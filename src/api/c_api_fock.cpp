@@ -36,7 +36,8 @@ struct vibeqc_rhf_response_resident {
   void* allocation{};
   std::size_t allocation_bytes{};
   std::size_t nbf{}, nocc{}, nvirt{}, dimension{}, vector_slots{};
-  double *slots{}, *coefficients{}, *energies{}, *density{}, *coulomb{}, *exchange{};
+  double *slots{}, *coefficients{}, *energy_occ{}, *energy_virt{};
+  double *density{}, *coulomb{}, *exchange{};
   double *transform_one{}, *transform_two{}, *gap_scratch{};
   int* numerical_error{};
   std::uint64_t h2d_bytes{}, d2h_bytes{}, synchronizations{}, operator_actions{}, blas_calls{};
@@ -444,8 +445,11 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
     const auto dim = resident_product(o, v);
     const auto matrix = resident_product(n, n);
     const auto transform = resident_product(n, o);
+    const auto occupied_matrix = resident_product(o, o);
+    const auto virtual_matrix = resident_product(v, v);
     const auto slot_values = resident_product(static_cast<std::size_t>(vector_slots), dim);
-    const auto doubles = resident_sum({slot_values, matrix, n, 3 * matrix, 2 * transform, dim});
+    const auto doubles = resident_sum(
+        {slot_values, matrix, occupied_matrix, virtual_matrix, 3 * matrix, 2 * transform, dim});
     const auto bytes = resident_sum({resident_product(doubles, sizeof(double)), sizeof(int)});
     require(device_budget_bytes > 0 && bytes <= device_budget_bytes,
             "resident RHF response device budget is insufficient");
@@ -473,8 +477,10 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
       cursor += slot_values;
       owner->coefficients = cursor;
       cursor += matrix;
-      owner->energies = cursor;
-      cursor += n;
+      owner->energy_occ = cursor;
+      cursor += occupied_matrix;
+      owner->energy_virt = cursor;
+      cursor += virtual_matrix;
       owner->density = cursor;
       cursor += matrix;
       owner->coulomb = cursor;
@@ -493,12 +499,21 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
       for (std::size_t row = 0; row < n; ++row)
         for (std::size_t column = 0; column < n; ++column)
           column_major[column * n + row] = coefficients[row * n + column];
+      std::vector<double> energy_occ(occupied_matrix, 0.0);
+      std::vector<double> energy_virt(virtual_matrix, 0.0);
+      for (std::size_t i = 0; i < o; ++i) energy_occ[i * o + i] = orbital_energies[i];
+      for (std::size_t a = 0; a < v; ++a)
+        energy_virt[a * v + a] = orbital_energies[o + a];
       resident_cuda(cudaMemcpyAsync(owner->coefficients, column_major.data(),
                                     matrix * sizeof(double), cudaMemcpyHostToDevice,
                                     owner->stream));
-      resident_cuda(cudaMemcpyAsync(owner->energies, orbital_energies, n * sizeof(double),
-                                    cudaMemcpyHostToDevice, owner->stream));
-      owner->h2d_bytes = (matrix + n) * sizeof(double);
+      resident_cuda(cudaMemcpyAsync(owner->energy_occ, energy_occ.data(),
+                                    occupied_matrix * sizeof(double), cudaMemcpyHostToDevice,
+                                    owner->stream));
+      resident_cuda(cudaMemcpyAsync(owner->energy_virt, energy_virt.data(),
+                                    virtual_matrix * sizeof(double), cudaMemcpyHostToDevice,
+                                    owner->stream));
+      owner->h2d_bytes = (matrix + occupied_matrix + virtual_matrix) * sizeof(double);
       resident_sync(owner.get());
     } catch (...) {
       if (owner->allocation) {
@@ -773,13 +788,13 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_apply(vibeqc_rhf_response_
                               owner->transform_two, n, &zero, y, v));
     ++owner->blas_calls;
 
-    resident_blas(cublasDdgmm(owner->blas, CUBLAS_SIDE_LEFT, v, o, x, v,
-                              owner->energies + owner->nocc, 1, owner->gap_scratch, v));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_N, v, o, v, &one,
+                              owner->energy_virt, v, x, v, &zero, owner->gap_scratch, v));
     ++owner->blas_calls;
     resident_blas(cublasDaxpy(owner->blas, dim, &one, owner->gap_scratch, 1, y, 1));
     ++owner->blas_calls;
-    resident_blas(cublasDdgmm(owner->blas, CUBLAS_SIDE_RIGHT, v, o, x, v, owner->energies, 1,
-                              owner->gap_scratch, v));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_N, v, o, o, &one, x, v,
+                              owner->energy_occ, o, &zero, owner->gap_scratch, v));
     ++owner->blas_calls;
     resident_blas(cublasDaxpy(owner->blas, dim, &minus, owner->gap_scratch, 1, y, 1));
     ++owner->blas_calls;
