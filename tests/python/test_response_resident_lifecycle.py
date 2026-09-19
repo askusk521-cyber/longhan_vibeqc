@@ -52,3 +52,47 @@ def test_normal_close_still_rejects_live_vector_leases():
     vector.release()
     owner.close()
     assert destroyed == [123]
+
+
+@pytest.mark.parametrize("kind", ["foreign", "released", "reused"])
+@pytest.mark.parametrize("operation", ["copy", "norm", "to_host"])
+def test_native_access_rejects_invalid_vector_leases(kind, operation, monkeypatch):
+    owner, _ = _owner()
+    owner.dimension = 1
+    origin = _owner()[0] if kind == "foreign" else owner
+    value = origin._allocate()
+    replacement = None
+    if kind != "foreign":
+        value.release()
+        if kind == "reused":
+            replacement = owner._allocate()
+            assert replacement.slot == value.slot
+
+    def forbidden(*args):
+        pytest.fail("invalid vector lease reached the native ABI")
+
+    monkeypatch.setattr(owner, "_call", forbidden)
+    before = set(owner._live)
+    with pytest.raises((ValueError, RuntimeError), match="lease|owner|released"):
+        getattr(owner, operation)(value)
+    assert owner._live == before
+    if replacement is not None:
+        replacement.release()
+    value.release()
+
+
+def test_native_access_rejects_closed_borrowed_backend():
+    import threading
+
+    owner, _ = _owner()
+
+    def closed():
+        raise RuntimeError("CUDA direct response backend is closed")
+
+    def forbidden(*args):
+        pytest.fail("closed borrowed backend reached the native ABI")
+
+    owner._backend = SimpleNamespace(_lock=threading.RLock(), _ensure_open=closed)
+    owner._lib.vibeqc_rhf_response_resident_zero = forbidden
+    with pytest.raises(RuntimeError, match="backend is closed"):
+        owner._call("zero", 0)

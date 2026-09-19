@@ -172,12 +172,21 @@ class CudaResidentRHFResponse:
     def _call(self, name, *args):
         if self._closed or not self._handle:
             raise RuntimeError("resident RHF response owner is closed")
-        status = getattr(self._lib, f"vibeqc_rhf_response_resident_{name}")(
-            self._handle, *args
-        )
-        if status:
-            message = self._lib.vibeqc_rhf_response_resident_last_error(self._handle)
-            raise RuntimeError((message or b"resident RHF response failure").decode())
+        # The native adapter borrows the parent's stream and direct-J/K plan.
+        # Explicit close must not turn a retained Python reference into a
+        # dangling native parent, including a concurrent backend teardown.
+        with self._backend._lock:
+            self._backend._ensure_open()
+            status = getattr(self._lib, f"vibeqc_rhf_response_resident_{name}")(
+                self._handle, *args
+            )
+            if status:
+                message = self._lib.vibeqc_rhf_response_resident_last_error(
+                    self._handle
+                )
+                raise RuntimeError(
+                    (message or b"resident RHF response failure").decode()
+                )
 
     @property
     def diagnostics(self):
@@ -206,7 +215,17 @@ class CudaResidentRHFResponse:
             raise RuntimeError("resident Krylov reset with live vector leases")
         self._free = list(reversed(range(self.vector_slots)))
 
+    def _validate_vector(self, value):
+        if self._closed or not self._handle:
+            raise RuntimeError("resident RHF response owner is closed")
+        if not isinstance(value, _ResidentVector) or value.owner is not self:
+            raise ValueError("resident vector lease belongs to a different owner")
+        if value._released or value.slot not in self._live:
+            raise ValueError("resident vector lease has been released")
+
     def _allocate(self):
+        if self._closed or not self._handle:
+            raise RuntimeError("resident RHF response owner is closed")
         if not self._free:
             raise MemoryError("resident RHF Krylov vector-slot capacity exhausted")
         slot = self._free.pop()
@@ -245,6 +264,7 @@ class CudaResidentRHFResponse:
             raise
 
     def copy(self, value):
+        self._validate_vector(value)
         vector = self._allocate()
         try:
             self._call("copy", vector.slot, value.slot)
@@ -259,21 +279,27 @@ class CudaResidentRHFResponse:
         return vector
 
     def subtract(self, left, right):
+        self._validate_vector(left)
+        self._validate_vector(right)
         result = self.copy(left)
         self._call("axpy", result.slot, -1.0, right.slot)
         return result
 
     def dot(self, left, right):
+        self._validate_vector(left)
+        self._validate_vector(right)
         output = ct.c_double()
         self._call("dot", left.slot, right.slot, ct.byref(output))
         return float(output.value)
 
     def norm(self, value):
+        self._validate_vector(value)
         output = ct.c_double()
         self._call("norm", value.slot, ct.byref(output))
         return float(output.value)
 
     def apply(self, operator, value):
+        self._validate_vector(value)
         del operator
         result = self._allocate()
         try:
@@ -291,6 +317,9 @@ class CudaResidentRHFResponse:
         return self.copy(value)
 
     def orthogonalize(self, basis, value, *, reorthogonalize, tolerance):
+        self._validate_vector(value)
+        for vector in basis:
+            self._validate_vector(vector)
         work = value
         coefficients = np.zeros(len(basis), dtype=np.float64)
         for _ in range(reorthogonalize):
@@ -304,6 +333,10 @@ class CudaResidentRHFResponse:
         return work, coefficients, self.norm(work)
 
     def combination(self, base, basis, coefficients, preconditioner):
+        self._validate_vector(base)
+        basis = tuple(basis)
+        for vector in basis:
+            self._validate_vector(vector)
         if preconditioner is not None:
             raise NotImplementedError(
                 "resident RHF Krylov does not permit a host preconditioner fallback"
@@ -314,6 +347,7 @@ class CudaResidentRHFResponse:
         return result
 
     def to_host(self, value):
+        self._validate_vector(value)
         output = np.empty(self.dimension, dtype=np.float64)
         self._call("download", value.slot, output.ctypes.data_as(_DOUBLE), output.size)
         return output
