@@ -276,7 +276,6 @@ class MultiRHSResult:
         return self
 
 
-
 class _HostKrylovEngine:
     """NumPy vector engine preserving the original #179 solver semantics."""
 
@@ -363,7 +362,9 @@ def _solve_single(
     if initial_guess is not None:
         guess_host = np.asarray(initial_guess, dtype=np.float64)
         if guess_host.shape != (n,) or not np.isfinite(guess_host).all():
-            raise ValueError("initial guess must be a finite vector of operator dimension")
+            raise ValueError(
+                "initial guess must be a finite vector of operator dimension"
+            )
 
     engine = getattr(operator, "_krylov_engine", None)
     if engine is None:
@@ -412,7 +413,9 @@ def _solve_single(
         image = apply(candidate)
         return engine.norm(engine.subtract(b, image))
 
-    def publish(solution, converged, residual_norm, iterations, reason, basis, rhs_norm):
+    def publish(
+        solution, converged, residual_norm, iterations, reason, basis, rhs_norm
+    ):
         return SolveResult(
             immutable(engine.to_host(solution)),
             converged,
@@ -431,7 +434,9 @@ def _solve_single(
             ),
         )
 
-    residual = engine.subtract(b, apply(x)) if guess_host is not None else engine.copy(b)
+    residual = (
+        engine.subtract(b, apply(x)) if guess_host is not None else engine.copy(b)
+    )
     beta = engine.norm(residual)
     history.append(beta)
     rhs_norm = engine.norm(b)
@@ -508,8 +513,13 @@ def _solve_single(
                     best_x, best_residual = candidate_x, candidate_residual
                     best_basis = tuple(basis[: column + 1])
                     return publish(
-                        best_x, True, best_residual, total_steps, "converged",
-                        best_basis, rhs_norm
+                        best_x,
+                        True,
+                        best_residual,
+                        total_steps,
+                        "converged",
+                        best_basis,
+                        rhs_norm,
                     )
                 if candidate_residual >= best_residual * (
                     1.0 - options.stagnation_tolerance
@@ -522,21 +532,35 @@ def _solve_single(
                     best_basis = tuple(basis[: column + 1])
                 if stagnation >= options.stagnation_window:
                     return publish(
-                        best_x, False, best_residual, total_steps, "stagnation",
-                        best_basis, rhs_norm
+                        best_x,
+                        False,
+                        best_residual,
+                        total_steps,
+                        "stagnation",
+                        best_basis,
+                        rhs_norm,
                     )
         if candidate_residual <= target:
             return publish(
-                candidate_x, True, candidate_residual, total_steps, "converged",
-                tuple(basis[:steps_this_cycle]), rhs_norm
+                candidate_x,
+                True,
+                candidate_residual,
+                total_steps,
+                "converged",
+                tuple(basis[:steps_this_cycle]),
+                rhs_norm,
             )
         if steps_this_cycle == 0:
             break
         if best_residual >= beta:
             return publish(
-                best_x, False, best_residual, total_steps,
+                best_x,
+                False,
+                best_residual,
+                total_steps,
                 "breakdown" if best_residual > 0 else "singular",
-                best_basis, rhs_norm
+                best_basis,
+                rhs_norm,
             )
         residual = engine.subtract(b, apply(best_x))
         beta = engine.norm(residual)
