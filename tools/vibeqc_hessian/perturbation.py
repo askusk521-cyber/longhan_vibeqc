@@ -85,6 +85,7 @@ def solve_rhf_nuclear_perturbation(operator, frozen_fock, overlap, *, options=No
         layout.pack(-rhs),
         options=options or GMRESOptions(),
         raise_on_failure=True,
+        collect_basis=False,
     )
     x_ia = layout.as_ia(result.solution)
     mo1 = -0.5 * overlap_mo[:, :nocc]

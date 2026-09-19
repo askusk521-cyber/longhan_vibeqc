@@ -706,6 +706,7 @@ def solve(
     recycle=None,
     preconditioner=None,
     raise_on_failure=False,
+    collect_basis=True,
 ):
     """Solve one RHS with bounded true-residual GMRES."""
     options = GMRESOptions() if options is None else options
@@ -752,6 +753,7 @@ def solve(
             ),
             initial_guess=initial_guess,
             preconditioner=preconditioner,
+            collect_basis=collect_basis or recycle is not None,
         )
         if recycle is not None and result.converged:
             recycle.update(operator.problem, result)

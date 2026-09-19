@@ -28,6 +28,7 @@ from .operators import (
     RHFResponseOperator,
 )
 from .oracle import explicit_rhf_response_matrix, finite_rotation_jvp
+from .resident_cuda import CudaResidentRHFResponse
 from .problem import (
     ResponseCompatibilityError,
     ResponseProblem,
@@ -47,6 +48,7 @@ __all__ = [
     "CPKSResponseOperator",
     "CudaDFJKBackend",
     "CudaDirectJKBackend",
+    "CudaResidentRHFResponse",
     "DenseAOResponseBackend",
     "DenseMatrixResponseOperator",
     "DiagonalPreconditioner",

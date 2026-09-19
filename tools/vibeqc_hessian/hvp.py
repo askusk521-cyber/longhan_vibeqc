@@ -59,6 +59,8 @@ def rhf_hvp(
     jk_backend="cpu",
     device_id=0,
     device_budget_bytes=64 << 20,
+    response_execution="host",
+    response_device_budget_bytes=128 << 20,
     solver_options=None,
     first_backend="cpu",
     first_compiler=None,
@@ -91,6 +93,8 @@ def rhf_hvp(
         jk_backend=jk_backend,
         device_id=device_id,
         device_budget_bytes=device_budget_bytes,
+        response_execution=response_execution,
+        response_device_budget_bytes=response_device_budget_bytes,
         solver_options=solver_options,
         first_backend=first_backend,
         first_compiler=first_compiler,
@@ -139,7 +143,9 @@ def rhf_hvp(
 
     response_diag = response.diagnostics
     residency = (
-        "mixed-host-device"
+        "mixed-host-device-resident-response"
+        if response_execution == "cuda-resident"
+        else "mixed-host-device"
         if first_backend == "cuda" or jk_backend == "cuda"
         else "host"
     )
@@ -160,6 +166,7 @@ def rhf_hvp(
         "relaxation_first_integral_backend": "cpu-generated-weighted-contraction",
         "response_first_backend": first_backend,
         "response_jk_backend": jk_backend,
+        "response_execution": response_execution,
         "ao_mo_transforms": response_diag["ao_mo_transforms"],
         "krylov_execution": response_diag["krylov_execution"],
         "execution_residency": residency,

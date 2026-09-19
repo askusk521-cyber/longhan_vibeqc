@@ -60,3 +60,77 @@ def test_cuda_minimal_uhf_matches_cpu_reference():
     assert result.executed_backend == "cuda"
     assert result.energy == pytest.approx(reference.energy, abs=energy_atol)
     assert np.allclose(result.forces, reference.forces, atol=force_atol, rtol=0.0)
+
+
+
+def test_cuda_resident_rhf_response_matches_host_operator():
+    """B2: keep RHF response operator/Krylov vectors resident on the CUDA stream."""
+    from tools.vibeqc_posthf.export import export_rhf
+    from tools.vibeqc_posthf.sources import NativeSource
+    from tools.vibeqc_response import (
+        CudaDirectJKBackend,
+        GMRESOptions,
+        RHFResponseOperator,
+        solve,
+    )
+
+    atoms = [(1, (0.0, 0.0, -0.7)), (1, (0.0, 0.0, 0.7))]
+    basis = (
+        Shell(0, 0, (Primitive(1.0, 1.0),)),
+        Shell(1, 0, (Primitive(1.0, 1.0),)),
+    )
+    with NativeSource(atoms, basis=basis) as source:
+        reference, _ = export_rhf(source, backend="cpu", tolerance=1e-12)
+        with CudaDirectJKBackend(
+            source, device_budget_bytes=64 << 20
+        ) as backend:
+            problem = RHFResponseOperator.build_problem(reference, backend)
+            operator = RHFResponseOperator(problem, backend)
+            vector = np.linspace(0.2, 0.2 * problem.dimension, problem.dimension)
+            expected_action = operator.apply(vector)
+            host_result = solve(
+                operator,
+                np.ones(problem.dimension),
+                options=GMRESOptions(rtol=1e-11, atol=1e-12),
+                collect_basis=False,
+            )
+            host_backend_actions = backend.statistics["actions"]
+
+            with backend.resident_response(
+                problem,
+                vector_slots=64,
+                device_budget_bytes=16 << 20,
+            ) as resident:
+                device_input = resident.from_host(vector)
+                before = resident.diagnostics
+                device_output = resident.apply(operator, device_input)
+                after_apply = resident.diagnostics
+                assert after_apply["h2d_bytes"] == before["h2d_bytes"]
+                assert after_apply["d2h_bytes"] == before["d2h_bytes"] + 4
+                actual_action = resident.to_host(device_output)
+                device_input.release()
+                device_output.release()
+
+                action_atol, _ = _cuda_tolerances()
+                np.testing.assert_allclose(
+                    actual_action, expected_action, atol=10 * action_atol, rtol=0
+                )
+                assert backend.statistics["actions"] == host_backend_actions
+
+                operator._krylov_engine = resident
+                resident_result = solve(
+                    operator,
+                    np.ones(problem.dimension),
+                    options=GMRESOptions(rtol=1e-11, atol=1e-12),
+                    collect_basis=False,
+                )
+                np.testing.assert_allclose(
+                    resident_result.solution,
+                    host_result.solution,
+                    atol=20 * action_atol,
+                    rtol=0,
+                )
+                final = resident.diagnostics
+                assert final["operator_actions"] >= resident_result.operator_actions
+                assert final["blas_calls"] > 0
+                assert final["owned_device_bytes"] <= 16 << 20
