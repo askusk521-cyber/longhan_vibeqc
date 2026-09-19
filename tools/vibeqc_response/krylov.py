@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -769,16 +770,20 @@ def solve(
     else:
         if recycle is not None and initial_guess is None:
             initial_guess = recycle.initial_guess(operator.problem, rhs)
-        result = _solve_single(
-            operator,
-            rhs,
-            replace(
-                options, max_workspace_bytes=options.max_workspace_bytes - reservation
-            ),
-            initial_guess=initial_guess,
-            preconditioner=preconditioner,
-            collect_basis=collect_basis or recycle is not None,
-        )
+        engine = getattr(operator, "_krylov_engine", None)
+        workspace = getattr(engine, "solver_workspace", nullcontext)
+        with workspace():
+            result = _solve_single(
+                operator,
+                rhs,
+                replace(
+                    options,
+                    max_workspace_bytes=options.max_workspace_bytes - reservation,
+                ),
+                initial_guess=initial_guess,
+                preconditioner=preconditioner,
+                collect_basis=collect_basis or recycle is not None,
+            )
         if recycle is not None and result.converged:
             recycle.update(operator.problem, result)
     result = replace(

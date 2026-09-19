@@ -9,6 +9,8 @@ receives scalar reductions/status during iteration and explicit final results.
 from __future__ import annotations
 
 import ctypes as ct
+from contextlib import contextmanager
+from weakref import WeakValueDictionary
 
 import numpy as np
 from vibeqc import _native
@@ -80,7 +82,7 @@ def _bind(lib):
 
 
 class _ResidentVector:
-    __slots__ = ("_released", "owner", "slot")
+    __slots__ = ("__weakref__", "_released", "owner", "slot")
 
     def __init__(self, owner, slot):
         self.owner, self.slot, self._released = owner, slot, False
@@ -147,6 +149,7 @@ class CudaResidentRHFResponse:
         self.vector_slots = vector_slots
         self._free = list(reversed(range(vector_slots)))
         self._live = set()
+        self._vectors = WeakValueDictionary()
         diagnostic = self.diagnostics
         if (
             diagnostic["nbf"] != problem.reference.nmo
@@ -210,6 +213,17 @@ class CudaResidentRHFResponse:
     def workspace_bytes(self):
         return self.diagnostics["owned_device_bytes"]
 
+    @contextmanager
+    def solver_workspace(self):
+        # A returned/failed solver frame can be retained by a profiler or a
+        # traceback. Its temporary leases must not depend on garbage collection.
+        self.reset()
+        try:
+            yield
+        finally:
+            for vector in list(self._vectors.values()):
+                vector.release()
+
     def reset(self):
         if self._live:
             raise RuntimeError("resident Krylov reset with live vector leases")
@@ -230,11 +244,14 @@ class CudaResidentRHFResponse:
             raise MemoryError("resident RHF Krylov vector-slot capacity exhausted")
         slot = self._free.pop()
         self._live.add(slot)
-        return _ResidentVector(self, slot)
+        vector = _ResidentVector(self, slot)
+        self._vectors[slot] = vector
+        return vector
 
     def _release_slot(self, slot):
         if slot in self._live:
             self._live.remove(slot)
+            self._vectors.pop(slot, None)
             self._free.append(slot)
 
     def from_host(self, values):

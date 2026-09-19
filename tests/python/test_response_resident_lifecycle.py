@@ -2,6 +2,7 @@
 
 import ctypes as ct
 from types import SimpleNamespace
+from weakref import WeakValueDictionary
 
 import pytest
 
@@ -20,6 +21,7 @@ def _owner():
     owner._closed = False
     owner._free = [0, 1]
     owner._live = set()
+    owner._vectors = WeakValueDictionary()
     owner.vector_slots = 2
     return owner, destroyed
 
@@ -96,3 +98,34 @@ def test_native_access_rejects_closed_borrowed_backend():
     owner._lib.vibeqc_rhf_response_resident_zero = forbidden
     with pytest.raises(RuntimeError, match="backend is closed"):
         owner._call("zero", 0)
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_solver_releases_temporaries_even_when_a_profiler_retains_them(
+    monkeypatch, raises
+):
+    import numpy as np
+
+    from tools.vibeqc_response import krylov
+
+    owner, _ = _owner()
+    owner.dimension = 1
+    retained = []
+
+    def retaining_solver(*args, **kwargs):
+        retained.append(owner._allocate())
+        if raises:
+            raise RuntimeError("retained solver frame")
+        return krylov._workspace_failure(1, 1, 1)[0]
+
+    monkeypatch.setattr(krylov, "_solve_single", retaining_solver)
+    operator = SimpleNamespace(dimension=1, _krylov_engine=owner)
+    if raises:
+        with pytest.raises(RuntimeError, match="retained solver frame"):
+            krylov.solve(operator, np.ones(1))
+    else:
+        krylov.solve(operator, np.ones(1))
+    assert retained
+    assert not owner._live
+    assert retained[0]._released
+    owner.close()
