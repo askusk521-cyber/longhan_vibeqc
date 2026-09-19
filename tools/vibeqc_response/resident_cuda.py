@@ -41,8 +41,15 @@ class _Diagnostic(ct.Structure):
 def _bind(lib):
     handle = ct.c_void_p
     lib.vibeqc_rhf_response_resident_create.argtypes = [
-        ct.c_void_p, _DOUBLE, ct.c_uint64, _DOUBLE, ct.c_uint64,
-        ct.c_uint32, ct.c_uint32, ct.c_uint64, ct.POINTER(handle)
+        ct.c_void_p,
+        _DOUBLE,
+        ct.c_uint64,
+        _DOUBLE,
+        ct.c_uint64,
+        ct.c_uint32,
+        ct.c_uint32,
+        ct.c_uint64,
+        ct.POINTER(handle),
     ]
     lib.vibeqc_rhf_response_resident_create.restype = ct.c_int32
     lib.vibeqc_rhf_response_resident_destroy.argtypes = [handle]
@@ -50,7 +57,8 @@ def _bind(lib):
     lib.vibeqc_rhf_response_resident_last_error.argtypes = [handle]
     lib.vibeqc_rhf_response_resident_last_error.restype = ct.c_char_p
     lib.vibeqc_rhf_response_resident_get_diagnostic.argtypes = [
-        handle, ct.POINTER(_Diagnostic)
+        handle,
+        ct.POINTER(_Diagnostic),
     ]
     lib.vibeqc_rhf_response_resident_get_diagnostic.restype = ct.c_int32
     signatures = {
@@ -71,7 +79,7 @@ def _bind(lib):
 
 
 class _ResidentVector:
-    __slots__ = ("owner", "slot", "_released")
+    __slots__ = ("_released", "owner", "slot")
 
     def __init__(self, owner, slot):
         self.owner, self.slot, self._released = owner, slot, False
@@ -105,19 +113,29 @@ class CudaResidentRHFResponse:
         plan = backend._plan
         lib = plan._library
         if not hasattr(lib, "vibeqc_rhf_response_resident_create"):
-            raise NotImplementedError("native library lacks resident RHF response support")
+            raise NotImplementedError(
+                "native library lacks resident RHF response support"
+            )
         _bind(lib)
         self._lib, self._backend, self.problem = lib, backend, problem
         self.dimension = problem.dimension
         self._handle = ct.c_void_p()
         self._closed = False
-        coefficients = np.ascontiguousarray(problem.reference.coefficients, dtype=np.float64)
-        energies = np.ascontiguousarray(problem.reference.orbital_energies, dtype=np.float64)
+        coefficients = np.ascontiguousarray(
+            problem.reference.coefficients, dtype=np.float64
+        )
+        energies = np.ascontiguousarray(
+            problem.reference.orbital_energies, dtype=np.float64
+        )
         status = lib.vibeqc_rhf_response_resident_create(
             plan._handle,
-            coefficients.ctypes.data_as(_DOUBLE), coefficients.size,
-            energies.ctypes.data_as(_DOUBLE), energies.size,
-            problem.layout.nocc, vector_slots, device_budget_bytes,
+            coefficients.ctypes.data_as(_DOUBLE),
+            coefficients.size,
+            energies.ctypes.data_as(_DOUBLE),
+            energies.size,
+            problem.layout.nocc,
+            vector_slots,
+            device_budget_bytes,
             ct.byref(self._handle),
         )
         if status:
@@ -305,7 +323,9 @@ class CudaResidentRHFResponse:
     def close(self):
         if not self._closed:
             if self._live:
-                raise RuntimeError("cannot close resident RHF response with live vectors")
+                raise RuntimeError(
+                    "cannot close resident RHF response with live vectors"
+                )
             self._lib.vibeqc_rhf_response_resident_destroy(self._handle)
             self._handle = ct.c_void_p()
             self._closed = True
@@ -316,5 +336,6 @@ class CudaResidentRHFResponse:
     def __exit__(self, *_):
         if self._live:
             import gc
+
             gc.collect()
         self.close()

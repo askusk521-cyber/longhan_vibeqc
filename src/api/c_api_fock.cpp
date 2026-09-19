@@ -357,7 +357,6 @@ extern "C" vibeqc_status vibeqc_fock_plan_diagnostic(const vibeqc_fock_plan* pla
   return VIBEQC_STATUS_SUCCESS;
 }
 
-
 namespace {
 #if VIBEQC_HAS_CUDA
 void resident_cuda(cudaError_t status) {
@@ -408,12 +407,10 @@ void resident_sync(vibeqc_rhf_response_resident* owner) {
 
 extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
     vibeqc_fock_plan* plan, const double* coefficients, uint64_t coefficient_count,
-    const double* orbital_energies, uint64_t energy_count, uint32_t nocc,
-    uint32_t vector_slots, uint64_t device_budget_bytes,
-    vibeqc_rhf_response_resident** output) {
+    const double* orbital_energies, uint64_t energy_count, uint32_t nocc, uint32_t vector_slots,
+    uint64_t device_budget_bytes, vibeqc_rhf_response_resident** output) {
   if (output) *output = nullptr;
-  if (!plan || !coefficients || !orbital_energies || !output)
-    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  if (!plan || !coefficients || !orbital_energies || !output) return VIBEQC_STATUS_INVALID_ARGUMENT;
 #if VIBEQC_HAS_CUDA
   plan->detail.clear();
   try {
@@ -428,8 +425,7 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
                 strategy.spec.coulomb.op == vibeqc::scf::FockOperator::FullRange &&
                 strategy.spec.exchange.op == vibeqc::scf::FockOperator::FullRange &&
                 strategy.spec.coulomb.coefficient == 1.0 &&
-                strategy.spec.exchange.coefficient == -0.5 &&
-                strategy.screening_tolerance == 0.0,
+                strategy.spec.exchange.coefficient == -0.5 && strategy.screening_tolerance == 0.0,
             "resident RHF response requires exact unscreened conventional RHF J/K");
     auto* direct = source.cuda_direct_source();
     require(direct != nullptr, "resident RHF response direct CUDA source unavailable");
@@ -449,8 +445,7 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
     const auto matrix = resident_product(n, n);
     const auto transform = resident_product(n, o);
     const auto slot_values = resident_product(static_cast<std::size_t>(vector_slots), dim);
-    const auto doubles =
-        resident_sum({slot_values, matrix, n, 3 * matrix, 2 * transform, dim});
+    const auto doubles = resident_sum({slot_values, matrix, n, 3 * matrix, 2 * transform, dim});
     const auto bytes = resident_sum({resident_product(doubles, sizeof(double)), sizeof(int)});
     require(device_budget_bytes > 0 && bytes <= device_budget_bytes,
             "resident RHF response device budget is insufficient");
@@ -577,128 +572,144 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_get_diagnostic(
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_upload(
-    vibeqc_rhf_response_resident* owner, uint32_t slot, const double* values,
-    uint64_t count) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_upload(vibeqc_rhf_response_resident* owner,
+                                                             uint32_t slot, const double* values,
+                                                             uint64_t count) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(values && count == owner->dimension, "resident RHF upload shape mismatch");
     for (std::size_t i = 0; i < count; ++i)
       require(std::isfinite(values[i]), "resident RHF upload requires finite vectors");
     resident_cuda(cudaMemcpyAsync(resident_slot(owner, slot), values,
-                                  owner->dimension * sizeof(double),
-                                  cudaMemcpyHostToDevice, owner->stream));
+                                  owner->dimension * sizeof(double), cudaMemcpyHostToDevice,
+                                  owner->stream));
     owner->h2d_bytes += owner->dimension * sizeof(double);
     resident_sync(owner);
   });
 #else
-  (void)owner; (void)slot; (void)values; (void)count;
+  (void)owner;
+  (void)slot;
+  (void)values;
+  (void)count;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_download(
-    vibeqc_rhf_response_resident* owner, uint32_t slot, double* values,
-    uint64_t count) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_download(vibeqc_rhf_response_resident* owner,
+                                                               uint32_t slot, double* values,
+                                                               uint64_t count) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(values && count == owner->dimension, "resident RHF download shape mismatch");
     resident_cuda(cudaMemcpyAsync(values, resident_slot(owner, slot),
-                                  owner->dimension * sizeof(double),
-                                  cudaMemcpyDeviceToHost, owner->stream));
+                                  owner->dimension * sizeof(double), cudaMemcpyDeviceToHost,
+                                  owner->stream));
     owner->d2h_bytes += owner->dimension * sizeof(double);
     resident_sync(owner);
     for (std::size_t i = 0; i < count; ++i)
       if (!std::isfinite(values[i])) throw std::runtime_error("nonfinite resident RHF vector");
   });
 #else
-  (void)owner; (void)slot; (void)values; (void)count;
+  (void)owner;
+  (void)slot;
+  (void)values;
+  (void)count;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_zero(
-    vibeqc_rhf_response_resident* owner, uint32_t slot) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_zero(vibeqc_rhf_response_resident* owner,
+                                                           uint32_t slot) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
-    resident_cuda(cudaMemsetAsync(resident_slot(owner, slot), 0,
-                                  owner->dimension * sizeof(double), owner->stream));
+    resident_cuda(cudaMemsetAsync(resident_slot(owner, slot), 0, owner->dimension * sizeof(double),
+                                  owner->stream));
   });
 #else
-  (void)owner; (void)slot;
+  (void)owner;
+  (void)slot;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_copy(
-    vibeqc_rhf_response_resident* owner, uint32_t destination, uint32_t source) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_copy(vibeqc_rhf_response_resident* owner,
+                                                           uint32_t destination, uint32_t source) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     resident_blas(cublasDcopy(owner->blas, static_cast<int>(owner->dimension),
-                              resident_slot(owner, source), 1,
-                              resident_slot(owner, destination), 1));
+                              resident_slot(owner, source), 1, resident_slot(owner, destination),
+                              1));
     ++owner->blas_calls;
   });
 #else
-  (void)owner; (void)destination; (void)source;
+  (void)owner;
+  (void)destination;
+  (void)source;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_scale(
-    vibeqc_rhf_response_resident* owner, uint32_t slot, double alpha) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_scale(vibeqc_rhf_response_resident* owner,
+                                                            uint32_t slot, double alpha) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(std::isfinite(alpha), "resident RHF scale must be finite");
-    resident_blas(cublasDscal(owner->blas, static_cast<int>(owner->dimension),
-                              &alpha, resident_slot(owner, slot), 1));
+    resident_blas(cublasDscal(owner->blas, static_cast<int>(owner->dimension), &alpha,
+                              resident_slot(owner, slot), 1));
     ++owner->blas_calls;
   });
 #else
-  (void)owner; (void)slot; (void)alpha;
+  (void)owner;
+  (void)slot;
+  (void)alpha;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_axpy(
-    vibeqc_rhf_response_resident* owner, uint32_t destination, double alpha,
-    uint32_t source) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_axpy(vibeqc_rhf_response_resident* owner,
+                                                           uint32_t destination, double alpha,
+                                                           uint32_t source) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(std::isfinite(alpha), "resident RHF axpy coefficient must be finite");
-    resident_blas(cublasDaxpy(owner->blas, static_cast<int>(owner->dimension),
-                              &alpha, resident_slot(owner, source), 1,
-                              resident_slot(owner, destination), 1));
+    resident_blas(cublasDaxpy(owner->blas, static_cast<int>(owner->dimension), &alpha,
+                              resident_slot(owner, source), 1, resident_slot(owner, destination),
+                              1));
     ++owner->blas_calls;
   });
 #else
-  (void)owner; (void)destination; (void)alpha; (void)source;
+  (void)owner;
+  (void)destination;
+  (void)alpha;
+  (void)source;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_dot(
-    vibeqc_rhf_response_resident* owner, uint32_t left, uint32_t right,
-    double* value) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_dot(vibeqc_rhf_response_resident* owner,
+                                                          uint32_t left, uint32_t right,
+                                                          double* value) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(value, "resident RHF dot requires output");
     resident_blas(cublasDdot(owner->blas, static_cast<int>(owner->dimension),
-                             resident_slot(owner, left), 1,
-                             resident_slot(owner, right), 1, value));
+                             resident_slot(owner, left), 1, resident_slot(owner, right), 1, value));
     ++owner->blas_calls;
     owner->d2h_bytes += sizeof(double);
     resident_sync(owner);
     if (!std::isfinite(*value)) throw std::runtime_error("nonfinite resident RHF dot");
   });
 #else
-  (void)owner; (void)left; (void)right; (void)value;
+  (void)owner;
+  (void)left;
+  (void)right;
+  (void)value;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_norm(
-    vibeqc_rhf_response_resident* owner, uint32_t slot, double* value) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_norm(vibeqc_rhf_response_resident* owner,
+                                                           uint32_t slot, double* value) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(value, "resident RHF norm requires output");
@@ -710,13 +721,15 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_norm(
     if (!std::isfinite(*value)) throw std::runtime_error("nonfinite resident RHF norm");
   });
 #else
-  (void)owner; (void)slot; (void)value;
+  (void)owner;
+  (void)slot;
+  (void)value;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
 
-extern "C" vibeqc_status vibeqc_rhf_response_resident_apply(
-    vibeqc_rhf_response_resident* owner, uint32_t destination, uint32_t source) {
+extern "C" vibeqc_status vibeqc_rhf_response_resident_apply(vibeqc_rhf_response_resident* owner,
+                                                            uint32_t destination, uint32_t source) {
 #if VIBEQC_HAS_CUDA
   return resident_guard(owner, [&] {
     require(destination != source, "resident RHF operator source/output must be distinct");
@@ -730,50 +743,42 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_apply(
     const auto* c_occ = owner->coefficients;
     const auto* c_virt = owner->coefficients + owner->nbf * owner->nocc;
 
-    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_N,
-                              n, o, v, &one, c_virt, n, x, v, &zero,
-                              owner->transform_one, n));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_N, n, o, v, &one, c_virt, n, x, v,
+                              &zero, owner->transform_one, n));
     ++owner->blas_calls;
-    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_T,
-                              n, n, o, &two, owner->transform_one, n, c_occ, n,
-                              &zero, owner->density, n));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_T, n, n, o, &two,
+                              owner->transform_one, n, c_occ, n, &zero, owner->density, n));
     ++owner->blas_calls;
-    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_T,
-                              n, n, o, &two, c_occ, n, owner->transform_one, n,
-                              &one, owner->density, n));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_T, n, n, o, &two, c_occ, n,
+                              owner->transform_one, n, &one, owner->density, n));
     ++owner->blas_calls;
 
     auto spec = owner->parent->source->strategy().spec;
     spec.derivative_order = 0;
     std::string detail;
     const auto status = vibeqc::scf::enqueue_cuda_direct_jk_device(
-        owner->direct, spec, owner->density, nullptr, owner->nbf * owner->nbf,
-        owner->coulomb, owner->exchange, nullptr, owner->numerical_error, detail);
+        owner->direct, spec, owner->density, nullptr, owner->nbf * owner->nbf, owner->coulomb,
+        owner->exchange, nullptr, owner->numerical_error, detail);
     if (status != VIBEQC_STATUS_SUCCESS)
       throw std::runtime_error(detail.empty() ? "resident direct J/K enqueue failed" : detail);
 
     resident_blas(cublasDcopy(owner->blas, n * n, owner->coulomb, 1, owner->density, 1));
     ++owner->blas_calls;
-    resident_blas(cublasDaxpy(owner->blas, n * n, &half, owner->exchange, 1,
-                              owner->density, 1));
+    resident_blas(cublasDaxpy(owner->blas, n * n, &half, owner->exchange, 1, owner->density, 1));
     ++owner->blas_calls;
-    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_N,
-                              n, o, n, &one, owner->density, n, c_occ, n,
-                              &zero, owner->transform_two, n));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_N, CUBLAS_OP_N, n, o, n, &one, owner->density,
+                              n, c_occ, n, &zero, owner->transform_two, n));
     ++owner->blas_calls;
-    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_T, CUBLAS_OP_N,
-                              v, o, n, &one, c_virt, n, owner->transform_two, n,
-                              &zero, y, v));
+    resident_blas(cublasDgemm(owner->blas, CUBLAS_OP_T, CUBLAS_OP_N, v, o, n, &one, c_virt, n,
+                              owner->transform_two, n, &zero, y, v));
     ++owner->blas_calls;
 
-    resident_blas(cublasDdgmm(owner->blas, CUBLAS_SIDE_LEFT, v, o,
-                              x, v, owner->energies + owner->nocc, 1,
-                              owner->gap_scratch, v));
+    resident_blas(cublasDdgmm(owner->blas, CUBLAS_SIDE_LEFT, v, o, x, v,
+                              owner->energies + owner->nocc, 1, owner->gap_scratch, v));
     ++owner->blas_calls;
     resident_blas(cublasDaxpy(owner->blas, dim, &one, owner->gap_scratch, 1, y, 1));
     ++owner->blas_calls;
-    resident_blas(cublasDdgmm(owner->blas, CUBLAS_SIDE_RIGHT, v, o,
-                              x, v, owner->energies, 1,
+    resident_blas(cublasDdgmm(owner->blas, CUBLAS_SIDE_RIGHT, v, o, x, v, owner->energies, 1,
                               owner->gap_scratch, v));
     ++owner->blas_calls;
     resident_blas(cublasDaxpy(owner->blas, dim, &minus, owner->gap_scratch, 1, y, 1));
@@ -784,12 +789,13 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_apply(
                                   cudaMemcpyDeviceToHost, owner->stream));
     owner->d2h_bytes += sizeof(int);
     resident_sync(owner);
-    if (numerical_error)
-      throw std::runtime_error("nonfinite resident RHF direct J/K action");
+    if (numerical_error) throw std::runtime_error("nonfinite resident RHF direct J/K action");
     ++owner->operator_actions;
   });
 #else
-  (void)owner; (void)destination; (void)source;
+  (void)owner;
+  (void)destination;
+  (void)source;
   return VIBEQC_STATUS_NOT_IMPLEMENTED;
 #endif
 }
