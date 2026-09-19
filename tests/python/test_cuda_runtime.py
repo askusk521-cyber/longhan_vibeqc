@@ -62,7 +62,8 @@ def test_cuda_minimal_uhf_matches_cpu_reference():
     assert np.allclose(result.forces, reference.forces, atol=force_atol, rtol=0.0)
 
 
-def test_cuda_resident_rhf_response_matches_host_operator():
+@pytest.mark.parametrize("fixture_name", ("minimal_h2", "water", "water_sdf"))
+def test_cuda_resident_rhf_response_matches_host_operator(fixture_name):
     """B2: keep RHF response operator/Krylov vectors resident on the CUDA stream."""
     if (
         os.environ.get("CUMETAL_ROOT")
@@ -85,7 +86,14 @@ def test_cuda_resident_rhf_response_matches_host_operator():
         Shell(0, 0, (Primitive(1.0, 1.0),)),
         Shell(1, 0, (Primitive(1.0, 1.0),)),
     )
-    with NativeSource(atoms, basis=basis) as source:
+    inputs = {"atoms": atoms, "basis": basis}
+    if fixture_name != "minimal_h2":
+        from tools.vibeqc_validation.hessian_fixtures import fixture_inputs
+
+        # Non-square occupied/virtual blocks expose layout and gap-action bugs
+        # that the original one-dimensional H2 response cannot exercise.
+        inputs = fixture_inputs(fixture_name)
+    with NativeSource(**inputs) as source:
         reference, _ = export_rhf(source, backend="cpu", tolerance=1e-12)
         with CudaDirectJKBackend(source, device_budget_bytes=64 << 20) as backend:
             problem = RHFResponseOperator.build_problem(reference, backend)
@@ -102,7 +110,7 @@ def test_cuda_resident_rhf_response_matches_host_operator():
 
             with backend.resident_response(
                 problem,
-                vector_slots=64,
+                vector_slots=128,
                 device_budget_bytes=16 << 20,
             ) as resident:
                 device_input = resident.from_host(vector)
