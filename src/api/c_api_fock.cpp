@@ -445,8 +445,8 @@ extern "C" vibeqc_status vibeqc_rhf_response_resident_create(
     const auto dim = resident_product(o, v);
     const auto matrix = resident_product(n, n);
     const auto cublas_limit = static_cast<std::size_t>(std::numeric_limits<int>::max());
-    require(n <= cublas_limit && o <= cublas_limit && v <= cublas_limit &&
-                dim <= cublas_limit && matrix <= cublas_limit,
+    require(n <= cublas_limit && o <= cublas_limit && v <= cublas_limit && dim <= cublas_limit &&
+                matrix <= cublas_limit,
             "resident RHF response dimensions exceed cuBLAS int limits");
     const auto transform = resident_product(n, o);
     const auto occupied_matrix = resident_product(o, o);
