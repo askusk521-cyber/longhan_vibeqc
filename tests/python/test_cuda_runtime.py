@@ -106,6 +106,7 @@ def test_cuda_resident_rhf_response_matches_host_operator(fixture_name):
                 options=GMRESOptions(rtol=1e-11, atol=1e-12),
                 collect_basis=False,
             )
+            host_result.require_converged()
             host_backend_actions = backend.statistics["actions"]
 
             with backend.resident_response(
@@ -136,6 +137,7 @@ def test_cuda_resident_rhf_response_matches_host_operator(fixture_name):
                     options=GMRESOptions(rtol=1e-11, atol=1e-12),
                     collect_basis=False,
                 )
+                resident_result.require_converged()
                 np.testing.assert_allclose(
                     resident_result.solution,
                     host_result.solution,
@@ -146,3 +148,11 @@ def test_cuda_resident_rhf_response_matches_host_operator(fixture_name):
                 assert final["operator_actions"] >= resident_result.operator_actions
                 assert final["blas_calls"] > 0
                 assert final["owned_device_bytes"] <= 16 << 20
+                # Agreement between two failed iterates is not solver acceptance.
+                # Re-evaluate the final residual using the separate host-transform
+                # operator, not the resident engine's own convergence report.
+                rhs = np.ones(problem.dimension)
+                residual = rhs - operator.apply(resident_result.solution)
+                assert np.linalg.norm(residual) <= max(
+                    1e-12, 1e-11 * np.linalg.norm(rhs)
+                )
