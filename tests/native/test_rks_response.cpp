@@ -18,8 +18,8 @@ void require(bool condition, const char* message) {
 }
 
 /** Compare the actual private ABI against differentiated original PW92/PBE
- * formulas at 450 digits. No production jet or finite-difference step is used
- * to build these committed references, including the extreme density tails. */
+ * formulas at 450 digits. References use neither the production jet nor FP64
+ * finite differences, including at the extreme density tails. */
 void independent_point_response() {
   std::ifstream input(VIBEQC_SOURCE_DIR "/tests/data/xc/rks_response.tsv");
   require(bool(input), "missing independent RKS response fixture");
