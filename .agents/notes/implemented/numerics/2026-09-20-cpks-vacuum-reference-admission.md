@@ -53,6 +53,29 @@ ordinary H2 RKS and LiH+ UKS LDA/PBE zero/nonzero actions already passed; those
 specific molecular states contained no affected PBE vacuum residues. The
 point-contract failure is not being relabeled as an observed molecular failure.
 
+Final qualification at source `1329d0bcbc2e79e97c7988b0bb5174b9c8a3b0ce`
+used matching Release builds on n5. Finite Slurm jobs 1143, 1144 and 1145
+completed with exit status zero; GPU execution used the `main` partition and
+one `gpu:5090`, preserving scheduler-assigned device visibility.
+
+- CPU: all 45 native CTests passed; all 63 native RKS/UKS, CPKS, Krylov and
+  response-problem Python tests passed without skips in 268.48 seconds.
+- The default-grid probe passed all eight zero/nonzero actions across H2 RKS
+  and LiH+ UKS with LDA/PBE on 55,296-point grids.
+- CUDA: all 78 independent point directions and 192 vacuum reference/tangent
+  checks passed. All 55 native CPKS, spin response, resident block response and
+  resident HVP Python tests passed without skips in 137.29 seconds.
+- CPU library SHA-256:
+  `d287b7f0cd852e711113acf766100f051109aa864c66ef28f985419bce3dda5f`.
+- CUDA library SHA-256:
+  `27fbf23feb48a9d7727b9707a1937bbcbace30980babf2680e5de921b9878e6d`.
+
+The intermediate implementation checked total RKS gradients and failed the
+added packed-reference regression against its matching library. The final
+qualification above includes the rounded half-spin correction; it is not
+inherited from the intermediate run. Neither campaign changes the existing
+independent numerical acceptance gates or asserts a performance improvement.
+
 ## Consequences and revisit conditions
 
 SCF and response cannot drift independently on reference-gradient admission.
