@@ -498,6 +498,17 @@ directional H1/S1 pairs, binds them to one shared RHF response operator and
 uses #179 solve_many with sequential, blocked or recycled strategy.
 The solver workspace is combined with a conservative retained numeric-storage
 bound; insufficient block budget fails before first-integral work.
+With `jk_backend="cuda", response_execution="cuda-resident"`, all three
+strategies keep iterative response vectors, block bases and retained recycling
+vectors on device. `response_device_budget_bytes` jointly limits the prepared
+J/K allocation and response arena; both are charged to the response phase of
+`total_budget_bytes` before first-integral work. Diagnostics publish the exact
+resident identity, raw transfer/synchronization/action counters and separate
+response action/orthogonalization/recycling times. RHS preparation, final
+response reconstruction and the independently selected first/second derivative
+consumers retain their declared execution. This option also passes through
+`rhf_hessian` to its bounded blocks. See the
+[shared resident multi-RHS decision](../.agents/notes/implemented/numerics/2026-09-20-resident-multirhs-response.md).
 
 rhf_hessian applies canonical atom/xyz unit directions in bounded blocks and
 stores each returned Hv as one raw Hessian column. It never silently returns a
