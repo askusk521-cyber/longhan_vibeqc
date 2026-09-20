@@ -169,6 +169,11 @@ claim; the native kernel does not yet qualify implicit-response resource binding
 `tests/python/test_response_native_rks.py` checks independent libcint/Libxc
 actions, finite orbital rotations, reconverged one-electron perturbations,
 transpose/true residuals, multi-RHS/recycling, tails and lifecycle negatives.
+The native `vibeqc_rks_response_tests` target also exercises the actual private
+point-response ABI against 30 independent high-precision directions, its batch
+layout and invalid-input boundaries, and energy snapshot leases from real
+LDA/PBE H2 solves. See [point acceptance](xc_scf_domain.md#executable-evidence)
+for the fixture generator and cancellation-aware numerical gate.
 
 ## #153 interface
 

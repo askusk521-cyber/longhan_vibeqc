@@ -55,6 +55,18 @@ transpose symmetry, sequential/blocked/recycled dependent RHSs, SCF-tail point
 directions and live-owner/mismatched-source negatives. Existing independent
 97-point SCF E/V fixtures protect the value path during the scalar refactor.
 
+Additional native acceptance calls the private response ABI against 30
+450-digit mixed-derivative fixtures from the original unscaled equations. A
+pure relative gate fails at high-density small-gradient PBE points because
+exchange and correlation cancel in the gradient response. At rho=1e10, one
+component is 2.621282343339951e-15 and its FP64 error is 3.86e-23. The fixture
+therefore also records independent |delta_X|+|delta_C| values. The gate adds
+32 machine epsilons times this component scale to a 3e-11 relative bound and
+8 minimum subnormals. This replaces an arbitrary absolute zero-gradient
+tolerance and avoids weakening tiny nonzero tail checks. Production arithmetic
+is unchanged; the direct ABI test also covers error boundaries, batch layout,
+and energy-owner revocation from actual LDA/PBE H2 solves.
+
 ## Consequences and revisit conditions
 
 This is a host-controlled CPU handoff. The existing solver budget excludes
