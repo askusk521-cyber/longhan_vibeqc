@@ -499,6 +499,15 @@ METHOD_CATALOG = MappingProxyType(
             "PBE",
             (("GGA_X_PBE", Fraction(1)), ("GGA_C_PBE", Fraction(1))),
         ),
+        "SCAN": MethodSpec(
+            "SCAN",
+            (("MGGA_X_SCAN", Fraction(1)), ("MGGA_C_SCAN", Fraction(1))),
+        ),
+        "SCAN0": MethodSpec(
+            "SCAN0",
+            (("MGGA_X_SCAN", Fraction(3, 4)), ("MGGA_C_SCAN", Fraction(1))),
+            exact_exchange=Fraction(1, 4),
+        ),
         "PW91": MethodSpec(
             "PW91",
             (("GGA_X_PW91", Fraction(1)), ("GGA_C_PW91", Fraction(1))),
