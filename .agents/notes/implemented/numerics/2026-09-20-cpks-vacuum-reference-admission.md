@@ -76,6 +76,27 @@ qualification above includes the rounded half-spin correction; it is not
 inherited from the intermediate run. Neither campaign changes the existing
 independent numerical acceptance gates or asserts a performance improvement.
 
+After integrating master `b259dfd1` (including the upstream #721 transport lint
+fix), matching builds at `3d0b4c4b98529a9865bc65a8223a8c19e3796a94` were
+qualified again. The Krylov conflict was resolved by retaining the upstream
+file verbatim; the final change relative to master remains the seven vacuum
+reference implementation, test and documentation files. The integration also
+includes master's KS provenance and generated force changes, so earlier
+branch results were not substituted for this combined validation.
+
+- All 48 Krylov/resident-lifecycle tests passed in 0.49 seconds after adopting
+  upstream's transport implementation; all-file pre-commit hooks passed.
+- Slurm jobs 1146/1147/1148 completed with exit status zero using the same
+  finite CPU/build/GPU protocol and unchanged independent acceptance gates.
+- CPU: 45/45 native CTests, 63/63 selected Python tests in 267.61 seconds,
+  and all eight default-grid native KS actions passed without skips.
+- CUDA: 78/78 independent point directions, 192/192 reference/tangent checks,
+  and 55/55 selected integration tests in 311.91 seconds passed without skips.
+- Integrated CPU library SHA-256:
+  `00ea4d2546717a9c199e137520d0ee968b615094d64a8f8764034bc153244606`.
+- Integrated CUDA library SHA-256:
+  `76016a993cac8eb5ccf1d897b7c84b22c190e9d92c1f572fdd18696a70c587a4`.
+
 ## Consequences and revisit conditions
 
 SCF and response cannot drift independently on reference-gradient admission.
