@@ -6,7 +6,7 @@ CUDA J/K, identical converged fixture references, four identical RHS columns
 (one dependent column), solver thresholds, and final solution publication with
 `collect_basis=False`. No CPU-vs-DF ratio is used.
 
-The measured source is `cda824e2389ae2a44b4822029d56e0f790ba708d` (clean). The loaded native
+The original measured source is `cda824e2389ae2a44b4822029d56e0f790ba708d` (clean). The loaded native
 binary SHA-256 is `bdb5ebdc583371c4b7e7575630d03597921443ea9af16b88f9b26077f84d47a1`. `evidence.json` records the
 compiled native source identity, actual selected generic CUDA profile, device,
 driver/toolkit, thread settings, all individual samples and memory/counter scopes.
@@ -114,6 +114,26 @@ unchanged: its consumer `maximum_error` and historical scope text refer to
 native parity. New schema v2 records explicitly identify the external oracle
 and its version, retain directions and actual/reference HVPs, and report native
 parity in `native_dense_maximum_error`.
+
+The supplemental `consumer-oracle-evidence.json` records clean source
+`b326568699acbeea9153ad62c91e845f49af4518` and PySCF 2.14.0. The matching
+native binary SHA-256 is
+`b34f4435647b90e9ffc3adb6ef7e2f98eeb95ba6d6ff1a481bb2da6eaaf79757`.
+Slurm job 1136 passed all six complete HVP endpoints, with maximum independent
+error `7.993606e-15` and native parity error `3.686287e-16`. It also passed
+103/103 response/consumer/Krylov tests without skips (613.83 s), including
+native CUDA RKS/UKS and UHF exact/DF integration, plus 78/78 independent CUDA
+point directions. The fresh Release build includes merged #672 and current
+master; native sources/bindings are identical to the build's `3be8635c` snapshot.
+Production response solver/consumer code remains unchanged from the original
+measured `cda824e2` commit. This supplemental numerical campaign does not replace
+the original matched response timing or establish a new performance ranking.
+
+| Strategy | Host HVP s | Resident HVP s | Independent PySCF error |
+| --- | ---: | ---: | ---: |
+| sequential | 6.537851 | 4.998863 | 7.993606e-15 |
+| blocked | 4.999966 | 4.964074 | 7.993606e-15 |
+| recycled | 4.984317 | 4.979464 | 7.993606e-15 |
 
 ## Reproduction and limits
 
