@@ -430,8 +430,8 @@ class NativeKsSnapshot:
     def ecp_derivatives(self) -> typing.Any:
         """Backend-specific provider bound to this live owner's exact ECP model.
 
-        Materializes two atom/xyz/AO-pair arrays. CUDA uses only generated CUDA
-        ECP derivatives; CPU explicitly uses checked native two-grid ECP.
+        Materializes two atom/xyz/AO-pair arrays. CPU and CUDA execute shared
+        generated ECP mathematics with checked two-grid admission.
         Public wrappers admit and reserve this dense export before execution.
         """
         self.check_current()
