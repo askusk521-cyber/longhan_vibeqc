@@ -6,11 +6,12 @@ the operator backends include native J/K execution. It separates the problem sna
 matrix-free operator, and the linear-solver/recycling state so downstream
 property, Hessian, and correlated-gradient code can reuse one implementation.
 This slice is partial: the RHF response layer and the direct-CPU UHF response
-layer (including `export_uhf`) and the native CPU LDA/PBE RKS/UKS CPKS handoffs
-are delivered. Exact-RHF resident scalar, blocked and recycled multi-RHS
-execution share the same solver and are qualified for the bounded tools domain.
-CUDA UHF/CPKS remain separate extensions. Performance evidence describes
-measured endpoints, not an automatic execution selector.
+layer (including `export_uhf`), host-orchestrated spin CUDA exact/DF J/K, and
+native CPU LDA/PBE RKS/UKS CPKS handoffs are delivered. Exact-RHF resident scalar,
+blocked and recycled multi-RHS execution share the same solver and are qualified
+for the bounded tools domain. Native CUDA CPKS remains a separate extension.
+Performance evidence describes measured endpoints, not an automatic execution
+selector.
 
 This internal tooling is not a new public electronic-structure method. It
 consumes the converged native HF/KS endpoints rather than implementing SCF.
@@ -200,19 +201,25 @@ lease/domain negatives. `vibeqc_uks_response_tests` checks 48 independent
 high-precision point directions, spin permutations and the private batch ABI.
 See [the spin binding decision](../.agents/notes/implemented/numerics/2026-09-20-native-uks-cpks.md).
 
-## #153 interface
+## Downstream consumers
 
-The correlated-gradient work in #153 should:
+The #153 tools endpoint `BoundCCSDGradient` builds the CC-specific orbital RHS
+and weights, binds the converged RHF reference to `RHFResponseOperator`, and
+calls `checked_transpose_solve` through `ResponseGMRES`. The callback delegates
+to this package's GMRES. A separately generated physical orbital matrix checks
+the final Z-vector residual and the complete gradient's stationarity before
+publication. `test_cc_complete_gradient.py` qualifies the shared action against
+an independent MO matrix, native complete gradients against pinned references,
+and explicit Z-vector nonconvergence. The CC-specific weight/source ownership
+remains in the correlated-gradient consumer; no SCF/DIIS iteration tape is part
+of this contract.
 
-1. build its CC-specific orbital RHS and weights outside this package;
-2. create one `ResponseProblem` from the exact converged RHF reference and the
-   shared operator backend;
-3. call `solve`/`solve_many` and require the returned true residual to meet its
-   gradient gate;
-4. retain only CC-specific RHS/weight state, not a second RHF CPHF/Z-vector
-   implementation.
-
-No SCF/DIIS iteration tape is part of this contract.
+The #180 `solve_rhf_nuclear_perturbations` consumer prepares ordered nuclear and
+metric RHS columns, calls `solve_many` with final basis publication disabled,
+and reconstructs the occupied-orbital/density responses. `rhf_hvp_many` and
+`rhf_hessian` use that same boundary for bounded blocks. Their opt-in exact-RHF
+resident execution and independent complete-HVP gates are described in
+[hessian.md](hessian.md).
 
 ## Backend boundary
 
@@ -283,7 +290,10 @@ for the complete endpoint. `tools/response_resident_benchmark.py` compares the
 same exact CUDA Hamiltonian with host/resident vector storage and checks every
 sample against an independent committed-integral matrix. See the
 [resident multi-RHS decision](../.agents/notes/implemented/numerics/2026-09-20-resident-multirhs-response.md)
-for numerical, lifecycle and consumer evidence.
+for numerical, lifecycle and consumer evidence. The
+[matched exact-CUDA endpoint record](../benchmarks/results/response-179-resident/README.md)
+includes every measured sample, native binary/source identity, transfers,
+synchronizations, resource bounds and complete HVP costs.
 
 The response device budget combines retained direct-J/K storage with the
 resident owner allocation. It excludes provider preparation temporaries,
@@ -348,11 +358,57 @@ The direct CPU bridge can export a converged open-shell UHF solution through
 `export_uhf`.  It canonicalizes the independently returned alpha and beta AO
 densities, rechecks both physical commutators and density/Fock reconstruction,
 and binds the result to the shared UHF response contract.  The bridge is
-intentionally limited to the small direct CPU Hamiltonian: CUDA/DF UHF response
-still fails closed until a spin-resolved device J/K response plan has separate
-numerical and resource evidence. That gate is pinned by
-`tests/python/test_response_uhf.py`, so neither the UHF CPU bridge nor the RHF
-CUDA/DF backend is inferred as spin-resolved device support.
+intentionally limited to the small direct CPU Hamiltonian. The older
+`CudaDFJKBackend` and `CudaDirectJKBackend` remain RHF-specific and are rejected
+by UHF, as pinned by `tests/python/test_response_uhf.py`.
+
+`CudaSpinJKBackend` explicitly prepares an unrestricted CUDA `FockPlan` for
+either exact or density-fitted J/K with zero screening. One evaluation produces
+`J[Delta Pa+Delta Pb]`, `K[Delta Pa]`, and `K[Delta Pb]`; the existing UHF operator
+then applies the same orbital action and shared Krylov controller. It uses raw
+J/K rather than subtracting hcore from a total Fock, preserving tiny signed
+directions. CUDA contracts the integrals; AO/MO transforms, returned matrices,
+and Krylov vectors remain on the host. This is not a resident spin solver.
+
+The backend borrows a `NativeSource` and owns its copied prepared Fock plan.
+Reference validation binds geometry, actual orbital basis/representation,
+Hamiltonian and both spin occupations. DF requires explicit auxiliary shells;
+its identity binds the prepared plan's mathematical identity, metric cutoff and
+retained rank. Its `prepared-spin-df:` identity is deliberately distinct from
+the older standalone `MetricFactor` identity. A matching native UHF snapshot is
+available through `backend.export_reference()`: this explicitly invokes the
+existing native SCF, canonicalizes its returned densities, and checks physical
+commutators plus density/Fock reconstruction with the same CUDA plan. Export
+uses CPU overlap/hcore preparation and NumPy canonicalization. Response actions
+never invoke SCF or CPU integral tiles.
+
+```python
+from tools.vibeqc_posthf.sources import NativeSource
+from tools.vibeqc_response import CudaSpinJKBackend, UHFResponseOperator, solve_many
+
+with NativeSource(atoms, basis, auxiliary_basis=auxiliary, charge=1,
+                  multiplicity=2) as source:
+    with CudaSpinJKBackend(source, approximation="density_fitted",
+                           device_budget_bytes=64 << 20) as backend:
+        reference, report = backend.export_reference()
+        problem = UHFResponseOperator.build_problem(reference, backend)
+        operator = UHFResponseOperator(problem, backend)
+        result = solve_many(operator, rhs, strategy="recycled")
+```
+
+The device budget bounds the provider's retained J/K allocations, excluding
+preparation temporaries, reference-export SCF/eigensolver caches, host
+matrices/solver workspace and CUDA context/library storage. Statistics
+distinguish setup and successful action timing; host API
+payload counts are not measured PCIe transfer counts. Closing the backend or
+borrowed source invalidates actions and zero-RHS solves. Invalid directions,
+failed SCF and impossible budgets cannot publish a successful action.
+
+With `VIBEQC_RESPONSE_CUDA_TEST=1` in a Slurm allocation,
+`tests/python/test_response_spin_cuda.py` checks independent signed raw J/K,
+native open-shell snapshots, explicit coupled MO matrices, true residuals for
+sequential/blocked/recycled solves, empty spin, identity and failure replay.
+See the [spin CUDA response decision](../.agents/notes/implemented/numerics/2026-09-20-spin-cuda-response.md).
 
 
 ## Resident response failure and validation scope
