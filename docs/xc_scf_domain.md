@@ -124,6 +124,16 @@ variational identity across its connection. LDA and PBE exchange retain
 their analytic zero-spin first derivatives. No later meta-GGA, response or
 force capability is inferred from this first-derivative implementation.
 
+The CPU RKS CPKS consumer explicitly differentiates these same scaled formulas
+in a total-density/Cartesian-gradient direction. Correlation uses a directional
+derivative of the existing point jet; exchange differentiates the shared
+potential formulas. Both numerical scales stay fixed through differentiation.
+The zero-total-gradient branch retains the PBE second derivative even though
+its first gradient coefficient is zero. Only equal-spin RKS directions are
+qualified, so this does not imply an unrestricted spin-endpoint Hessian.
+Exact vacuum requires a zero direction, and nonrepresentable directional
+coefficients reject the action. The interior diagnostic domain is unchanged.
+
 Libxc has its own low-density and spin-boundary screening conventions.
 Therefore exact endpoint comparisons use the independently differentiated
 high precision formula with the declared extension. Ordinary positive-spin
