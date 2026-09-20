@@ -535,6 +535,11 @@ class Calculator:
             and not (
                 isinstance(self._basis, BasisSet)
                 and any(element.ecp_core_electrons for element in self._basis.elements)
+                and any(
+                    shell.angular_momentum > 1
+                    for element in self._basis.elements
+                    for shell in element.shells
+                )
             )
             and self._method
             in (
@@ -548,8 +553,9 @@ class Calculator:
             # prepared owner plus the compiler-owned CUDA gradient consumer.
             # Keep the backend-neutral C registry conservative: CPU/native-C
             # callers do not inherit a force capability they cannot execute.
-            # ECP basis sets remain energy-only: their explicit stationary
-            # diagnostic does not qualify the public C2 force endpoint.
+            # ECP promotion is bounded to Cartesian/real-spherical s/p records. The shared
+            # nine-source consumer also enforces shape, byte and work caps;
+            # higher-angular ECP domains remain energy-only.
             self._capabilities = replace(
                 self._capabilities,
                 supported_properties=self._capabilities.supported_properties
