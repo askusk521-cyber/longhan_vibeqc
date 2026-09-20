@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import typing
 from fractions import Fraction
 
@@ -180,7 +181,9 @@ def take(
         type(index) is not int for index in indices
     ):
         raise TypeError("take indices must be a static tuple of integers")
-    return VibeArray(tensor_ir.gather(value.node, axis, indices))
+    return VibeArray(
+        tensor_ir.gather(value.node, _axis(axis, value.ndim, "take"), indices)
+    )
 
 
 def sum(
@@ -234,3 +237,37 @@ def einsum(
             coefficient=_exact(coefficient, "einsum coefficient"),
         )
     )
+
+
+def _axis(axis: object, rank: int, operation: str) -> int:
+    if type(axis) is not int:
+        raise TypeError(f"{operation} axis must be an integer")
+    normalized = axis + rank if axis < 0 else axis
+    if not 0 <= normalized < rank:
+        raise ValueError(f"{operation} axis is out of range")
+    return normalized
+
+
+def _getitem(x: object, key: object) -> VibeArray:
+    """Static rank-preserving slicing with nonnegative unit-step slices only."""
+    value = _array(x)
+    items = key if isinstance(key, tuple) else (key,)
+    if len(items) > value.ndim:
+        raise IndexError("too many indices for symbolic VibeArray")
+    items = (*items, *(builtins.slice(None) for _ in range(value.ndim - len(items))))
+    ranges: list[tuple[int, int]] = []
+    for item, extent in zip(items, value.shape):
+        if not isinstance(item, builtins.slice):
+            raise TypeError(
+                "symbolic VibeArray indexing supports rank-preserving slices only"
+            )
+        if item.step is not None and (type(item.step) is not int or item.step != 1):
+            raise ValueError("symbolic VibeArray slices require unit step")
+        start = 0 if item.start is None else item.start
+        stop = extent if item.stop is None else item.stop
+        if type(start) is not int or type(stop) is not int:
+            raise TypeError("symbolic VibeArray slice bounds must be integers or None")
+        if start < 0 or stop < 0:
+            raise ValueError("symbolic VibeArray slice bounds must be nonnegative")
+        ranges.append((start, stop))
+    return VibeArray(tensor_ir.slice_tensor(value.node, tuple(ranges)))
