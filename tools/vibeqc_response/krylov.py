@@ -896,10 +896,7 @@ class KrylovRecycleSpace:
             self.close()
 
     def transport(self, problem: typing.Any, transform: typing.Any) -> typing.Any:
-        """Transport vectors under a caller map that receives host arrays.
-
-        Device-backed vectors are explicitly exported before applying the map.
-        """
+        """Explicitly transport vectors to a new problem under a caller map."""
         if not callable(transform):
             raise TypeError("transport requires an explicit callable")
         if not hasattr(problem, "dimension") or type(problem.dimension) is not int:
@@ -907,7 +904,7 @@ class KrylovRecycleSpace:
         transported = []
         for vector in self._vectors:
             host_vector = (
-                vector if self._engine is None else self._engine.to_host(vector)
+                self._engine.to_host(vector) if self._engine is not None else vector
             )
             value = np.asarray(transform(host_vector), dtype=np.float64)
             if value.shape != (problem.dimension,) or not np.isfinite(value).all():
