@@ -88,6 +88,32 @@ void response_batch_boundaries() {
                 VIBEQC_STATUS_SUCCESS,
             "zero vacuum direction failed");
     for (double value : output) require(value == 0.0, "nonzero vacuum response");
+    // A reference accepted by SCF keeps its exact zero response, including
+    // subnormal gradient residues at a density rounded to zero. Normal vacuum
+    // gradients and nonzero tangents retain their rejection below.
+    for (double residue :
+         {std::numeric_limits<double>::denorm_min(), -std::numeric_limits<double>::denorm_min(),
+          std::nextafter(std::numeric_limits<double>::min(), 0.0),
+          -std::nextafter(std::numeric_limits<double>::min(), 0.0)}) {
+      for (unsigned axis = 0; axis < 3; ++axis) {
+        double reference_gradient[3]{};
+        reference_gradient[axis] = residue;
+        require(call(method, &zero, reference_gradient, &zero, vacuum_gradient, 1, output, 4) ==
+                    VIBEQC_STATUS_SUCCESS,
+                "SCF-admitted vacuum reference rejected by RKS response");
+        for (double value : output) require(value == 0.0, "vacuum residue changed zero response");
+        require(call(method, &zero, vacuum_gradient, &zero, reference_gradient, 1, output, 4) ==
+                    VIBEQC_STATUS_NUMERICAL_FAILURE,
+                "nonzero vacuum gradient tangent admitted");
+      }
+    }
+    for (double normal :
+         {std::numeric_limits<double>::min(), -std::numeric_limits<double>::min()}) {
+      double reference_gradient[3]{normal, 0.0, 0.0};
+      require(call(method, &zero, reference_gradient, &zero, vacuum_gradient, 1, output, 4) ==
+                  VIBEQC_STATUS_NUMERICAL_FAILURE,
+              "normal vacuum reference gradient admitted");
+    }
     double tiny = 1e-280;
     require(call(method, &tiny, vacuum_gradient, &zero, vacuum_gradient, 1, output, 4) ==
                 VIBEQC_STATUS_SUCCESS,
