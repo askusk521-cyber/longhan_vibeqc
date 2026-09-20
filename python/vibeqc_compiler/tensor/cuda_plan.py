@@ -1,8 +1,9 @@
 """Deterministic typed tensor storage and contraction plans, without CUDA calls.
 
 The byte budget is a combined numeric-buffer budget: device allocations plus
-prepared host input staging and one detached host output set. Caller-owned
-inputs/old results, Python/code objects, CUDA context/module/stack overhead,
+prepared host input staging and the larger of one detached host output set or
+immutable static-data upload staging. Caller-owned inputs/old results,
+Python/code objects, CUDA context/module/stack overhead,
 provider host metadata,
 and the CUDA allocator's page rounding are outside this scope. Retained
 cuBLAS device allocations have a separate checked allowance. The runtime
@@ -208,6 +209,11 @@ class TensorPlan:
         return total
 
     @property
+    def static_data_bytes(self) -> int:
+        """Compact host artifact bytes needed to initialize immutable device data."""
+        return sum(item[4] for item in static_data_slices(self))
+
+    @property
     def accumulation_workspace_bytes(self) -> int:
         """Extra ragged reduction workspace beyond materialized outputs."""
         # scatter_add and segment_sum assign one CUDA output element per thread
@@ -346,6 +352,29 @@ class TensorPlan:
                 for s in self.steps
             ],
         }
+
+
+def static_data_slices(
+    plan: TensorPlan,
+) -> tuple[tuple[int, str, int, int, int], ...]:
+    """Map compact artifact payload slices onto aligned device-arena locations."""
+    tables = dict(plan.index_tables)
+    payload_offset = 0
+    result = []
+    for step_index, step in enumerate(plan.steps):
+        node = step.node
+        if node.op == "constant" and node.spec.size:
+            size = node.spec.size * node.spec.itemsize
+            result.append((step_index, "constant", step.offset, payload_offset, size))
+            payload_offset += size
+        values = _index_table_values(node)
+        if values:
+            size = len(values) * 8
+            result.append(
+                (step_index, "index", tables[step_index], payload_offset, size)
+            )
+            payload_offset += size
+    return tuple(result)
 
 
 def _occurrences(program: typing.Any, recompute: typing.Any) -> typing.Any:
@@ -565,10 +594,25 @@ def plan_cuda(
                 else DenseLayout(node.spec.shape, alignment=ALIGNMENT),
             )
         )
+    static_host_bytes = checked_size(
+        sum(
+            step.node.spec.size * step.node.spec.itemsize
+            for step in steps
+            if step.node.op == "constant"
+        )
+        + sum((_index_table_length(step.node) or 0) * 8 for step in steps),
+        "static host tensor bytes",
+    )
+    input_host_bytes = sum(
+        nodes[i][0].spec.size * nodes[i][0].spec.itemsize for i in inputs
+    )
+    output_host_bytes = sum(
+        nodes[i][0].spec.size * nodes[i][0].spec.itemsize for _, i in outputs
+    )
     host = checked_size(
-        sum(nodes[i][0].spec.size * nodes[i][0].spec.itemsize for i in inputs)
-        + sum(nodes[i][0].spec.size * nodes[i][0].spec.itemsize for _, i in outputs)
-        + (VALIDATION_BYTES if inputs else 0),
+        input_host_bytes
+        + (VALIDATION_BYTES if inputs else 0)
+        + max(output_host_bytes, static_host_bytes),
         "host tensor bytes",
     )
     needs_blas = any(
