@@ -76,6 +76,11 @@ from .triples_response import (
     full_triples_vjp,
     tile_triples_vjp,
 )
+from .triples_response_cuda import (
+    CudaTriplesResponseResult,
+    CudaTriplesResponseTiles,
+    solve_corrected_lambda_cuda,
+)
 from .triples_tiles import (
     TileSpec,
     TriplesTileEnumerator,
@@ -105,6 +110,8 @@ __all__ = [
     "CCSDTParameterWeight",
     "Capabilities",
     "CorrectedLambdaResult",
+    "CudaTriplesResponseResult",
+    "CudaTriplesResponseTiles",
     "CudaTriplesResult",
     "CudaTriplesTiles",
     "LambdaOptions",
@@ -143,6 +150,7 @@ __all__ = [
     "rccsd_t_method_capabilities",
     "solve",
     "solve_corrected_lambda",
+    "solve_corrected_lambda_cuda",
     "solve_gpu_resident",
     "tile_triples_energy",
     "tile_triples_energy_masked",
