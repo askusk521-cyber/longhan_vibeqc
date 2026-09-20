@@ -217,18 +217,27 @@ def _response_case(name: str, repeats: int) -> dict:
 
 
 def _consumer() -> list[dict]:
-    """Complete #180 endpoints against its independent dense Hessian oracle."""
+    """Gate complete HVPs with PySCF; retain native assembly parity separately."""
+    import pyscf
+
     from tools.vibeqc_hessian import NativeRHFState, analytic_hessian, rhf_hvp_many
-    from tools.vibeqc_validation.hessian_fixtures import fixture_inputs
+    from tools.vibeqc_validation.hessian_fixtures import (
+        fixture_inputs,
+        oracle_analytic_hessian,
+    )
 
     records = []
     with NativeSource(**fixture_inputs("h2")) as source:
         state = NativeRHFState.from_source(source)
-        dense = analytic_hessian(state)["total"]
+        native_dense = analytic_hessian(state)["total"]
+        dense = oracle_analytic_hessian(source)
         directions = np.random.default_rng(1804).normal(size=(3, state.nat, 3))
         directions /= np.linalg.norm(directions.reshape(3, -1), axis=1)[:, None, None]
         expected = np.stack(
             [np.einsum("abxy,by->ax", dense, vector) for vector in directions]
+        )
+        native_expected = np.stack(
+            [np.einsum("abxy,by->ax", native_dense, vector) for vector in directions]
         )
         for strategy in STRATEGIES:
             for execution in ("host", "cuda-resident"):
@@ -242,16 +251,29 @@ def _consumer() -> list[dict]:
                 )
                 seconds = time.perf_counter() - begin
                 error = float(np.max(np.abs(result.values - expected)))
-                if error > 1e-9:
+                native_error = float(np.max(np.abs(result.values - native_expected)))
+                if not np.isfinite(error) or error > 1e-9:
                     raise AssertionError(
                         "complete HVP independent numerical gate failed"
                     )
+                if not np.isfinite(native_error) or native_error > 1e-9:
+                    raise AssertionError("complete HVP native assembly parity failed")
                 records.append(
                     {
                         "strategy": strategy,
                         "execution": execution,
                         "complete_hvp_seconds": seconds,
                         "maximum_error": error,
+                        "native_dense_maximum_error": native_error,
+                        "oracle": {
+                            "implementation": "pyscf.hessian.rhf.Hessian.kernel",
+                            "version": pyscf.__version__,
+                            "maximum_error_gate": 1e-9,
+                            "basis": "exact source shell primitives; Cartesian/Bohr",
+                        },
+                        "directions": directions.tolist(),
+                        "oracle_hvp": expected.tolist(),
+                        "hvp": result.values.tolist(),
                         "diagnostics": result.diagnostics,
                     }
                 )
@@ -263,6 +285,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--consumer", action="store_true")
+    parser.add_argument(
+        "--consumer-only",
+        action="store_true",
+        help="qualify all six complete HVP endpoints without rerunning response timing",
+    )
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID"):
         parser.error("a Slurm GPU allocation is required")
@@ -282,7 +309,7 @@ def main() -> None:
     if patch:
         args.output.with_suffix(".patch").write_bytes(patch)
     result = {
-        "schema": "vibeqc.response-resident-evidence/v1",
+        "schema": "vibeqc.response-resident-evidence/v2",
         "source": {
             "revision": revision,
             "dirty": bool(patch),
@@ -314,17 +341,17 @@ def main() -> None:
             "host_boundary": "RHS validation/rank diagnostic, projected scalars/SVD/least squares and convergence remain host controlled",
             "component_timing": "action-only operator; basis/projection/range orthogonalization; retained-space recycling; other costs only in full solve time",
             "memory": "retained J/K + response arena and conservative logical solver reservation; excludes CUDA context/libraries and provider setup temporaries",
-            "consumer": "H2 native state and independent oracle prepared before complete HVP timing; first/second derivatives and final assembly use declared CPU defaults",
+            "consumer": "H2 native state, independent PySCF analytic Hessian and native dense parity reference prepared before complete HVP timing; first/second derivatives and final assembly use declared CPU defaults",
             "decision": "qualification only; no production-size, changed-geometry performance, default selection or speedup promotion",
         },
         "response": [],
         "consumer": [],
     }
-    for name in ("h2", "lih", "water"):
+    for name in () if args.consumer_only else ("h2", "lih", "water"):
         result["response"].append(_response_case(name, args.repeats))
         args.output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
         print(f"{name}: all matched response samples passed", flush=True)
-    if args.consumer:
+    if args.consumer or args.consumer_only:
         result["consumer"] = _consumer()
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
 

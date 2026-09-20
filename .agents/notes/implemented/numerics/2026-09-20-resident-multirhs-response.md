@@ -58,7 +58,7 @@ The 37-by-4 range-factor test compares dense SVD at scales 1e-150/1/1e150 and
 both sides of the cutoff. Lifecycle tests cover wrong owner, changed reference,
 closed owner, vector exhaustion, interrupted atomic replacement and retained
 exception frames. Complete H2 HVP blocks for all three strategies agree with
-the independent dense Hessian at 1e-9 absolute tolerance and forbid host
+the native dense Hessian assembly at 1e-9 absolute tolerance and forbid host
 response actions. Impossible consumer budgets fail before first derivatives.
 
 Performance reproduction uses `tools/response_resident_benchmark.py` under
@@ -86,3 +86,22 @@ budget complete-endpoint evidence.
 - `tests/python/test_hessian_block_resident_cuda.py`
 - `tests/python/test_response_krylov.py`
 - `docs/response.md`, `docs/hessian.md`, `docs/performance_engineering.md`
+
+## Consumer oracle correction
+
+The initial consumer campaign used `tools.vibeqc_hessian.analytic.analytic_hessian`,
+whose relaxation calls the same #179 solver. Calling that reference independent
+was incorrect: its recorded errors qualify assembly parity only. The historical
+raw record is preserved and its README now states that scope explicitly.
+
+The validation helper now separately constructs PySCF's analytic RHF Hessian
+from exact source geometry/shell primitives and independently converged SCF.
+It supplies external integral derivatives and CPHF. Every complete H2 consumer
+in the benchmark must pass an additional 1e-9 maximum absolute error gate;
+all three resident-strategy tests enforce the same gate and forbid native
+Hessian/shared response entry points during oracle construction. The native
+parity gate is retained. Schema v2 records the oracle version, directions,
+reference/results and separate errors, without rewriting old measurements.
+This adds a validation dependency only, with no production fallback or new
+response implementation. The response-level Libcint matrix gates were already
+independent and are unchanged.

@@ -21,7 +21,10 @@ Maximum relative residual: `4.271820e-14`;
 maximum absolute solution error: `9.769963e-14`.
 Gates are 1e-9 relative residual and 3e-9 absolute solution error for every
 sample. All six complete H2 HVP endpoints pass a 1e-9 maximum-error gate against
-the independent dense Hessian. No timing sample is discarded by its accuracy.
+the native dense Hessian assembly. That assembly shares the #179 solver, so
+these six historical errors establish parity, not independent consumer
+qualification. No timing sample is discarded by its accuracy. See the external
+consumer gate below for independent qualification.
 
 ## Measured endpoints and work
 
@@ -76,14 +79,14 @@ memory and provider preparation transients are outside this numeric scope.
 
 ## Complete consumer
 
-The native H2 state and independent Hessian oracle are prepared before timing.
+The native H2 state and native dense Hessian assembly are prepared before timing.
 Each endpoint builds its own CUDA response provider, prepares three directional
 RHS, solves, reconstructs the response, evaluates the declared CPU first/second
 integral consumers and publishes complete HVPs. These are mixed host/device
 endpoints. A single endpoint sample per combination is numerical/composition
 and cost evidence, not a robust performance ranking.
 
-| Strategy | Host HVP s | Resident HVP s | Maximum absolute error |
+| Strategy | Host HVP s | Resident HVP s | Native assembly parity error |
 | --- | ---: | ---: | ---: |
 | sequential | 6.391809 | 4.971216 | 3.686e-16 |
 | blocked | 4.962943 | 4.972025 | 3.686e-16 |
@@ -93,6 +96,24 @@ All requested budgets and modeled phase peaks are retained in the consumer
 records. Resident consumer counters include resident setup, unlike response
 sample deltas. Independent tests additionally cover capacity rejection before
 work, changed references, failed replacement and exceptional lease cleanup.
+
+## Independent consumer gate
+
+The current runner additionally computes PySCF's analytic RHF Hessian using the
+same exact shell primitives, Cartesian geometry in Bohr, charge and
+multiplicity. PySCF independently reconverges SCF and evaluates all integral
+and CPHF derivatives; neither native dense assembly nor the shared response
+solver supplies its result. Every host/resident and sequential/blocked/recycled
+complete HVP must meet a 1e-9 maximum absolute error gate. The original native
+assembly check remains a separate 1e-9 parity gate.
+
+`test_hessian_block_resident_cuda.py` checks all three resident strategies
+against both references and forbids the native Hessian/shared solver while
+constructing the external oracle. The original `evidence.json` is retained
+unchanged: its consumer `maximum_error` and historical scope text refer to
+native parity. New schema v2 records explicitly identify the external oracle
+and its version, retain directions and actual/reference HVPs, and report native
+parity in `native_dense_maximum_error`.
 
 ## Reproduction and limits
 
@@ -108,6 +129,10 @@ srun --partition=main --gres=gpu:5090:1 --nodes=1 --ntasks=1 \
   --time=00:15:00 python tools/response_resident_benchmark.py \
   --repeats 3 --consumer --output .artifacts/benchmarks/resident/evidence.json
 ```
+
+PySCF is required only for this optional qualification command. To repeat the
+six consumer gates without rerunning the unchanged response campaign, use
+`--consumer-only` in place of `--repeats 3 --consumer`.
 
 Acceptance is limited to the bounded tools domain. No default/auto-selection
 policy changes. Larger systems, changed-geometry performance and constrained

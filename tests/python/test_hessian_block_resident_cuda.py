@@ -8,8 +8,9 @@ import pytest
 from test_hessian_block import h2_case as _h2_case
 
 from tools.vibeqc_hessian import rhf_hvp_many
+from tools.vibeqc_validation.hessian_fixtures import oracle_analytic_hessian
 
-# Register the existing independent dense-oracle fixture in this device tier.
+# Native dense assembly checks parity; it shares the response solver under test.
 h2_case = _h2_case
 
 pytestmark = pytest.mark.skipif(
@@ -18,9 +19,30 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="module")
+def h2_external_hessian(h2_case: typing.Any) -> typing.Any:
+    """Build the external oracle with native Hessian/response seams forbidden."""
+    pytest.importorskip("pyscf")
+    from tools.vibeqc_hessian import analytic, perturbation
+    from tools.vibeqc_response import krylov
+
+    def forbidden(*args: typing.Any, **kwargs: typing.Any) -> typing.NoReturn:
+        pytest.fail("external Hessian oracle called native Hessian/response code")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(analytic, "analytic_hessian", forbidden)
+        for module in (perturbation, krylov):
+            patch.setattr(module, "solve", forbidden)
+            patch.setattr(module, "solve_many", forbidden)
+        return oracle_analytic_hessian(h2_case[0].source)
+
+
 @pytest.mark.parametrize("strategy", ("sequential", "blocked", "recycled"))
 def test_complete_hvp_block_uses_resident_shared_solve(
-    h2_case: typing.Any, strategy: str, monkeypatch: typing.Any
+    h2_case: typing.Any,
+    h2_external_hessian: typing.Any,
+    strategy: str,
+    monkeypatch: typing.Any,
 ) -> None:
     assert os.environ.get("SLURM_JOB_ID"), "real GPU tests require Slurm"
     from tools.vibeqc_hessian import perturbation
@@ -53,6 +75,10 @@ def test_complete_hvp_block_uses_resident_shared_solve(
     )
     expected = np.stack([np.einsum("abxy,by->ax", dense, v) for v in directions])
     np.testing.assert_allclose(actual.values, expected, atol=1e-9, rtol=4e-10)
+    external = np.stack(
+        [np.einsum("abxy,by->ax", h2_external_hessian, v) for v in directions]
+    )
+    np.testing.assert_allclose(actual.values, external, atol=1e-9, rtol=0)
     assert calls == [strategy]
     diag = actual.diagnostics
     assert diag["response_execution"] == "cuda-resident"
