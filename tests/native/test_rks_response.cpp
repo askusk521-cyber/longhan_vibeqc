@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "api/ks_snapshot.hpp"
+#include "dft/xc_point.hpp"
 
 namespace {
 void require(bool condition, const char* message) {
@@ -97,7 +98,12 @@ void response_batch_boundaries() {
           -std::nextafter(std::numeric_limits<double>::min(), 0.0)}) {
       for (unsigned axis = 0; axis < 3; ++axis) {
         double reference_gradient[3]{};
-        reference_gradient[axis] = residue;
+        // The ABI takes totals, while the SCF reference has two equal spins.
+        reference_gradient[axis] = 2.0 * residue;
+        double spin_density[2]{}, spin_gradient[2][3]{};
+        spin_gradient[0][axis] = spin_gradient[1][axis] = residue;
+        require(vibeqc::dft::point::evaluate(method == 1, spin_density, spin_gradient).valid,
+                "test reference is outside the actual SCF point domain");
         require(call(method, &zero, reference_gradient, &zero, vacuum_gradient, 1, output, 4) ==
                     VIBEQC_STATUS_SUCCESS,
                 "SCF-admitted vacuum reference rejected by RKS response");
@@ -107,12 +113,19 @@ void response_batch_boundaries() {
                 "nonzero vacuum gradient tangent admitted");
       }
     }
-    for (double normal :
-         {std::numeric_limits<double>::min(), -std::numeric_limits<double>::min()}) {
+    const double normal_boundary = 2.0 * std::numeric_limits<double>::min();
+    // The adjacent total below the nominal boundary rounds up when split into
+    // equal spins, so comparing the total to 2*DBL_MIN would be incorrect.
+    for (double normal : {normal_boundary, -normal_boundary, std::nextafter(normal_boundary, 0.0),
+                          -std::nextafter(normal_boundary, 0.0)}) {
       double reference_gradient[3]{normal, 0.0, 0.0};
+      double spin_density[2]{}, spin_gradient[2][3]{};
+      spin_gradient[0][0] = spin_gradient[1][0] = normal / 2.0;
+      require(!vibeqc::dft::point::evaluate(method == 1, spin_density, spin_gradient).valid,
+              "test boundary is inside the actual SCF point domain");
       require(call(method, &zero, reference_gradient, &zero, vacuum_gradient, 1, output, 4) ==
                   VIBEQC_STATUS_NUMERICAL_FAILURE,
-              "normal vacuum reference gradient admitted");
+              "RKS reference gradient with normal rounded spin component admitted");
     }
     double tiny = 1e-280;
     require(call(method, &tiny, vacuum_gradient, &zero, vacuum_gradient, 1, output, 4) ==

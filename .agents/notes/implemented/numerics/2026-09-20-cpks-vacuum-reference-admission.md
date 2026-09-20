@@ -17,7 +17,11 @@ native point contracts for both LDA and PBE after #690 merged.
 Use one reference-gradient admission predicate in `xc_point.hpp` for SCF and
 both shared CPU/device response functions. It validates finite components and
 preserves the existing SCF `abs(gradient) < DBL_MIN` allowance only at exactly
-zero spin density. It does not modify any input or point formula.
+zero spin density. RKS takes total gradients, so it tests their rounded
+half-spin components. Comparing the total against `2*DBL_MIN` is insufficient:
+the immediately lower total rounds up to a normal spin component. The density
+predicate only selects exact vacuum; positive-density representability gates
+remain as before. No input or point formula is modified.
 
 Empty-spin tangent admission is separate and unchanged: density and gradient
 directions must be exactly zero. Positive-density algebra, independently scaled
@@ -38,8 +42,9 @@ No full empty-spin Hessian or extra functional domain is promoted.
 
 New private-ABI RKS and UKS regressions reject the pre-fix library at the
 SCF-admitted reference with a zero direction. They cover both signs, every
-Cartesian component/spin, minimum and maximum subnormal gradients, normal
-boundary rejection and unchanged nonzero tangent rejection. The device test
+Cartesian component/spin, minimum and maximum subnormal gradients, RKS total
+packing and half-spin rounding ties, normal boundary rejection and unchanged
+nonzero tangent rejection. The device test
 checks the same zero-response invariant directly and preserves all 30 RKS plus
 48 UKS independent 450-digit reference directions and their numerical gates.
 

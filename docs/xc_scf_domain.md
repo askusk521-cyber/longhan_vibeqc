@@ -48,8 +48,9 @@ It rejects negative/nonfinite densities, nonfinite gradients, a normal nonzero
 gradient in an exactly empty spin, and any unrepresentable output. When AO
 contractions round density to zero, subnormal reference gradient components
 (`abs(gradient) < DBL_MIN`) retain the existing SCF vacuum admission. SCF and
-RKS/UKS response share this reference check. Exact vacuum has zero energy and
-potential coefficients. Positive-density
+RKS/UKS response share this reference check. RKS takes total gradients and
+checks their rounded equal-spin halves; the cutoff applies per spin, including
+rounding at its boundary. Exact vacuum has zero energy and potential coefficients. Positive-density
 underflow of a final energy follows ordinary FP64 arithmetic; density
 derivatives are evaluated independently and are retained when representable.
 

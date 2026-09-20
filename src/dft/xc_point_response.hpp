@@ -133,8 +133,11 @@ VIBEQC_XC_RESPONSE_HD inline Value restricted_response(bool pbe, double rho,
                                                        const double delta_gradient[3]) {
   Value out;
   if (!detail::finite(rho) || rho < 0.0 || !detail::finite(delta_rho)) out.valid = false;
+  // RKS gradients are totals; SCF's vacuum admission sees the rounded equal-spin
+  // gradient. A doubled cutoff would incorrectly accept halfway rounding ties.
   for (unsigned k = 0; k < 3; ++k)
-    if (!detail::valid_gradient_component(rho, gradient[k]) || !detail::finite(delta_gradient[k]))
+    if (!detail::valid_gradient_component(rho, gradient[k] / 2.0) ||
+        !detail::finite(delta_gradient[k]))
       out.valid = false;
   if (rho == 0.0) {
     if (delta_rho != 0.0) out.valid = false;

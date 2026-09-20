@@ -118,7 +118,8 @@ void vacuum_reference_domain() {
             Input in{};
             in.unrestricted = unrestricted;
             in.pbe = pbe;
-            in.gradient[s][axis] = residue;
+            // Match the physical per-spin SCF reference in both input layouts.
+            in.gradient[s][axis] = (unrestricted ? 1.0 : 2.0) * residue;
             check(in, true);
             in.gradient[s][axis] = 0.0;
             in.delta_gradient[s][axis] = residue;
@@ -129,8 +130,18 @@ void vacuum_reference_domain() {
             Input in{};
             in.unrestricted = unrestricted;
             in.pbe = pbe;
-            in.gradient[s][axis] = normal;
+            in.gradient[s][axis] = (unrestricted ? 1.0 : 2.0) * normal;
             check(in, false);
+          }
+          if (!unrestricted) {
+            // Halfway totals round to a normal spin component and remain invalid.
+            const double boundary = 2.0 * std::numeric_limits<double>::min();
+            for (double sign : {-1.0, 1.0}) {
+              Input in{};
+              in.pbe = pbe;
+              in.gradient[0][axis] = sign * std::nextafter(boundary, 0.0);
+              check(in, false);
+            }
           }
         }
       }
