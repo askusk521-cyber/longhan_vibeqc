@@ -111,7 +111,7 @@
       "canonical_inputs": {
         "python/vibeqc_compiler/xc/b88_vwn_maple.py": "b51c019c6f51f17b58121f20cc631099b6228f1b43f0134a9666ecb174ca076b",
         "python/vibeqc_compiler/xc/expressions.py": "a2e02076d84f115d1b190d21e3b9b43238d22b415f8269f22fda3f3095a5d316",
-        "python/vibeqc_compiler/xc/p86_pz_maple.py": "a1bbdfe8bba635389861c87a99da072dce6b74dd820b0259593e6eb3a0a04f15",
+        "python/vibeqc_compiler/xc/p86_pz_maple.py": "4e5cba59e03750fbd172f738f6233c5995e60a3381d0fd4ff798fae7bf11e9d4",
         "python/vibeqc_compiler/xc/pbe_maple.py": "177ec68c70f8c0c59b1d4a01fba275cc101c959238ad3583e2294c0017647e8e",
         "python/vibeqc_compiler/xc/pw91_maple.py": "1171d5171401090ac13352525d3df49ffe48863cc149851d36d34af4e7fe983a",
         "python/vibeqc_compiler/xc/rsh_expressions.py": "636ff472dd5615f66af5ca882e0e0bd44c333b6910ca21c7ce5d4ec789a701ad",
@@ -186,7 +186,7 @@
       },
       "kind": "snapshot",
       "license": "LGPL-3.0-or-later",
-      "local_root": "tools/parameters/upstream",
+      "local_root": "upstream/dftd4/82fbaf41724ab9a3c0a38ddc978ad0c38c4659b4",
       "repository": "https://github.com/dftd4/dftd4",
       "revision": "82fbaf41724ab9a3c0a38ddc978ad0c38c4659b4"
     },
@@ -560,7 +560,7 @@
       },
       "kind": "file-set",
       "license": "MPL-2.0",
-      "local_root": "external/libxc-7.0.0",
+      "local_root": "upstream/libxc/7.0.0",
       "repository": "https://gitlab.com/libxc/libxc",
       "revision": "7.0.0"
     },
@@ -645,7 +645,7 @@
       },
       "kind": "snapshot",
       "license": "LGPL-3.0-or-later",
-      "local_root": "tools/parameters/upstream",
+      "local_root": "upstream/simple-dftd3/41d5a07b98ce15e97bec7a1815869725f6c7b0c2",
       "repository": "https://github.com/dftd3/simple-dftd3",
       "revision": "41d5a07b98ce15e97bec7a1815869725f6c7b0c2"
     },
