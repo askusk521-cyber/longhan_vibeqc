@@ -626,7 +626,7 @@ typedef struct vibeqc_ks_options {
   /** Optional v4 suffix: compiler-resolved execution identity. Version 1
    * means the fields below are authoritative for scientific dispatch.
    * spin_channels is 1 for RKS and 2 for UKS. semilocal_family is the
-   * primitive-family selector: 0=LDA, 1=PBE, 2=r2SCAN. */
+   * primitive-family selector: 0=LDA, 1=PBE, 2=r2SCAN, 3=B3LYP (CPU only). */
   uint32_t execution_plan_version;
   uint32_t spin_channels;
   uint32_t semilocal_family;

@@ -113,7 +113,7 @@
         "python/vibeqc_compiler/xc/expressions.py": "349f45b1770e725ebb1a4781dc19a41ed6ec74f39affc3702cbdc55375e7f60e",
         "python/vibeqc_compiler/xc/p86_pz_maple.py": "a1bbdfe8bba635389861c87a99da072dce6b74dd820b0259593e6eb3a0a04f15",
         "python/vibeqc_compiler/xc/pbe_maple.py": "177ec68c70f8c0c59b1d4a01fba275cc101c959238ad3583e2294c0017647e8e",
-        "python/vibeqc_compiler/xc/rsh_expressions.py": "3c3c37d98ee324d64b2e693d51d0566c73bfbd9944e79741bc5dccd7f8c8eb98",
+        "python/vibeqc_compiler/xc/rsh_expressions.py": "c9f00713bdee06639d035f755975c24a65d39b28fe025b2054aafd32d4f2806a",
         "python/vibeqc_compiler/xc/rsh_maple.py": "fe2a2748861b63920be5ac10ad74d137fe30506afd5d9efce013bc98fede8bb3",
         "python/vibeqc_compiler/xc/scan_maple.py": "4d0078a8148e5be8435660b7677c685a55ee27360f4c84efaf15581e82b46e1b",
         "python/vibeqc_compiler/xc/spec.py": "6921d00bb79edd8501c52770964ced73f5a944e4702b331491e52c8e723a99a6",
