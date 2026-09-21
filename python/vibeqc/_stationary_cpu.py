@@ -426,6 +426,10 @@ def complete_rks_gradient_diagnostic(
             tile_points=tile_points,
             primitive_tile=primitive_tile,
             integral_terms=integral_terms,
+            range_exchange_sources=sum(
+                type(p) is RangeSeparatedExchangePrimitive
+                for p in state._source.method_ir.primitives
+            ),
         )
         host_bound = sum(inventory.values())
         if host_bound > max_host_bytes:
