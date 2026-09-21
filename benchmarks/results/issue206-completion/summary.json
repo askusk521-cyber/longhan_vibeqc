@@ -81,6 +81,115 @@
       "artifact": "compare-768-df-current.json"
     }
   ],
+  "equal_basis_rebuild": {
+    "artifact": "rebuild-equal-current.json",
+    "status": "pass",
+    "protocol": "current five-repeat cold/unchanged-warm/changed-geometry energy-plus-force endpoints",
+    "cases": [
+      {
+        "ao": 96,
+        "batch": 1,
+        "maximum_warm_energy_error_hartree": 4.433786671143025e-12,
+        "maximum_warm_force_error_hartree_per_bohr": 3.3010469357996897e-12,
+        "maximum_changed_energy_error_hartree": 4.320099833421409e-12,
+        "maximum_changed_force_error_hartree_per_bohr": 8.101075366084842e-12,
+        "vibeqc_cold_median_s": 0.38066713884472847,
+        "gpu4pyscf_cold_median_s": 12.642918288707733,
+        "vibeqc_warm_median_s": 0.04276636615395546,
+        "gpu4pyscf_warm_median_s": 0.2522888947278261,
+        "vibeqc_changed_median_s": 0.13705825805664062,
+        "gpu4pyscf_changed_median_s": 0.6068233214318752,
+        "gate": true,
+        "raw_artifact_sha256": "479402ba3407a781b90fb5b3f0b80806121e4165eb680e67358ebb80e3cc4e17"
+      },
+      {
+        "ao": 96,
+        "batch": 4,
+        "maximum_warm_energy_error_hartree": 4.433786671143025e-12,
+        "maximum_warm_force_error_hartree_per_bohr": 3.2861907639514243e-12,
+        "maximum_changed_energy_error_hartree": 4.433786671143025e-12,
+        "maximum_changed_force_error_hartree_per_bohr": 8.098854920035592e-12,
+        "vibeqc_cold_median_s": 0.6178331039845943,
+        "gpu4pyscf_cold_median_s": 14.575570464134216,
+        "vibeqc_warm_median_s": 0.16947737149894238,
+        "gpu4pyscf_warm_median_s": 1.0129253417253494,
+        "vibeqc_changed_median_s": 0.38682904466986656,
+        "gpu4pyscf_changed_median_s": 2.4435447268188,
+        "gate": true,
+        "raw_artifact_sha256": "060441a12bf889962e7f908c6723d49865292ee59d387a03b1d651134ffe34c4"
+      },
+      {
+        "ao": 192,
+        "batch": 1,
+        "maximum_warm_energy_error_hartree": 1.0686562745831907e-11,
+        "maximum_warm_force_error_hartree_per_bohr": 3.141709115084268e-12,
+        "maximum_changed_energy_error_hartree": 3.637978807091713e-12,
+        "maximum_changed_force_error_hartree_per_bohr": 6.884492975700596e-12,
+        "vibeqc_cold_median_s": 0.7573199085891247,
+        "gpu4pyscf_cold_median_s": 12.795704711228609,
+        "vibeqc_warm_median_s": 0.1022217907011509,
+        "gpu4pyscf_warm_median_s": 0.32823254354298115,
+        "vibeqc_changed_median_s": 0.45995121262967587,
+        "gpu4pyscf_changed_median_s": 0.7659928482025862,
+        "gate": true,
+        "raw_artifact_sha256": "c61506df95a170750941e6c41c22aa4392a20ac7583bdc1c7a3ea19d3436491d"
+      },
+      {
+        "ao": 192,
+        "batch": 4,
+        "maximum_warm_energy_error_hartree": 1.1482370609883219e-11,
+        "maximum_warm_force_error_hartree_per_bohr": 3.8542502522886934e-12,
+        "maximum_changed_energy_error_hartree": 9.890754881780595e-12,
+        "maximum_changed_force_error_hartree_per_bohr": 7.231770737803345e-12,
+        "vibeqc_cold_median_s": 2.307210272178054,
+        "gpu4pyscf_cold_median_s": 15.344700736925006,
+        "vibeqc_warm_median_s": 0.5487935077399015,
+        "gpu4pyscf_warm_median_s": 1.3151963334530592,
+        "vibeqc_changed_median_s": 1.8169849794358015,
+        "gpu4pyscf_changed_median_s": 3.065329695120454,
+        "gate": true,
+        "raw_artifact_sha256": "46d85a1e3b03643548052ea7c146a5265e85cdd203ed5724f924dcea0d75cfe2"
+      }
+    ]
+  },
+  "host_ablation_diagnostics": {
+    "artifact": "fixed-work-ablations-current.json",
+    "status": "host-diagnostics-complete-derivative-gram-arms-open",
+    "scope": "192-AO batch-1 RHF host preparation/provider/final-state controls on the current library",
+    "experiments": [
+      {
+        "label": "preparation-combined-#309",
+        "assessment": "not-run",
+        "raw_artifact_sha256": "9f66a642f158f358d6606b52fc11609de6ab659b04a72357edc2135e72688d24"
+      },
+      {
+        "label": "setup-eigen-#310",
+        "assessment": "not-run",
+        "raw_artifact_sha256": "09c17ff78a911d07d59219cc0263e30a2435cb065d79de2c4921b838ce5052de"
+      },
+      {
+        "label": "final-eigen-#310",
+        "assessment": "pass",
+        "raw_artifact_sha256": "8519eb4d34b506f1ca8fc7729dc8afaef304de1f155592ab877a5fb31c3b0cde"
+      },
+      {
+        "label": "final-state-#311",
+        "assessment": "not-run",
+        "raw_artifact_sha256": "fcb7f0f4067a992eca17a6743cad279ce1f5fd64c0dc4f0b1d6998a3dbee22ee"
+      },
+      {
+        "label": "combined-host-cross-workstream",
+        "assessment": "pass",
+        "raw_artifact_sha256": "93eb62bd7eb1898145b17e5fa77ae53699d8d75dbe6b19ef212b45c351e513d3"
+      }
+    ],
+    "fixed_work_mapping": {
+      "baseline": "retained endpoint control; not an iteration-matched cross-engine fixed-work result",
+      "derivative-only": "open; no current isolated #394/#404 arm in this record",
+      "Gram-only": "open; no current isolated #412 arm in this record",
+      "combined": "open; combined-host is #309/#310/#311 host composition, not derivative-plus-Gram fixed work"
+    }
+  },
   "structural_controls": {
     "resident_768": "resident-768.json",
     "explicit_fallback_192": "fallback-192.json",
@@ -105,6 +214,55 @@
       }
     ]
   },
+  "practical_unequal_auxiliary": {
+    "artifact": "practical-current.json",
+    "status": "pass",
+    "source_identity": "47d4c417aaa8f3ecaf61e62d96f9c0c54b5900cb20d99938abccac764d68dff3",
+    "library_sha256": "8d40c060e65dd0f3bb78209149e91de7da2b68f85ed16d349c58650b0365ad65",
+    "cases": [
+      {
+        "case": "water-tetramer-def2-svp-spherical",
+        "method": "rhf",
+        "nao": 96,
+        "naux": 464,
+        "maximum_force_error_hartree_per_bohr": 1.7124079931818414e-11,
+        "vibeqc_warm_median_s": 0.08834035135805607,
+        "gpu4pyscf_warm_median_s": 0.2568085677921772,
+        "ordinary_speedup": 2.907035843125588
+      },
+      {
+        "case": "oh-def2-svp-spherical-uhf",
+        "method": "uhf",
+        "nao": 19,
+        "naux": 93,
+        "maximum_force_error_hartree_per_bohr": 3.9537262352951075e-12,
+        "vibeqc_warm_median_s": 0.020031599327921867,
+        "gpu4pyscf_warm_median_s": 0.19534155912697315,
+        "ordinary_speedup": 9.751670644424696
+      }
+    ]
+  },
+  "practical_rebuild": {
+    "artifact": "rebuild-practical-current.json",
+    "status": "warm-pass-changed-geometry-gate-open",
+    "changed_geometry_displacement_bohr": 0.001,
+    "cases": [
+      {
+        "case": "water-tetramer-def2-svp-spherical",
+        "changed_max_force_error_hartree_per_bohr": 3.0602187450767815e-11,
+        "changed_vibeqc_median_s": 0.2910508718341589,
+        "changed_gpu4pyscf_median_s": 0.5990691054612398,
+        "gate_passed": false
+      },
+      {
+        "case": "oh-def2-svp-spherical-uhf",
+        "changed_max_force_error_hartree_per_bohr": 3.296982905723993e-11,
+        "changed_vibeqc_median_s": 0.044300882145762444,
+        "changed_gpu4pyscf_median_s": 0.5703658666461706,
+        "gate_passed": false
+      }
+    ]
+  },
   "direct_force_floor": {
     "gate": true,
     "repeats": 7,
@@ -112,6 +270,8 @@
     "artifact_sha256": "5f5bced0e6ff8964e737b37956ff7687aada7a6721bd6321dd1935c0408bce04"
   },
   "artifact_hashes": {
+    "fixed-work-ablations-current.json": "712507ac9da191818413dcf6bfae3891ecbacd8249eb310c5f9888fbdea93d85",
+    "rebuild-equal-current.json": "306eb4b80fd2bdab023f846c2db32ddc5fbb0448f43cfcb6e311751ecf7238d3",
     "compare-768-df-current.json": "05d0d8788bc2d78ada5766aac0f5014617019d455f078e977675af7a668d4372",
     "timeline-768-current-resident/result.json": "7160f8b33b08cbf978d31a5eec4bbe0f7562b5d95eeabc8dc1f668e59779c653",
     "timeline-192-current-explicit-host-fallback-32m/result.json": "b163be21253b811333f2937d59fdd8466ce02c17e53efae5e2616c033302f00a"

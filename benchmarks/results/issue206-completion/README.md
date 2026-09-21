@@ -21,11 +21,33 @@ Current native identity:
 | Intentional constrained/fallback route | `fallback-192.json` | Pass: explicit host-weight control is classified as fallback and completes |
 | Direct analytic-force floor | `direct-current.json` | Pass for the retained four-point 7-repeat floor |
 | Unequal-auxiliary practical cases | Historical raw records used an older native identity and are not counted as current evidence | Not counted |
+| Current unequal-auxiliary practical cases | `practical-current.json` | Pass: cc-pVDZ/cc-pVDZ-JKFIT water RHF 96/464 and OH UHF 19/93, five complete warm pairs each |
+| Current practical cold/changed endpoints | `rebuild-practical-current.json` | Warm gates pass; both five-repeat changed-geometry force gates remain open by small margins |
+| Current equal-basis cold/warm/changed matrix | `rebuild-equal-current.json` | Pass: current 96/192-AO batch-1/4 cells, five repeats, all warm and changed energy/force gates pass |
+| Current host preparation/provider/state diagnostics | `fixed-work-ablations-current.json` | #309/#310/#311 controls retained; requested derivative-only and Gram-only fixed-work arms remain open |
 
 This audit does not close #206: the 768-AO endpoint remains slower than the
-stock comparator, and the 384-AO automatic streamed low-memory experiment did
-not complete within its finite 30-minute allocation. Those negative results are
-retained in `summary.json` rather than omitted.
+stock comparator, the 384-AO automatic streamed low-memory experiment did not
+complete within its finite 30-minute allocation, and the practical unequal-auxiliary
+changed-geometry force gates remain open. Those negative results are retained in
+`summary.json` rather than omitted.
+
+## Fixed-work terminology
+
+The host records are diagnostic controls for preparation, eigensolver-provider,
+and verified-final-state work. They are not interchangeable with the issue's
+derivative/Gram fixed-work arms:
+
+| Requested arm | Current evidence | Disposition |
+| --- | --- | --- |
+| Baseline | `rebuild-equal-current.json` plus host baseline selections | Retained as ordinary endpoint/control evidence, not an iteration-matched cross-engine fixed-work claim |
+| Derivative-only | No isolated current #394/#404 arm in this audit | Open; earlier promoted derivative work is not relabeled here |
+| Gram-only | No isolated current #412 arm; rejected split-GRAM evidence remains separate | Open; no rejected candidate is counted as a saving |
+| Combined | `combined-host-cross-workstream` in `fixed-work-ablations-current.json` | Host-only #309/#310/#311 composition, not derivative-plus-Gram fixed work or external parity |
+
+The raw host JSON files live under the n5 artifact root recorded in
+`summary.json`; each compact record includes the raw SHA-256 and current
+library identity.
 
 The resident sentinel and timeline runner are exercised by the hardware-free
 tests `tests/python/test_issue206_resident_sentinel.py` and
