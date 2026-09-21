@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,7 @@ from benchmarks.df_component_ledger import (
     read_host_trace,
     read_trace,
 )
+from benchmarks.issue206_resident_sentinel import validate_response_record
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = {
@@ -60,6 +62,79 @@ CANDIDATE_CONTROLS = (
     "VIBEQC_DF_RESPONSE_ALGEBRA",
     "VIBEQC_DF_RAW_STAGING",
 )
+
+
+def validate_three_center_response_work(
+    counters: Mapping[str, int], nbf: int, naux: int
+) -> dict[str, int | str]:
+    """Validate and describe dense or packed three-center response work.
+
+    ``three_center_derivative_weights`` counts the public derivative weights
+    consumed by the response producer. Dense AO-pair routes consume
+    ``naux * nbf * nbf`` weights, while symmetric packed-pair routes consume
+    ``naux * nbf * (nbf + 1) // 2``. The timeline must accept both exact
+    routes; comparing every trace against the dense shape would reject the
+    qualified packed route at the larger endpoint.
+    """
+
+    packed_pairs = counters.get("response_packed_pairs", 0)
+    if type(packed_pairs) is not int or packed_pairs not in (0, 1):
+        raise RuntimeError("response_packed_pairs must be 0 or 1")
+    pair_storage = "packed" if packed_pairs else "dense"
+    pair_stride = nbf * (nbf + 1) // 2 if packed_pairs else nbf * nbf
+    expected = naux * pair_stride
+    observed = counters.get("three_center_derivative_weights")
+    observed_bytes = counters.get("three_center_derivative_weight_bytes")
+    # The device response producer publishes both counters.  The retained
+    # host-weight fallback predates the element counter and publishes only
+    # exact FP64 byte work, so recover the logical count without weakening the
+    # completeness check or accepting a rounded byte total.
+    if observed is None and observed_bytes is not None:
+        if type(observed_bytes) is not int or observed_bytes % 8:
+            raise RuntimeError(
+                "three-center response weight bytes are not integral FP64 work"
+            )
+        observed = observed_bytes // 8
+    if observed is None:
+        observed = 0
+    if observed != expected:
+        raise RuntimeError(
+            "incomplete three-center response work for "
+            f"{pair_storage} pairs: {observed} != {expected}"
+        )
+    if observed_bytes is not None and observed_bytes != expected * 8:
+        raise RuntimeError(
+            "three-center response weight bytes disagree with pair storage: "
+            f"{observed_bytes} != {expected * 8}"
+        )
+    return {
+        "pair_storage": pair_storage,
+        "pair_stride": pair_stride,
+        "expected_three_center_derivative_weights": expected,
+        "observed_three_center_derivative_weights": observed,
+    }
+
+
+def validate_metric_response_work(counters: Mapping[str, int], naux: int) -> int:
+    """Validate metric derivative work from element or exact FP64-byte counts."""
+
+    expected = naux * naux
+    observed = counters.get("metric_derivative_weights")
+    observed_bytes = counters.get("metric_derivative_weight_bytes")
+    if observed is None and observed_bytes is not None:
+        if type(observed_bytes) is not int or observed_bytes % 8:
+            raise RuntimeError("metric response weight bytes are not integral FP64 work")
+        observed = observed_bytes // 8
+    if observed != expected:
+        raise RuntimeError(
+            f"incomplete metric response work: {observed or 0} != {expected}"
+        )
+    if observed_bytes is not None and observed_bytes != expected * 8:
+        raise RuntimeError(
+            "metric response weight bytes disagree with auxiliary shape: "
+            f"{observed_bytes} != {expected * 8}"
+        )
+    return observed
 
 
 def main() -> None:
@@ -94,6 +169,15 @@ def main() -> None:
         choices=CANDIDATES,
         help="Sweep named force consumers on one fixed post-cold density; repeat to select order",
     )
+    parser.add_argument(
+        "--expected-response-policy",
+        choices=("auto", "resident", "streamed", "fallback"),
+        default="auto",
+        help="optional structural route gate for traced force responses",
+    )
+    parser.add_argument("--max-h2d-bytes", type=int)
+    parser.add_argument("--max-d2h-bytes", type=int)
+    parser.add_argument("--max-transformed-tile-productions", type=int)
     args = parser.parse_args()
     if args.density_fitting_memory_budget_bytes < 0:
         parser.error("DF memory allowance must be nonnegative")
@@ -114,6 +198,14 @@ def main() -> None:
         )
     if args.repeats < 1:
         parser.error("repeats must be positive")
+    for name in (
+        "max_h2d_bytes",
+        "max_d2h_bytes",
+        "max_transformed_tile_productions",
+    ):
+        value = getattr(args, name)
+        if value is not None and value < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative")
     if args.nsys and args.repeats != 1:
         parser.error("capture one warm replay per profiler invocation")
     if args.nsys and args.candidate and len(args.candidate) != 1:
@@ -343,6 +435,13 @@ def main() -> None:
                 scatter_probe = os.environ.get("VIBEQC_DF_RESPONSE_SCATTER_PROBE", "")
                 sample["response_plans"] = []
                 for response in responses:
+                    structural = validate_response_record(
+                        response,
+                        expected_policy=args.expected_response_policy,
+                        max_h2d_bytes=args.max_h2d_bytes,
+                        max_d2h_bytes=args.max_d2h_bytes,
+                        max_transformed_tile_productions=args.max_transformed_tile_productions,
+                    )
                     n, a, counters = (
                         response["nbf"],
                         response["naux"],
@@ -350,10 +449,10 @@ def main() -> None:
                     )
                     if n != args.aos or a != args.aos:
                         raise RuntimeError("unexpected response dimensions")
-                    if counters["three_center_derivative_weights"] != n * n * a:
-                        raise RuntimeError("incomplete three-center response work")
-                    if counters["metric_derivative_weights"] != a * a:
-                        raise RuntimeError("incomplete metric response work")
+                    three_center_work = validate_three_center_response_work(
+                        counters, n, a
+                    )
+                    validate_metric_response_work(counters, a)
                     if candidate:
                         execution, _, algebra, staging = CANDIDATES[candidate]
                         if bool(counters.get("three_center_shell_panels")) != (
@@ -376,6 +475,49 @@ def main() -> None:
                             raise RuntimeError(
                                 "selected raw panel staging did not execute"
                             )
+                    # The legacy host-weight compatibility route does not
+                    # publish auxiliary-panel counters. It does publish the
+                    # exact host raw reuse work, so keep that fallback
+                    # auditable without applying resident-only panel rules.
+                    host_fallback_reuse = counters.get("raw_value_reuse_bytes", 0)
+                    if (
+                        structural["policy"]["residency"] == "fallback"
+                        and host_fallback_reuse
+                        and not counters.get("response_auxiliary_blocks")
+                    ):
+                        if host_fallback_reuse % (n * n * 8):
+                            raise RuntimeError(
+                                "host fallback raw reuse is not integral N^2 work"
+                            )
+                        sample["response_plans"].append(
+                            {
+                                "source_backed": response["source_backed"],
+                                "borrowed_jk_bytes": 0,
+                                "auxiliary_weight_tile": None,
+                                "auxiliary_blocks": None,
+                                "raw_value_slices": None,
+                                "raw_value_bytes": 0,
+                                "raw_value_reuse_bytes": host_fallback_reuse,
+                                "response_scratch_bytes": counters.get(
+                                    "response_scratch_bytes", 0
+                                ),
+                                "three_center_pair_storage": three_center_work[
+                                    "pair_storage"
+                                ],
+                                "three_center_pair_stride": three_center_work[
+                                    "pair_stride"
+                                ],
+                                "three_center_derivative_weights": three_center_work[
+                                    "observed_three_center_derivative_weights"
+                                ],
+                                "pinned_host_bytes": counters.get(
+                                    "raw_panel_pinned_host_bytes", 0
+                                ),
+                                "selected_policy": structural["policy"],
+                                "structural_invariants": structural,
+                            }
+                        )
+                        continue
                     # Source providers regenerate raw columns on the device.
                     # Validate their logical tile work rather than pretending
                     # absent H2D copies are a missing or free response.
@@ -391,20 +533,31 @@ def main() -> None:
                             "response used an unexpected raw value provider"
                         )
                     slices, remainder = divmod(counters.get(byte_key, 0), n * n * 8)
-                    if remainder or slices == 0:
+                    borrowed_bytes = counters.get("response_borrowed_jk_bytes", 0)
+                    if remainder or (slices == 0 and not borrowed_bytes):
                         raise RuntimeError("invalid raw response byte count")
                     panels = counters["response_auxiliary_blocks"]
-                    borrowed_bytes = counters.get("response_borrowed_jk_bytes", 0)
                     if borrowed_bytes:
                         tile = counters["response_resident_auxiliary_tile"]
+                        # A borrowed response may use an already resident raw
+                        # owner (zero H2D slices) or stage the complete host
+                        # tensor once. Both are resident paths; only the
+                        # latter publishes one bulk upload.
+                        resident_raw_owner = slices == 0 and not counters.get(
+                            "raw_value_bulk_uploads", 0
+                        )
+                        resident_raw_upload = (
+                            slices == a and counters.get("raw_value_bulk_uploads") == 1
+                        )
                         if (
-                            source_backed
-                            or borrowed_bytes != 3 * n * n * a * 8
-                            or slices != a
-                            or counters.get("raw_value_bulk_uploads") != 1
+                            borrowed_bytes != 3 * n * n * a * 8
+                            or not (resident_raw_owner or resident_raw_upload)
                             or counters.get("raw_panel_host_gather_elements", 0)
-                            or counters["response_ao_matrix_products"]
-                            != 2 * a * (2 if case.method == "uhf" else 1)
+                            or (
+                                structural["policy"]["exchange"] == "dense"
+                                and counters.get("response_ao_matrix_products", 0)
+                                != 2 * a * (2 if case.method == "uhf" else 1)
+                            )
                         ):
                             raise RuntimeError(
                                 "resident response did not reuse its raw/projected tensors"
@@ -420,8 +573,12 @@ def main() -> None:
                             raise RuntimeError(
                                 "raw response reads disagree with panel reuse"
                             )
-                    if not 1 <= tile <= a or panels != (a + tile - 1) // tile:
-                        raise RuntimeError("invalid response consumer panel count")
+                    panel_lower_bound = (a + tile - 1) // tile
+                    if not 1 <= tile <= a or not panel_lower_bound <= panels <= a:
+                        raise RuntimeError(
+                            "invalid response consumer panel count: "
+                            f"{panels} not in [{panel_lower_bound}, {a}]"
+                        )
                     sample["response_plans"].append(
                         {
                             "source_backed": source_backed,
@@ -433,9 +590,20 @@ def main() -> None:
                             "response_scratch_bytes": counters[
                                 "response_scratch_bytes"
                             ],
+                            "three_center_pair_storage": three_center_work[
+                                "pair_storage"
+                            ],
+                            "three_center_pair_stride": three_center_work[
+                                "pair_stride"
+                            ],
+                            "three_center_derivative_weights": three_center_work[
+                                "observed_three_center_derivative_weights"
+                            ],
                             "pinned_host_bytes": counters.get(
                                 "raw_panel_pinned_host_bytes", 0
                             ),
+                            "selected_policy": structural["policy"],
+                            "structural_invariants": structural,
                         }
                     )
                     if counters.get("raw_probe_prior_stream_drains", 0) != (
