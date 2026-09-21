@@ -972,7 +972,7 @@ class Calculator:
             descriptor.ks_options = ctypes.pointer(
                 native_ks_options(
                     active_ks_options,
-                    version=min(self._ks_options_version, 3),
+                    version=min(self._ks_options_version, 4),
                 )
             )
         if self._method in _COUPLED_CLUSTER_METHODS:
@@ -1593,7 +1593,7 @@ class Calculator:
             else:
                 native_ks_options(
                     selection.options,
-                    version=min(self._ks_options_version, 3),
+                    version=min(self._ks_options_version, 4),
                 )
         return selection
 

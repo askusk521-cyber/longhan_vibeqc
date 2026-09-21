@@ -206,6 +206,11 @@ class KsOptionsDescriptor(ctypes.Structure):
         ("semilocal_correlation_scale", ctypes.c_double),
         ("fock_exchange_coefficient", ctypes.c_double),
         ("xc_execution_schedule", ctypes.c_int32),
+        ("reserved_v3_padding", ctypes.c_uint32),
+        ("execution_plan_version", ctypes.c_uint32),
+        ("spin_channels", ctypes.c_uint32),
+        ("semilocal_family", ctypes.c_uint32),
+        ("reserved_v4_padding", ctypes.c_uint32),
     ]
 
 
