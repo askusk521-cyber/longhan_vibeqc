@@ -18,6 +18,8 @@ from vibeqc_compiler.dft.grid import (
     grid_policy_provenance,
 )
 from vibeqc_compiler.method import (
+    D4Spec,
+    DispersionCorrectionPrimitive,
     ExactExchangePrimitive,
     MethodIR,
     SemilocalXCPrimitive,
@@ -36,6 +38,7 @@ _NATIVE_KS_METHODS = {
     "pbe0-uks": ("PBE0", "polarized"),
     "r2scan-rks": ("R2SCAN", "unpolarized"),
     "r2scan-uks": ("R2SCAN", "polarized"),
+    "pbe-d4-rks": ("PBE-D4(BJ-EEQ-ATM)", "unpolarized"),
 }
 
 
@@ -85,6 +88,8 @@ class KsOptions:
     @property
     def coefficients(self) -> typing.Any:
         """Resolved (semilocal X, semilocal C, raw Fock K) coefficients."""
+        if _is_pbe_d4_composition(self.method_ir):
+            return (1.0, 1.0, 0.0)
         return ks_coefficients(self.method_ir)
 
     @property
@@ -148,6 +153,32 @@ def _native_components(method_ir: typing.Any) -> typing.Any:
     return semilocal[0].functional, exchange[0] if exchange else None
 
 
+def _is_pbe_d4_composition(method_ir: typing.Any) -> bool:
+    if not isinstance(method_ir, MethodIR) or len(method_ir.primitives) != 2:
+        return False
+    semilocal, correction = method_ir.primitives
+    pbe = functional("PBE", spin="unpolarized")
+    return (
+        type(semilocal) is SemilocalXCPrimitive
+        and type(correction) is DispersionCorrectionPrimitive
+        and isinstance(correction.specification, D4Spec)
+        and correction.specification.charge_model == "eeq2019"
+        and correction.specification.reference_model == "eeq"
+        and semilocal.functional.spin == "unpolarized"
+        and semilocal.functional.ingredients == pbe.ingredients
+        and SemilocalXCPrimitive(semilocal.functional).semantic_payload()
+        == SemilocalXCPrimitive(pbe).semantic_payload()
+    )
+
+
+def _native_pbe_d4_semilocal(method_ir: typing.Any) -> typing.Any:
+    if not _is_pbe_d4_composition(method_ir):
+        raise NotImplementedError(
+            "public PBE-D4 requires one PBE semilocal primitive plus one D4(BJ)-EEQ correction"
+        )
+    return typing.cast("SemilocalXCPrimitive", method_ir.primitives[0]).functional
+
+
 def _native_semilocal(method_ir: typing.Any) -> typing.Any:
     return _native_components(method_ir)[0]
 
@@ -195,6 +226,18 @@ def resolve_ks_method(method: typing.Any) -> typing.Any:
         raise ValueError("KS options require a supported native RKS/UKS method")
     identifier, spin = _NATIVE_KS_METHODS[method]
     method_ir = resolve_method(identifier, spin=spin)
+
+    if identifier == "PBE-D4(BJ-EEQ-ATM)":
+        semilocal = _native_pbe_d4_semilocal(method_ir)
+        runtime_functional = functional("PBE", spin=spin)
+        if SemilocalXCPrimitive(semilocal).semantic_payload() != (
+            SemilocalXCPrimitive(runtime_functional).semantic_payload()
+        ):
+            raise RuntimeError(
+                "PBE-D4 MethodIR disagrees with its native PBE composition"
+            )
+        return method_ir, runtime_functional
+
     semilocal = _native_semilocal(method_ir)
 
     # Pure LDA/PBE selectors retain the independent catalog projection gate.
@@ -234,7 +277,14 @@ def resolve_ks_options(method: typing.Any, options: typing.Any = None) -> typing
     composition = options.composition or options._method_ir
     if composition is not None:
         method_ir = composition
-        selected = _native_semilocal(method_ir)
+        if method == "pbe-d4-rks":
+            if method_ir.identity != named_ir.identity:
+                raise NotImplementedError(
+                    "public PBE-D4 requires the pinned named MethodIR without parameter overrides"
+                )
+            selected = _native_pbe_d4_semilocal(method_ir)
+        else:
+            selected = _native_semilocal(method_ir)
         # The native selector chooses only the ingredient/spin family; all
         # scientific coefficients remain explicit in the supplied MethodIR.
         if (
@@ -245,7 +295,8 @@ def resolve_ks_options(method: typing.Any, options: typing.Any = None) -> typing
             raise NotImplementedError(
                 "KS composition/spin disagrees with native family selector"
             )
-        ks_coefficients(method_ir)
+        if method != "pbe-d4-rks":
+            ks_coefficients(method_ir)
         # Preserve the independent catalog projection's declaration order and
         # identity when options have already been resolved.
         resolved = selected if options.functional is None else options.functional
@@ -277,6 +328,10 @@ def resolve_ks_options(method: typing.Any, options: typing.Any = None) -> typing
                     "r2SCAN grid accuracy profiles require an explicit GridSpec"
                 )
             grid = GridSpec()
+        elif method == "pbe-d4-rks":
+            grid = GridPolicy(options.grid_accuracy).resolve(
+                "pbe-rks", derivative_order=0
+            )
         elif ks_coefficients(method_ir)[2] != 0.0:
             raise NotImplementedError(
                 "global-hybrid grid policy requires an explicit GridSpec"
