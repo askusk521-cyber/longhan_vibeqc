@@ -184,8 +184,12 @@ vibeqc_status try_cuda_density_fitting_final_rhf_jk(CudaDensityFittingJkPlan* pl
   // Keep the final-state ablation independent of the seed control.
   const bool packed = plan && plan->value_storage.pairs == DfPairStorage::SymmetricLower &&
                       plan->integral_source && plan->packed_raw;
+  const bool source_dense_resident =
+      plan && plan->integral_source && !packed && plan->resident_raw_valid &&
+      plan->row_tile == plan->nbf && plan->auxiliary_tile == plan->naux;
   if ((policy && std::string(policy) == "dense") || !plan || plan->batch_size != 1 ||
-      plan->streamed || (plan->integral_source && !packed) || plan->row_tile != plan->nbf ||
+      plan->streamed || (plan->integral_source && !packed && !source_dense_resident) ||
+      plan->row_tile != plan->nbf ||
       (!packed && plan->auxiliary_tile != plan->naux) || plan->nbf < 2)
     return VIBEQC_STATUS_SUCCESS;
   auto* state = static_cast<PersistentScfState*>(plan->persistent_scf_state);

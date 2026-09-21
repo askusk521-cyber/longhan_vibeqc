@@ -16,10 +16,13 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 try:
     from benchmarks._retention import raw_output_path
@@ -123,7 +126,9 @@ def validate_metric_response_work(counters: Mapping[str, int], naux: int) -> int
     observed_bytes = counters.get("metric_derivative_weight_bytes")
     if observed is None and observed_bytes is not None:
         if type(observed_bytes) is not int or observed_bytes % 8:
-            raise RuntimeError("metric response weight bytes are not integral FP64 work")
+            raise RuntimeError(
+                "metric response weight bytes are not integral FP64 work"
+            )
         observed = observed_bytes // 8
     if observed != expected:
         raise RuntimeError(
@@ -471,6 +476,7 @@ def main() -> None:
                             staging == "pinned-panels"
                             and not response["source_backed"]
                             and not counters.get("response_borrowed_jk_bytes", 0)
+                            and not counters.get("response_borrowed_whitened_bytes", 0)
                         ):
                             raise RuntimeError(
                                 "selected raw panel staging did not execute"
@@ -533,12 +539,30 @@ def main() -> None:
                             "response used an unexpected raw value provider"
                         )
                     slices, remainder = divmod(counters.get(byte_key, 0), n * n * 8)
-                    borrowed_bytes = counters.get("response_borrowed_jk_bytes", 0)
+                    borrowed_jk_bytes = counters.get("response_borrowed_jk_bytes", 0)
+                    borrowed_whitened_bytes = counters.get(
+                        "response_borrowed_whitened_bytes", 0
+                    )
+                    if borrowed_jk_bytes and borrowed_whitened_bytes:
+                        raise RuntimeError(
+                            "response published multiple borrowed value owners"
+                        )
+                    borrowed_bytes = borrowed_jk_bytes or borrowed_whitened_bytes
                     if remainder or (slices == 0 and not borrowed_bytes):
                         raise RuntimeError("invalid raw response byte count")
                     panels = counters["response_auxiliary_blocks"]
                     if borrowed_bytes:
-                        tile = counters["response_resident_auxiliary_tile"]
+                        # A full-rank whitened owner is one N^2*Naux tensor;
+                        # the older J/K scratch owner is three such tensors.
+                        # Both are resident response owners, but the former
+                        # need not publish a resident auxiliary tile because
+                        # its panel consumer is shell-aligned.
+                        expected_borrowed_bytes = (
+                            n * n * a * 8
+                            if borrowed_whitened_bytes
+                            else 3 * n * n * a * 8
+                        )
+                        tile = counters.get("response_resident_auxiliary_tile", 0)
                         # A borrowed response may use an already resident raw
                         # owner (zero H2D slices) or stage the complete host
                         # tensor once. Both are resident paths; only the
@@ -550,7 +574,7 @@ def main() -> None:
                             slices == a and counters.get("raw_value_bulk_uploads") == 1
                         )
                         if (
-                            borrowed_bytes != 3 * n * n * a * 8
+                            borrowed_bytes != expected_borrowed_bytes
                             or not (resident_raw_owner or resident_raw_upload)
                             or counters.get("raw_panel_host_gather_elements", 0)
                             or (
@@ -573,16 +597,34 @@ def main() -> None:
                             raise RuntimeError(
                                 "raw response reads disagree with panel reuse"
                             )
-                    panel_lower_bound = (a + tile - 1) // tile
-                    if not 1 <= tile <= a or not panel_lower_bound <= panels <= a:
-                        raise RuntimeError(
-                            "invalid response consumer panel count: "
-                            f"{panels} not in [{panel_lower_bound}, {a}]"
-                        )
+                    if borrowed_bytes:
+                        # Some resident-whitened traces omit a tile because
+                        # the shell-aligned panel width is not a public plan
+                        # field. The sentinel still enforces the shape-only
+                        # [1, Naux] panel bound; use the tighter tile bound
+                        # whenever the trace publishes one.
+                        if not 1 <= panels <= a:
+                            raise RuntimeError(
+                                "invalid resident response panel count: "
+                                f"{panels} not in [1, {a}]"
+                            )
+                        panel_lower_bound = (a + tile - 1) // tile if tile else 1
+                        if tile and panels < panel_lower_bound:
+                            raise RuntimeError(
+                                "resident response panel count is below its tile bound"
+                            )
+                    else:
+                        panel_lower_bound = (a + tile - 1) // tile
+                        if not 1 <= tile <= a or not panel_lower_bound <= panels <= a:
+                            raise RuntimeError(
+                                "invalid response consumer panel count: "
+                                f"{panels} not in [{panel_lower_bound}, {a}]"
+                            )
                     sample["response_plans"].append(
                         {
                             "source_backed": source_backed,
-                            "borrowed_jk_bytes": borrowed_bytes,
+                            "borrowed_jk_bytes": borrowed_jk_bytes,
+                            "borrowed_whitened_bytes": borrowed_whitened_bytes,
                             "auxiliary_weight_tile": tile,
                             "auxiliary_blocks": panels,
                             "raw_value_slices": slices,
