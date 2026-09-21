@@ -1,0 +1,125 @@
+{
+  "schema": "vibeqc.issue206.completion",
+  "version": 1,
+  "status": "progress-audit-not-closure",
+  "hardware": {
+    "device": "NVIDIA GeForce RTX 5090",
+    "cuda": "12.9.1",
+    "compute_capability": "sm_120",
+    "slurm_required": true
+  },
+  "native_identity": {
+    "source_identity": "47d4c417aaa8f3ecaf61e62d96f9c0c54b5900cb20d99938abccac764d68dff3",
+    "library_sha256": "8d40c060e65dd0f3bb78209149e91de7da2b68f85ed16d349c58650b0365ad65"
+  },
+  "artifact_root": "/home/lhshen/vibeqc-206-run/.artifacts/issue206-completion",
+  "df_endpoint_matrix": [
+    {
+      "ao": 96,
+      "batch": 1,
+      "vibeqc_warm_median_s": 0.04328346252441406,
+      "gpu4pyscf_warm_median_s": 0.25243252888321877,
+      "ordinary_speedup": 5.832,
+      "max_energy_error_hartree": 3.581135388230905e-12,
+      "max_force_error_hartree_per_bohr": 3.302393081217047e-12,
+      "gate": true,
+      "artifact": "df-96-b1-current/96ao-b1.json"
+    },
+    {
+      "ao": 96,
+      "batch": 4,
+      "vibeqc_warm_median_s": 0.17153127677738667,
+      "gpu4pyscf_warm_median_s": 1.0198388863354921,
+      "ordinary_speedup": 5.945,
+      "max_energy_error_hartree": 4.661160346586257e-12,
+      "max_force_error_hartree_per_bohr": 3.2931157800675237e-12,
+      "gate": true,
+      "artifact": "df-96-b4-current/96ao-b4.json"
+    },
+    {
+      "ao": 192,
+      "batch": 1,
+      "vibeqc_warm_median_s": 0.10215847752988338,
+      "gpu4pyscf_warm_median_s": 0.32750379852950573,
+      "ordinary_speedup": 3.206,
+      "max_energy_error_hartree": 1.0459189070388675e-11,
+      "max_force_error_hartree_per_bohr": 3.204769782882977e-12,
+      "gate": true,
+      "artifact": "df-192-b1-current/192ao-b1.json"
+    },
+    {
+      "ao": 192,
+      "batch": 4,
+      "vibeqc_warm_median_s": 0.5510877929627895,
+      "gpu4pyscf_warm_median_s": 1.3121444080024958,
+      "ordinary_speedup": 2.381,
+      "max_energy_error_hartree": 1.1254996934439987e-11,
+      "max_force_error_hartree_per_bohr": 3.948397164776907e-12,
+      "gate": true,
+      "artifact": "df-192-b4-current/192ao-b4.json"
+    },
+    {
+      "ao": 384,
+      "batch": 1,
+      "vibeqc_warm_median_s": 0.4370651673525572,
+      "gpu4pyscf_warm_median_s": 0.5852096490561962,
+      "ordinary_speedup": 1.339,
+      "max_energy_error_hartree": 9.549694368615746e-12,
+      "max_force_error_hartree_per_bohr": 2.7471358521324873e-12,
+      "gate": true,
+      "artifact": "compare-384-df-current.json"
+    },
+    {
+      "ao": 768,
+      "batch": 1,
+      "vibeqc_warm_median_s": 2.940167933702469,
+      "gpu4pyscf_warm_median_s": 2.3839077446609735,
+      "ordinary_speedup": 0.811,
+      "max_energy_error_hartree": 1.5006662579253316e-11,
+      "max_force_error_hartree_per_bohr": 3.2795988147427124e-12,
+      "gate": true,
+      "artifact": "compare-768-df-current.json"
+    }
+  ],
+  "structural_controls": {
+    "resident_768": "resident-768.json",
+    "explicit_fallback_192": "fallback-192.json",
+    "failed_or_inconclusive_low_memory": [
+      {
+        "case": "384-AO automatic streamed response",
+        "budget_bytes": 536870912,
+        "result": "cold/prime completed; warm force exceeded the finite 30-minute allocation before a complete response trace",
+        "artifact": "timeline-384-current-constrained-512m/result.json"
+      },
+      {
+        "case": "384-AO response override",
+        "budget_bytes": 1048576,
+        "result": "out_of_memory during cold preparation",
+        "artifact": "timeline-384-current-constrained-1m/result.json"
+      },
+      {
+        "case": "384-AO explicit panel with 16 MiB response budget",
+        "budget_bytes": 16777216,
+        "result": "completed as resident-whitened; resident sentinel correctly rejected a fallback expectation",
+        "artifact": "timeline-384-current-constrained-16m-panel/result.json"
+      }
+    ]
+  },
+  "direct_force_floor": {
+    "gate": true,
+    "repeats": 7,
+    "artifact": "direct-current-floor/summary.json",
+    "artifact_sha256": "5f5bced0e6ff8964e737b37956ff7687aada7a6721bd6321dd1935c0408bce04"
+  },
+  "artifact_hashes": {
+    "compare-768-df-current.json": "05d0d8788bc2d78ada5766aac0f5014617019d455f078e977675af7a668d4372",
+    "timeline-768-current-resident/result.json": "7160f8b33b08cbf978d31a5eec4bbe0f7562b5d95eeabc8dc1f668e59779c653",
+    "timeline-192-current-explicit-host-fallback-32m/result.json": "b163be21253b811333f2937d59fdd8466ce02c17e53efae5e2616c033302f00a"
+  },
+  "identity_exclusions": [
+    {
+      "records": ["practical-water-current-7.json", "practical-oh-current-7.json"],
+      "reason": "their native library/source identity is ac87fd60/e5f0c5fa, not the current 8d40c060/47d4c417 identity"
+    }
+  ]
+}
