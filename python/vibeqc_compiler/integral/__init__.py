@@ -110,6 +110,7 @@ from .ir_serialization import (
     integral_from_payload,
     integral_to_payload,
 )
+from .precision import generated_fock_precision_schedule
 from .production_cost import production_compile_cost, stable_aot_shard_slot
 from .production_selection import KernelSelection
 from .rys import (
@@ -324,6 +325,7 @@ __all__ = [
     "evaluate_gfn2_sdq_primitive",
     "evaluate_ppps_rys_component",
     "evaluate_rys_component",
+    "generated_fock_precision_schedule",
     "integral_cache_key",
     "integral_from_payload",
     "integral_specialization_diagnostics",
