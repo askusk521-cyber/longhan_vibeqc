@@ -5561,6 +5561,10 @@ def test_autotune_candidate_artifact_includes_static_model(
     assert report["artifacts"]["schedule_objects"] == {trial.key: None}
     assert report["search"] == {
         "schedule_kinds": [trial.schedule.kind.value],
+        "bounded_trial_count": 1,
+        "execution_dedup_enabled": True,
+        "execution_deduplicated_count": 0,
+        "execution_deduplicated": [],
         "candidate_limit_per_class": None,
         "candidate_limit_strategy": None,
         "trial_count": 1,
