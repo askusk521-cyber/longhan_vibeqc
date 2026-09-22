@@ -97,3 +97,46 @@ def test_host_fallback_rejects_unexecuted_attribution_probes(
     with pytest.raises(RuntimeError, match="fallback"):
         timeline.validate_host_fallback_probes(upload, scatter)
     timeline.validate_host_fallback_probes("", "")
+
+
+@pytest.mark.parametrize(
+    "malformed", ["batch", "atoms", "coordinates", "scalar", "complex", "nan"]
+)
+def test_endpoint_comparison_rejects_incomplete_or_nonphysical_arrays(
+    malformed: str,
+) -> None:
+    reference = {
+        "energies_hartree": np.array([-1.0, -1.0]),
+        "forces_hartree_per_bohr": np.zeros((2, 2, 3)),
+    }
+    candidate = {key: value.copy() for key, value in reference.items()}
+    if malformed == "batch":
+        candidate = {key: value[:1] for key, value in candidate.items()}
+    elif malformed == "atoms":
+        candidate["forces_hartree_per_bohr"] = np.zeros((2, 1, 3))
+    elif malformed == "coordinates":
+        candidate["forces_hartree_per_bohr"] = np.zeros((2, 2, 1))
+    elif malformed == "scalar":
+        candidate["energies_hartree"] = np.array(-1.0)
+    elif malformed == "complex":
+        candidate["energies_hartree"] = candidate["energies_hartree"].astype(complex)
+    else:
+        candidate["forces_hartree_per_bohr"][0, 0, 0] = np.nan
+    with pytest.raises((ValueError, TypeError), match="endpoint"):
+        runner._paired_errors(candidate, reference)
+
+
+def test_endpoint_comparison_preserves_complete_numerical_errors() -> None:
+    reference = {
+        "energies_hartree": [-1.0, -2.0],
+        "forces_hartree_per_bohr": np.zeros((2, 2, 3)),
+    }
+    candidate = {
+        "energies_hartree": [-1.25, -2.0],
+        "forces_hartree_per_bohr": np.zeros((2, 2, 3)),
+    }
+    candidate["forces_hartree_per_bohr"][1, 1, 2] = -0.5
+    assert runner._paired_errors(candidate, reference) == {
+        "maximum_energy_error_hartree": 0.25,
+        "maximum_force_error_hartree_per_bohr": 0.5,
+    }

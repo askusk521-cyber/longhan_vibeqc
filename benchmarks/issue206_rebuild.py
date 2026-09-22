@@ -151,22 +151,39 @@ def _reset_stock(engines: Any, systems: Any, coordinates: Any) -> None:
 def _paired_errors(left: dict[str, Any], right: dict[str, Any]) -> dict[str, float]:
     """Return complete endpoint errors without selecting a favorable repeat."""
 
-    energy = float(
-        np.max(
-            np.abs(
-                np.asarray(left["energies_hartree"])
-                - np.asarray(right["energies_hartree"])
+    def arrays(sample: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            energy = np.asarray(sample["energies_hartree"])
+            force = np.asarray(sample["forces_hartree_per_bohr"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("malformed endpoint result arrays") from error
+        if any(value.dtype.kind not in "iuf" for value in (energy, force)):
+            raise TypeError("endpoint arrays must contain real numeric values")
+        if energy.ndim != 1 or not energy.size:
+            raise ValueError("endpoint energies must be a nonempty batch vector")
+        if (
+            force.ndim != 3
+            or force.shape[0] != energy.size
+            or force.shape[1] == 0
+            or force.shape[2] != 3
+        ):
+            raise ValueError(
+                "endpoint forces must have matching batch-by-atom-by-3 shape"
             )
+        energy = energy.astype(np.float64, copy=False)
+        force = force.astype(np.float64, copy=False)
+        if not np.isfinite(energy).all() or not np.isfinite(force).all():
+            raise ValueError("endpoint arrays must contain finite values")
+        return energy, force
+
+    left_energy, left_force = arrays(left)
+    right_energy, right_force = arrays(right)
+    if left_energy.shape != right_energy.shape or left_force.shape != right_force.shape:
+        raise ValueError(
+            "paired endpoint shapes differ; broadcasting is not qualification"
         )
-    )
-    force = float(
-        np.max(
-            np.abs(
-                np.asarray(left["forces_hartree_per_bohr"])
-                - np.asarray(right["forces_hartree_per_bohr"])
-            )
-        )
-    )
+    energy = float(np.max(np.abs(left_energy - right_energy)))
+    force = float(np.max(np.abs(left_force - right_force)))
     return {
         "maximum_energy_error_hartree": energy,
         "maximum_force_error_hartree_per_bohr": force,
