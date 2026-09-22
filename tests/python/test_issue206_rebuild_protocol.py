@@ -131,6 +131,7 @@ def test_endpoint_comparison_rejects_incomplete_or_nonphysical_arrays(
 
 
 def test_endpoint_comparison_preserves_complete_numerical_errors() -> None:
+    """Retain maxima from different batch items and the last force coordinate."""
     reference = {
         "energies_hartree": [-1.0, -2.0],
         "forces_hartree_per_bohr": np.zeros((2, 2, 3)),

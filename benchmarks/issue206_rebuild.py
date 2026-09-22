@@ -401,6 +401,7 @@ def main() -> None:
     def paired(
         left: list[dict[str, Any]], right: list[dict[str, Any]]
     ) -> list[dict[str, float]]:
+        """Validate every replay pair, rejecting missing samples on either side."""
         return [_paired_errors(a, b) for a, b in zip(left, right, strict=True)]
 
     # Cold construction can select a different source/owner from warm replay.
