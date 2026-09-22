@@ -36,6 +36,7 @@ for import_root in (PYTHON_ROOT, ROOT):
         sys.path.insert(0, str(import_root))
 
 from benchmarks._cases import benchmark_cases
+from benchmarks._retention import raw_output_path
 from benchmarks.compare_gpu4pyscf_batch import (
     GpuCycleTracker,
     convergence_payload,
@@ -257,7 +258,7 @@ def main() -> None:
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--orbital-basis-file", type=Path)
     parser.add_argument("--auxiliary-basis-file", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=raw_output_path, required=True)
     parser.add_argument("--maximum-energy-error", type=float, default=3.0e-11)
     parser.add_argument("--maximum-force-error", type=float, default=3.0e-11)
     args = parser.parse_args()

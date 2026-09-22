@@ -16,6 +16,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+try:
+    from benchmarks._retention import raw_output_path
+except ModuleNotFoundError:
+    from _retention import raw_output_path
+
 BYTES_PER_DOUBLE = 8
 POLICIES = ("auto", "resident", "streamed", "fallback")
 
@@ -328,7 +333,7 @@ def main() -> None:
     parser.add_argument("--max-h2d-bytes", type=int)
     parser.add_argument("--max-d2h-bytes", type=int)
     parser.add_argument("--max-transformed-tile-productions", type=int)
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("--output", type=raw_output_path)
     args = parser.parse_args()
     for name in (
         "max_h2d_bytes",
