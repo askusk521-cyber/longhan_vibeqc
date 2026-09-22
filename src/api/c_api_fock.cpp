@@ -1124,6 +1124,10 @@ extern "C" vibeqc_status vibeqc_uhf_response_resident_create(
     owner->beta_offset = alpha_dim;
     owner->allocation_bytes = bytes;
     resident_cuda(cudaSetDevice(owner->device_id));
+    // Staging must outlive the inner catch: any later upload or sync may fail
+    // while earlier asynchronous copies still borrow these host buffers.
+    std::vector<double> alpha_column_major(matrix), beta_column_major(matrix);
+    std::vector<double> eoa(oa * oa, 0.0), eva(va * va, 0.0), eob(ob * ob, 0.0), evb(vb * vb, 0.0);
     resident_blas(cublasCreate(&owner->blas));
     try {
       resident_blas(cublasSetStream(owner->blas, owner->stream));
@@ -1164,14 +1168,11 @@ extern "C" vibeqc_status vibeqc_uhf_response_resident_create(
       cursor += beta_dim;
       owner->numerical_error = reinterpret_cast<int*>(cursor);
 
-      std::vector<double> alpha_column_major(matrix), beta_column_major(matrix);
       for (std::size_t row = 0; row < n; ++row)
         for (std::size_t column = 0; column < n; ++column) {
           alpha_column_major[column * n + row] = coefficients_alpha[row * n + column];
           beta_column_major[column * n + row] = coefficients_beta[row * n + column];
         }
-      std::vector<double> eoa(oa * oa, 0.0), eva(va * va, 0.0), eob(ob * ob, 0.0),
-          evb(vb * vb, 0.0);
       for (std::size_t i = 0; i < oa; ++i) eoa[i * oa + i] = orbital_energies_alpha[i];
       for (std::size_t a = 0; a < va; ++a) eva[a * va + a] = orbital_energies_alpha[oa + a];
       for (std::size_t i = 0; i < ob; ++i) eob[i * ob + i] = orbital_energies_beta[i];
