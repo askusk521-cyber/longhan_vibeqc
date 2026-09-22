@@ -194,8 +194,11 @@ def validate_response_record(
             "streamed response sentinel selected a different route: "
             f"{policy['storage']}"
         )
-    if expected_policy == "fallback" and policy["residency"] == "resident":
-        raise RuntimeError("fallback response sentinel selected a resident route")
+    if expected_policy == "fallback" and policy["residency"] != "fallback":
+        raise RuntimeError(
+            "fallback response sentinel selected a different route: "
+            f"{policy['storage']}"
+        )
 
     if expected_policy == "resident":
         if raw_gather_elements:

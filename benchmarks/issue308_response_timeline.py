@@ -118,6 +118,14 @@ def validate_three_center_response_work(
     }
 
 
+def validate_host_fallback_probes(upload: str, scatter: str) -> None:
+    """Host fallback has no device upload/scatter attribution probe owner."""
+    if upload or scatter:
+        raise RuntimeError(
+            "host fallback cannot qualify requested device attribution probes"
+        )
+
+
 def validate_metric_response_work(counters: Mapping[str, int], naux: int) -> int:
     """Validate metric derivative work from element or exact FP64-byte counts."""
 
@@ -491,6 +499,7 @@ def main() -> None:
                         and host_fallback_reuse
                         and not counters.get("response_auxiliary_blocks")
                     ):
+                        validate_host_fallback_probes(probe, scatter_probe)
                         if host_fallback_reuse % (n * n * 8):
                             raise RuntimeError(
                                 "host fallback raw reuse is not integral N^2 work"

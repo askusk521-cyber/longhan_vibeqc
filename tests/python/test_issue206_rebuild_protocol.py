@@ -63,3 +63,37 @@ def test_nonconverged_reference_is_rejected_before_gradient(
     with pytest.raises(RuntimeError, match="converg"):
         runner._stock_sample([engine], [np.eye(2)], SimpleNamespace(asnumpy=np.asarray))
     assert "gradient" not in events
+
+
+def test_streamed_route_does_not_satisfy_explicit_fallback() -> None:
+    from benchmarks.issue206_resident_sentinel import validate_response_record
+
+    record = {
+        "operation": "force_response",
+        "nbf": 4,
+        "naux": 5,
+        "source_backed": True,
+        "counters": {},
+        "tiles": [],
+    }
+    with pytest.raises(RuntimeError, match="fallback"):
+        validate_response_record(record, expected_policy="fallback")
+    assert (
+        validate_response_record(record, expected_policy="streamed")["policy"][
+            "residency"
+        ]
+        == "streamed"
+    )
+
+
+@pytest.mark.parametrize(
+    "upload,scatter", [("drain", ""), ("packed", ""), ("", "sharded")]
+)
+def test_host_fallback_rejects_unexecuted_attribution_probes(
+    upload: str, scatter: str
+) -> None:
+    from benchmarks import issue308_response_timeline as timeline
+
+    with pytest.raises(RuntimeError, match="fallback"):
+        timeline.validate_host_fallback_probes(upload, scatter)
+    timeline.validate_host_fallback_probes("", "")
