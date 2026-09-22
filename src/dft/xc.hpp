@@ -46,6 +46,27 @@ struct SpinXcIntegral {
   std::size_t points{};
 };
 
+/** Fixed-model exact incremental PBE prototype for #237.
+ *
+ * anchor_density is the accepted reference state and delta_density is a signed
+ * AO-matrix increment. Linear grid features are contracted independently from
+ * D0 and delta-D, then added before any nonlinear invariant/functional
+ * evaluation. potential_difference is Vxc[D0+delta-D] - Vxc[D0], assembled
+ * from exact coefficient differences; no fxc linearization or local skipping
+ * is used.
+ */
+struct ExactIncrementalXcIntegral {
+  XcIntegral total;
+  double anchor_energy{};
+  double energy_difference{};
+  std::vector<double> potential_difference;
+};
+
+ExactIncrementalXcIntegral integrate_pbe_rks_incremental_exact(
+    const AoBasis& basis, const MolecularGrid& grid, const std::vector<double>& anchor_density,
+    const std::vector<double>& delta_density, std::size_t tile_points = 256,
+    double exchange_scale = 1.0, double correlation_scale = 1.0);
+
 /** Integrate unpolarized PBE for an RHF total AO density. */
 XcIntegral integrate_pbe_rks(const AoBasis& basis, const MolecularGrid& grid,
                              const std::vector<double>& density, std::size_t tile_points = 256,
@@ -84,9 +105,12 @@ SpinXcIntegral integrate_pbe_uks_scaled(const AoBasis& basis, const MolecularGri
                                         const std::vector<double>& beta_density,
                                         std::size_t tile_points, double exchange_scale,
                                         double correlation_scale);
-/** Generated B3-family GGA point result on the audited interior-v1 domain.
- * Full-/range-separated exact exchange remains owned by common Fock providers.
+/** Generated B3-family GGA point result.  B3LYP uses the production-tail-v1
+ * analytic endpoint continuation; CAM-B3LYP remains on the audited interior-v1
+ * domain. Full-/range-separated exact exchange stays with common Fock providers.
  */
+inline constexpr const char* kB3lypProductionTailPolicy =
+    "b3lyp-vwn-rpa-tail-v1/density-vacuum-1e-18";
 struct B3GgaPointValue {
   double energy{};
   double rho[2]{};

@@ -246,7 +246,6 @@ def _direct_cuda_source() -> typing.Any:
             "cuda/direct_queue_diagnostics.cu",
             "cuda/direct_native_cartesian.cuh",
             "cuda/direct_native_contraction.cuh",
-            "cuda/direct_native_dsss_gradient.cuh",
             "cuda/direct_native_eri_order2.cuh",
             "cuda/direct_native_eri_order3.cuh",
             "cuda/direct_native_eri_order4.cuh",
@@ -256,14 +255,10 @@ def _direct_cuda_source() -> typing.Any:
             "cuda/direct_native_order2_gradient.cuh",
             "cuda/direct_native_order2_shell.cuh",
             "cuda/direct_native_order3_gradient.cuh",
-            "cuda/direct_native_order456_gradient.cuh",
-            "cuda/direct_native_pair_high_order_gradient.cuh",
             "cuda/direct_native_pair_order2.cuh",
             "cuda/direct_native_pair_order2_gradient.cuh",
             "cuda/direct_native_pair_order3.cuh",
             "cuda/direct_native_pair_order3_gradient.cuh",
-            "cuda/direct_native_ppss_gradient.cuh",
-            "cuda/direct_native_psps_gradient.cuh",
             "cuda/direct_native_psss.cuh",
             "cuda/direct_native_shell_class.cuh",
             "cuda/direct_native_shell_pair_hermite.cuh",
@@ -1746,6 +1741,41 @@ def test_production_manifest_drives_generated_registry_and_shards(
         selection.schedule.algebra_placement == AlgebraPlacement.MATERIALIZED_CSE
         for selection in selections
     )
+    canonical_spd = {
+        "ssss",
+        "psss",
+        "psps",
+        "ppss",
+        "ppps",
+        "pppp",
+        "dsss",
+        "dsps",
+        "dspp",
+        "dsds",
+        "dpss",
+        "dpps",
+        "dppp",
+        "dpds",
+        "dpdp",
+        "ddss",
+        "ddps",
+        "ddpp",
+        "ddds",
+        "dddp",
+        "dddd",
+    }
+    generated_force = {
+        selection.spec.name
+        for selection in selections
+        if KernelConsumer.FORCE in selection.consumers
+    }
+    # psss force reuses the exact bounded scheduler; every other canonical
+    # s/p/d class has a production-selected generated force consumer.
+    assert (generated_force | {"psss"}) & canonical_spd == canonical_spd
+    direct_source = _direct_cuda_source()
+    assert "unexpected_tuned_spd_fallback_mask" in direct_source
+    assert "kCanonicalSpdShellClassMask" in direct_source
+    assert "aot_shell_class_selection_override_requested()" in direct_source
     shards = _partition_production_selections(selections, shard_count=8)
     shard_by_name = {
         selection.spec.name: shard_index
@@ -2050,10 +2080,18 @@ def test_generated_one_electron_derivatives_are_the_production_default() -> None
     assert 'std::getenv("VIBEQC_ONE_ELECTRON_DERIVATIVES")' in selection
     assert "selection == nullptr" in selection
     assert 'std::strcmp(selection, "generated") == 0' in selection
+    assert 'std::strcmp(selection, "reference") == 0' in selection
+    assert 'std::strcmp(selection, "native") == 0' in selection
+    assert 'std::strcmp(selection, "tensor") == 0' in selection
+    assert "silently changing scientific owner" in selection
+    assert selection.count("return true;") >= 2
     assert 'std::getenv("VIBEQC_ONE_ELECTRON_DERIVATIVE_MAPPING")' in selection
-    assert "if (selection == nullptr) return 3U;" in selection
+    assert (
+        "if (selection == nullptr) return NucleusCooperativeSchedule::schedule_code;"
+        in selection
+    )
     assert 'std::strcmp(selection, "nucleus_cooperative") == 0' in selection
-    assert "return 3U;" in selection
+    assert "return NucleusCooperativeSchedule::schedule_code;" in selection
 
 
 def test_batched_finalization_reuses_each_converged_raw_fock() -> None:
@@ -2234,10 +2272,24 @@ def test_fixed_generated_task_arena_has_a_memory_admission_limit() -> None:
     """Route large grid-addressable buckets before a multi-GiB allocation."""
 
     source = _direct_cuda_source()
-    assert "kFixedGeneratedTaskArenaMaximumBytes" in source
+    assert "direct_schedule.fixed_topology.arena_maximum_bytes" in source
+    assert "direct_jk_bounded_streaming_task_capacity_limit" in source
+    assert "resolve_direct_jk_schedule_policy" in source
     assert "direct_task_layout.exact_tile_count >" in source
     assert "sizeof(GeneratedShellTask)" in source
     assert "requested_bounded_direct_streaming = true" in source
+
+
+def test_direct_task_resource_domains_remain_separate() -> None:
+    """Do not reuse fixed-topology storage to size bounded streaming pages."""
+
+    source = (REPOSITORY_ROOT / "src/scf/cuda/rhf_policy.cpp").read_text()
+    begin = source.index("direct_jk_bounded_streaming_task_capacity_limit")
+    end = source.index("bool reuse_converged_fock_requested", begin)
+    capacity_source = source[begin:end]
+    assert "policy.fixed_topology" not in capacity_source
+    assert "policy.bounded_streaming.task_capacity_ceiling" in capacity_source
+    assert "policy.bounded_streaming.arena_maximum_bytes" in capacity_source
 
 
 def test_bounded_force_keeps_fock_only_classes_out_of_force_dispatch() -> None:
@@ -2357,6 +2409,49 @@ def test_ssss_force_retires_handwritten_math_and_selector() -> None:
     assert "const std::uint64_t ssss_shell_class_mask" in driver
     assert "~ssss_shell_class_mask" in driver
     assert "~explicit_generated_force_shell_class_mask" in driver
+
+
+def test_order2_force_codegen_emits_only_independent_gradient_roots() -> None:
+    """Keep PSPS/PPSS/DSSS native schedulers backed by force-only compiler roots."""
+
+    source = emit_low_order_weighted_header(inline_single_use=True)
+    names = ("psps_force", "ppss_force", "dsss_force")
+    for index, name in enumerate(names):
+        begin = source.index(f"IndependentGradient {name}(")
+        if index + 1 < len(names):
+            end = source.index(f"IndependentGradient {names[index + 1]}(", begin)
+        else:
+            end = source.index(
+                "}  // namespace vibeqc::scf::generated_weighted_eri", begin
+            )
+        function = source[begin:end]
+        assert "result.value" not in function
+        assert "result.center[3]" not in function
+        for center in range(3):
+            for axis in range(3):
+                assert f"result.center[{center}][{axis}]" in function
+
+
+def test_order2_force_retires_handwritten_gradient_bodies() -> None:
+    """Keep exact order-two Direct-HF force mathematics compiler-owned."""
+
+    for name in ("dsss", "ppss", "psps"):
+        assert not (
+            REPOSITORY_ROOT / f"src/scf/cuda/direct_native_{name}_gradient.cuh"
+        ).exists()
+
+    source = (REPOSITORY_ROOT / "src/scf/cuda/direct_force_order2.cuh").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "contracted_eri_cartesian_source_order2_generated_weighted_gradient" in source
+    )
+    for name in ("psps", "ppss", "dsss"):
+        assert f"generated_weighted_eri::{name}_force" in source
+        assert f"direct_native_{name}_gradient.cuh" not in source
+        assert f"contracted_eri_cartesian_source_{name}_weighted_gradient" not in source
+    assert "generated_weighted_eri::Geometry geometry;" in source
+    assert "generated_weighted_eri::Geometry geometry{};" not in source
 
 
 def test_bounded_psss_resident_path_is_allocated_and_disjoint_from_page_fallback() -> (

@@ -6,9 +6,58 @@
 #include <optional>
 
 #include "runtime/cuda_provider.hpp"
+#include "runtime/cuda_target_info.hpp"
 #include "vibeqc/vibeqc.h"
 
 namespace vibeqc::scf::cuda_policy {
+
+/**
+ * Explicit Direct-J/K tuning evidence.
+ *
+ * These defaults preserve the previously qualified production choices, but
+ * they are profile inputs rather than CUDA semantics. Autotuning/profile
+ * selection can provide another compatible record without changing kernels.
+ */
+struct DirectJkFixedTopologyTaskProfile {
+  std::size_t maximum_arena_bytes{std::size_t{1} << 30};
+};
+
+struct DirectJkBoundedStreamingTaskProfile {
+  std::size_t maximum_task_capacity{8U * 1024U * 1024U};
+  // The qualified 8M GeneratedShellTask page is 1.5 GiB at the current ABI.
+  std::size_t maximum_arena_bytes{std::size_t{3} << 29};
+};
+
+struct DirectJkTuningProfile {
+  DirectJkFixedTopologyTaskProfile fixed_topology{};
+  DirectJkBoundedStreamingTaskProfile bounded_streaming{};
+  std::size_t cuda_stack_limit_bytes{std::size_t{64} << 10};
+  unsigned maximum_persistent_quartet_warps_per_sm{8};
+};
+
+struct DirectJkFixedTopologyTaskPolicy {
+  std::size_t arena_maximum_bytes{};
+};
+
+struct DirectJkBoundedStreamingTaskPolicy {
+  std::size_t task_capacity_ceiling{};
+  std::size_t arena_maximum_bytes{};
+};
+
+/** Resource-legal Direct-J/K schedule resolved for one runtime target. */
+struct DirectJkSchedulePolicy {
+  DirectJkFixedTopologyTaskPolicy fixed_topology{};
+  DirectJkBoundedStreamingTaskPolicy bounded_streaming{};
+  std::size_t cuda_stack_limit_bytes{};
+  unsigned persistent_quartet_warps_per_sm{};
+};
+
+DirectJkSchedulePolicy resolve_direct_jk_schedule_policy(
+    const runtime::CudaTargetInfo& target,
+    DirectJkTuningProfile profile = DirectJkTuningProfile{}) noexcept;
+
+std::size_t direct_jk_bounded_streaming_task_capacity_limit(
+    const DirectJkSchedulePolicy& policy, std::size_t generated_task_bytes) noexcept;
 
 /**
  * IEEE-754 binary32 unit roundoff (2^-24). Published from the shared header so
@@ -120,6 +169,8 @@ bool bounded_direct_count_diagnostic_requested() noexcept;
 bool bounded_direct_aot_only_diagnostic_requested() noexcept;
 bool bounded_direct_fock_only_diagnostic_requested() noexcept;
 bool bounded_fock_class_timing_requested() noexcept;
+/** True when force AOT classes are explicitly narrowed for a diagnostic replay. */
+bool aot_shell_class_selection_override_requested() noexcept;
 bool direct_tile_validation_requested() noexcept;
 double converged_fock_reuse_density_rms(double density_tolerance) noexcept;
 bool force_density_product_screening_requested() noexcept;

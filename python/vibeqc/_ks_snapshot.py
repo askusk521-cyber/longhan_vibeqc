@@ -8,6 +8,7 @@ snapshots. Export is explicit and may transfer the final CUDA matrices.
 import ctypes as ct
 import threading
 import typing
+from dataclasses import replace
 from hashlib import sha256
 from types import MappingProxyType
 
@@ -17,7 +18,7 @@ from vibeqc_compiler.common.provenance import canonical_hash
 
 from . import _native
 from .batch import PreparedBatch
-from .ks import SCF_DOMAIN
+from .ks import native_xc_functional_code, scf_domain_for_method
 
 
 def _scf_xc_points(
@@ -185,7 +186,12 @@ class NativeKsSnapshot:
             )
             object.__setattr__(self, "_handle", handle.value)
             self.metadata = tuple(metadata)
-            if metadata[0] not in (1, 2, 3, 4, 5, 6, 7) or metadata[7] != 1:
+            method_name = self._batch._calculator._method_name
+            expected_domain_version = 2 if method_name.startswith("b3lyp-") else 1
+            if (
+                metadata[0] not in (1, 2, 3, 4, 5, 6, 7)
+                or metadata[7] != expected_domain_version
+            ):
                 raise NotImplementedError(
                     "unsupported native KS snapshot/domain version"
                 )
@@ -353,11 +359,33 @@ class NativeKsSnapshot:
             options is None
             or options.coefficients != self.coefficients
             or functional
-            != (2 if "tau" in options.functional.ingredients else options.ao_order)
+            != native_xc_functional_code(self._batch._calculator._method_name)
             or (options.method_ir.spin == "polarized") != (spins == 2)
         ):
             raise ValueError("native stationary composition mismatch")
-        self.method_ir, self.functional = options.method_ir, options.functional
+        full_method_ir = options.method_ir
+        method = self._batch._calculator._method_name
+        if method == "pbe-d4-rks":
+            from vibeqc_compiler.method import DispersionCorrectionPrimitive
+
+            electronic_primitives = tuple(
+                primitive
+                for primitive in full_method_ir.primitives
+                if not isinstance(primitive, DispersionCorrectionPrimitive)
+            )
+            if len(electronic_primitives) != 1:
+                raise ValueError(
+                    "PBE-D4 stationary projection requires one electronic primitive"
+                )
+            self.method_ir = replace(
+                full_method_ir,
+                identifier=f"{full_method_ir.identifier}/electronic",
+                primitives=electronic_primitives,
+            )
+            method = "pbe-rks"
+        else:
+            self.method_ir = full_method_ir
+        self.functional = options.functional
         if offset != len(self.values):
             raise ValueError("native KS snapshot wire length mismatch")
         if self.hamiltonian != "unbound" and not np.isclose(
@@ -394,7 +422,6 @@ class NativeKsSnapshot:
         ):
             raise ValueError("native stationary grid source mismatch")
         self.grid = grid
-        method = self._batch._calculator._method_name
         spec = self.functional
         composition_identity = (
             {"method_ir": self.method_ir.identity, "coefficients": self.coefficients}
@@ -408,7 +435,7 @@ class NativeKsSnapshot:
                 {
                     "native_owner": owner,
                     "functional": spec.identity,
-                    "scf_domain": SCF_DOMAIN,
+                    "scf_domain": scf_domain_for_method(method),
                     "grid": grid.identity,
                     **(
                         {"grid_provenance": dict(self.grid_provenance)}
@@ -441,7 +468,7 @@ class NativeKsSnapshot:
             functional_identity=spec.identity,
             # The derivative bridge consumes this exact SCF point model;
             # interior-v1 remains a separate diagnostic contract.
-            regularization_identity=scf_regularization_identity(),
+            regularization_identity=scf_regularization_identity(method),
             provider_identity=canonical_hash(
                 {
                     "provider": f"native-{self.backend}-exact-{'jk' if self.coefficients[2] else 'j'}-fp64",
@@ -480,11 +507,7 @@ class NativeKsSnapshot:
     ) -> typing.Any:
         """Return SCF-domain point energy and Cartesian first derivatives."""
         self.check_current()
-        expected = (
-            2
-            if "tau" in self.functional.ingredients
-            else int("sigma" in self.functional.ingredients)
-        )
+        expected = native_xc_functional_code(self._batch._calculator._method_name)
         if functional != expected:
             raise ValueError("XC point family disagrees with native composition")
         values = _scf_xc_points(

@@ -214,12 +214,17 @@ void verify_public_auto_policy(bool unrestricted) {
   const std::vector<vibeqc::scf::RhfBucketItem> fp64 = run_cached(cold_density);
   require(fp64.size() == 1 && fp64[0].status == VIBEQC_STATUS_SUCCESS && fp64[0].scf.converged,
           "public FP64 policy did not converge");
+  require(fp64[0].scf.precision.operator_work_counters_valid != 0U,
+          "CUDA FP64 work counters are not marked valid");
   require(fp64[0].scf.precision.requested_mode == VIBEQC_PRECISION_FP64 &&
               fp64[0].scf.precision.effective_bits == 64U &&
               !fp64[0].scf.precision.strict_refinement_applied &&
               fp64[0].scf.precision.refinement_iterations == 0U &&
-              fp64[0].scf.precision.mixed_precision_reserved_error == 0.0,
-          "explicit FP64 provenance is not honest");
+              fp64[0].scf.precision.mixed_precision_reserved_error == 0.0 &&
+              fp64[0].scf.precision.mixed_stage_fock_builds == 0U &&
+              fp64[0].scf.precision.mixed_admission_census == 0U &&
+              fp64[0].scf.precision.strict_stage_fock_builds >= 1U,
+          "explicit FP64 provenance/work counters are not honest");
   // Changing the policy on a live prepared bucket must rebuild instead of
   // replaying the FP64 plan.
   const std::vector<const std::vector<double>*> warm_density{&fp64[0].scf.density};
@@ -236,14 +241,23 @@ void verify_public_auto_policy(bool unrestricted) {
     // have continued the run: convergence is a target-operator statement.
     require(provenance.strict_refinement_applied, "mixed run skipped the FP64 refinement");
     require(provenance.refinement_iterations >= 1U, "mixed run reported no refinement iterations");
+    require(provenance.mixed_stage_fock_builds >= 1U,
+            "mixed run reported no mixed-stage operator applications");
+    require(provenance.strict_stage_fock_builds == provenance.refinement_iterations,
+            "mixed run strict-stage counter disagrees with target refinement");
+    require(provenance.mixed_admission_census > 0U,
+            "mixed run lost its certified per-item admission census");
     require(provenance.mixed_precision_fock_threshold > 0.0, "mixed run resolved no cutoff");
     require(provenance.mixed_precision_reserved_error > 0.0,
             "mixed run reported no reserved error budget");
   } else {
     require(provenance.effective_bits == 64U && !provenance.strict_refinement_applied &&
                 provenance.refinement_iterations == 0U &&
-                provenance.mixed_precision_reserved_error == 0.0,
-            "FP64 fallback provenance is not honest");
+                provenance.mixed_precision_reserved_error == 0.0 &&
+                provenance.mixed_stage_fock_builds == 0U &&
+                provenance.mixed_admission_census == 0U &&
+                provenance.strict_stage_fock_builds >= 1U,
+            "FP64 fallback provenance/work counters are not honest");
   }
   // The refinement must not change the converged observable: the auto solve
   // starts from the FP64 density, so the refined result must still agree.
@@ -293,19 +307,27 @@ void verify_per_item_auto_policy(bool unrestricted) {
           "per-item starting states are not distinguishable");
   const vibeqc::scf::PrecisionProvenance& cold_item = per_item[0].scf.precision;
   const vibeqc::scf::PrecisionProvenance& warm_item = per_item[1].scf.precision;
+  require(
+      cold_item.operator_work_counters_valid != 0U && warm_item.operator_work_counters_valid != 0U,
+      "per-item CUDA work counters are not marked valid");
   require(cold_item.requested_mode == VIBEQC_PRECISION_AUTO &&
               warm_item.requested_mode == VIBEQC_PRECISION_AUTO,
           "per-item provenance lost the requested policy");
   require(cold_item.effective_bits == 64U && !cold_item.strict_refinement_applied &&
               cold_item.refinement_iterations == 0U &&
               cold_item.mixed_precision_fock_threshold == 0.0 &&
-              cold_item.mixed_precision_reserved_error == 0.0,
-          "a cold item must keep the exact FP64 operator");
+              cold_item.mixed_precision_reserved_error == 0.0 &&
+              cold_item.mixed_stage_fock_builds == 0U && cold_item.mixed_admission_census == 0U &&
+              cold_item.strict_stage_fock_builds >= 1U,
+          "a cold item must keep and honestly count the exact FP64 operator");
   require(warm_item.effective_bits == 32U && warm_item.strict_refinement_applied &&
               warm_item.refinement_iterations >= 1U &&
               warm_item.mixed_precision_fock_threshold > 0.0 &&
-              warm_item.mixed_precision_reserved_error > 0.0,
-          "a warm item must use the mixed route and refine it in FP64");
+              warm_item.mixed_precision_reserved_error > 0.0 &&
+              warm_item.mixed_stage_fock_builds >= 1U &&
+              warm_item.strict_stage_fock_builds == warm_item.refinement_iterations &&
+              warm_item.mixed_admission_census > 0U,
+          "a warm item must count its mixed route and strict FP64 refinement");
   for (std::size_t index = 0; index < 2; ++index) {
     require(std::abs(per_item[index].scf.energy - reference[index].scf.energy) < 2.0e-8,
             "per-item auto energy diverged from FP64");
@@ -396,7 +418,7 @@ void verify_final_state_reuse(bool unrestricted, bool with_peer = false) {
   std::vector<const std::vector<double>*> resident_density(systems.size(), nullptr);
   for (std::size_t index = 0; index < systems.size(); ++index)
     resident_density[index] = &seeded[index].scf.density;
-  const std::vector<vibeqc::scf::RhfBucketItem> retained = run_cached(resident_density);
+  std::vector<vibeqc::scf::RhfBucketItem> retained = run_cached(resident_density);
   require(retained.size() == systems.size(), "force-ready replay changed bucket size");
   const auto retained_audit = final_state_audit();
   require(
@@ -420,6 +442,55 @@ void verify_final_state_reuse(bool unrestricted, bool with_peer = false) {
                                         options.density_tolerance),
             "force-ready replay did not qualify for retained-Fock reuse");
   }
+  // Provenance is value-based, not pointer-based: mutating the same host
+  // vector in place must revoke force-ready reuse even though the caller
+  // presents the identical std::vector object and shape.
+  std::vector<const std::vector<double>*> aliased_resident_density(systems.size(), nullptr);
+  for (std::size_t index = 0; index < systems.size(); ++index)
+    aliased_resident_density[index] = &retained[index].scf.density;
+  const auto aliased_baseline = run_cached(aliased_resident_density);
+  const auto aliased_baseline_audit = final_state_audit();
+  require(
+      aliased_baseline.size() == systems.size() &&
+          aliased_baseline_audit.route == vibeqc::scf::CudaDirectFinalStateRoute::scf_force_ready &&
+          aliased_baseline_audit.seed_provenance,
+      "same-pointer mutation fixture did not start from a force-ready resident state");
+  for (std::size_t index = 0; index < systems.size(); ++index) {
+    require(aliased_baseline[index].scf.density.size() == retained[index].scf.density.size(),
+            "same-pointer mutation fixture changed density shape");
+    std::copy(aliased_baseline[index].scf.density.begin(),
+              aliased_baseline[index].scf.density.end(), retained[index].scf.density.begin());
+  }
+  std::vector<double>& aliased_density = retained[0].scf.density;
+  require(aliased_resident_density[0] == &aliased_density,
+          "same-pointer mutation fixture lost its host object identity");
+  const std::size_t spin_matrix_size = aliased_density.size() / (unrestricted ? 2U : 1U);
+  const std::size_t nbf =
+      static_cast<std::size_t>(std::llround(std::sqrt(static_cast<double>(spin_matrix_size))));
+  require(nbf > 1 && nbf * nbf == spin_matrix_size,
+          "same-pointer mutation fixture has an invalid density shape");
+  const std::size_t offdiag_01 = 1;
+  const std::size_t offdiag_10 = nbf;
+  const double original_01 = aliased_density[offdiag_01];
+  const double original_10 = aliased_density[offdiag_10];
+  aliased_density[offdiag_01] =
+      std::nextafter(original_01, original_01 >= 0.0 ? original_01 + 1.0 : original_01 - 1.0);
+  aliased_density[offdiag_10] =
+      std::nextafter(original_10, original_10 >= 0.0 ? original_10 + 1.0 : original_10 - 1.0);
+  const auto same_pointer_mutation = run_cached(aliased_resident_density);
+  aliased_density[offdiag_01] = original_01;
+  aliased_density[offdiag_10] = original_10;
+  const auto same_pointer_mutation_audit = final_state_audit();
+  require(same_pointer_mutation.size() == systems.size() &&
+              same_pointer_mutation[0].status == VIBEQC_STATUS_SUCCESS &&
+              same_pointer_mutation[0].scf.converged &&
+              same_pointer_mutation_audit.route ==
+                  vibeqc::scf::CudaDirectFinalStateRoute::canonical_fallback &&
+              same_pointer_mutation_audit.fallback_reason ==
+                  vibeqc::scf::CudaDirectFinalStateFallbackReason::unproven_density_generation &&
+              !same_pointer_mutation_audit.seed_provenance,
+          "same-pointer density mutation incorrectly retained force-ready provenance");
+
   // A density from the previous geometry is not a reusable final-state token.
   // The same plan/topology is deliberately retained so this catches a stale
   // generation admitted only by shape/pointer/small-delta checks.

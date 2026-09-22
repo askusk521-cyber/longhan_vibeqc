@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -438,7 +439,23 @@ def _selections_from_rows(
             )
         fock_schedule_payload = row.get("fock_schedule")
         if fock_schedule_payload is None:
-            fock_schedule = None
+            if (
+                recurrence == "rys2"
+                and KernelConsumer.FOCK in consumers
+                and schedule.kind == ScheduleKind.THREAD_TASKS
+            ):
+                # The accepted low-order force path uses scalar Rys2, while
+                # its value consumer remains the compact subset/Wick mapping.
+                # Derive that companion through the same compiler scheduler
+                # instead of repeating an identical Fock table per class.
+                fock_schedule = build_fused_shell_plan(
+                    spec,
+                    consumers=(KernelConsumer.FOCK,),
+                    recurrence="subset_wick",
+                    target=target,
+                ).schedule
+            else:
+                fock_schedule = None
         else:
             if KernelConsumer.FOCK not in consumers:
                 raise ValueError(f"{name} fock_schedule requires a Fock consumer")
@@ -612,3 +629,14 @@ def load_production_fock_manifest(
         for selection in load_production_kernel_selections(path, architecture, profile)
         if KernelConsumer.FOCK in selection.consumers
     )
+
+
+def _profile_identifier(value: str) -> str:
+    """Return a stable C/CMake identifier for a profile or architecture."""
+
+    if re.fullmatch(r"sm_[0-9]+", value):
+        return value.replace("_", "")
+    identifier = re.sub(r"[^0-9A-Za-z]+", "_", value).strip("_").lower()
+    if not identifier:
+        raise ValueError("profile identifier cannot be empty")
+    return identifier

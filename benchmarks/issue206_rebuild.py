@@ -52,7 +52,9 @@ def _sync(cp: Any) -> None:
     cp.cuda.Stream.null.synchronize()
 
 
-def _coordinates(case, batch_size: int, displacement: float):
+def _coordinates(
+    case: Any, batch_size: int, displacement: float
+) -> tuple[Any, list[np.ndarray], list[np.ndarray]]:
     """Return fixed-topology original and displaced coordinate arrays."""
 
     systems = scaled_geometries(case.atoms, batch_size)
@@ -68,7 +70,7 @@ def _coordinates(case, batch_size: int, displacement: float):
     return systems, original, changed
 
 
-def _native_sample(batch, cp, coordinates=None):
+def _native_sample(batch: Any, cp: Any, coordinates: Any = None) -> dict[str, Any]:
     """Execute one synchronized native endpoint and serialize its result."""
 
     _sync(cp)
@@ -87,7 +89,14 @@ def _native_sample(batch, cp, coordinates=None):
     }
 
 
-def _stock_sample(engines, densities, cp):
+def _stock_sample(
+    engines: Any,
+    densities: Any,
+    cp: Any,
+    *,
+    systems: Any = None,
+    coordinates: Any = None,
+) -> dict[str, Any]:
     """Execute one synchronized GPU4PySCF endpoint from fixed density seeds."""
 
     trackers = [GpuCycleTracker() for _ in engines]
@@ -95,10 +104,15 @@ def _stock_sample(engines, densities, cp):
         engine.callback = tracker
     _sync(cp)
     started = time.perf_counter()
+    if coordinates is not None:
+        if systems is None:
+            raise ValueError("changed reference sample requires system identities")
+        _reset_stock(engines, systems, coordinates)
     energies = [
         engine.kernel(dm0=density.copy())
         for engine, density in zip(engines, densities, strict=True)
     ]
+    _require_converged_reference(engines)
     gradients = [engine.nuc_grad_method().kernel() for engine in engines]
     _sync(cp)
     return {
@@ -111,13 +125,22 @@ def _stock_sample(engines, densities, cp):
     }
 
 
-def _reset_stock(engines, systems, coordinates):
+def _require_converged_reference(engines: Any) -> None:
+    """A finite reference energy is not evidence of a stationary SCF state."""
+    if not all(bool(engine.converged) for engine in engines):
+        raise RuntimeError("reference SCF did not converge; endpoint evidence rejected")
+
+
+def _reset_stock(engines: Any, systems: Any, coordinates: Any) -> None:
     """Reset stock molecules outside the timed changed-geometry endpoint."""
 
     for engine, atoms, xyz in zip(engines, systems, coordinates, strict=True):
         engine.reset(
             engine.mol.set_geom_(
-                [(element, tuple(position)) for (element, _), position in zip(atoms, xyz, strict=True)],
+                [
+                    (element, tuple(position))
+                    for (element, _), position in zip(atoms, xyz, strict=True)
+                ],
                 unit="Bohr",
                 inplace=True,
             )
@@ -149,7 +172,7 @@ def _paired_errors(left: dict[str, Any], right: dict[str, Any]) -> dict[str, flo
     }
 
 
-def _case_inputs(args, case):
+def _case_inputs(args: Any, case: Any) -> tuple[Any, Any, Any, Any, dict[str, Any]]:
     """Resolve shared native/PySCF basis inputs before GPU package setup."""
 
     native_orbital, reference_orbital = case.vibeqc_basis, case.pyscf_basis
@@ -165,10 +188,25 @@ def _case_inputs(args, case):
             args.auxiliary_basis_file, case, role="auxiliary", compute_forces=True
         )
         overrides["auxiliary"] = native_auxiliary.to_payload()
-    return native_orbital, reference_orbital, native_auxiliary, reference_auxiliary, overrides
+    return (
+        native_orbital,
+        reference_orbital,
+        native_auxiliary,
+        reference_auxiliary,
+        overrides,
+    )
 
 
-def _stock_engines(case, systems, reference_orbital, reference_auxiliary, cp, scf, gto, gpu_uhf):
+def _stock_engines(
+    case: Any,
+    systems: Any,
+    reference_orbital: Any,
+    reference_auxiliary: Any,
+    cp: Any,
+    scf: Any,
+    gto: Any,
+    gpu_uhf: Any,
+) -> list[Any]:
     """Construct one GPU4PySCF engine per fixed-topology batch item."""
 
     engines = []
@@ -182,11 +220,7 @@ def _stock_engines(case, systems, reference_orbital, reference_auxiliary, cp, sc
             basis=reference_orbital,
             verbose=0,
         )
-        engine = (
-            gpu_uhf.UHF(molecule)
-            if case.method == "uhf"
-            else scf.RHF(molecule)
-        )
+        engine = gpu_uhf.UHF(molecule) if case.method == "uhf" else scf.RHF(molecule)
         engine = engine.density_fit(auxbasis=reference_auxiliary).to_gpu()
         engine.conv_tol = 1.0e-12
         engine.conv_tol_grad = 1.0e-10
@@ -244,7 +278,13 @@ def main() -> None:
     from vibeqc import Calculator
 
     case = cases[args.case]
-    native_orbital, reference_orbital, native_auxiliary, reference_auxiliary, overrides = _case_inputs(args, case)
+    (
+        native_orbital,
+        reference_orbital,
+        native_auxiliary,
+        reference_auxiliary,
+        overrides,
+    ) = _case_inputs(args, case)
     systems, original, changed = _coordinates(case, args.batch, args.displacement)
     serialized_original = [
         [
@@ -284,10 +324,14 @@ def main() -> None:
         native_cold = {
             "seconds": time.perf_counter() - started,
             "energies_hartree": cold_result.energies.tolist(),
-            "forces_hartree_per_bohr": [item.forces.tolist() for item in cold_result.items],
+            "forces_hartree_per_bohr": [
+                item.forces.tolist() for item in cold_result.items
+            ],
             "convergence": convergence_payload(cold_result),
         }
-        metric = [row.to_dict() for row in batch.last_density_fitting_metric_diagnostics()]
+        metric = [
+            row.to_dict() for row in batch.last_density_fitting_metric_diagnostics()
+        ]
         batch.set_warm_start_updates(False)
         _native_sample(batch, cp)
         for _ in range(args.repeats):
@@ -306,18 +350,23 @@ def main() -> None:
         case, systems, reference_orbital, reference_auxiliary, cp, scf, gto, gpu_uhf
     )
     ao_count = int(engines[0].mol.nao_nr())
-    naux_count = int(df.addons.make_auxmol(engines[0].mol, reference_auxiliary).nao_nr())
+    naux_count = int(
+        df.addons.make_auxmol(engines[0].mol, reference_auxiliary).nao_nr()
+    )
     started = time.perf_counter()
     cold_trackers = [GpuCycleTracker() for _ in engines]
     for engine, tracker in zip(engines, cold_trackers, strict=True):
         engine.callback = tracker
     cold_energies = [engine.kernel() for engine in engines]
+    _require_converged_reference(engines)
     cold_gradients = [engine.nuc_grad_method().kernel() for engine in engines]
     _sync(cp)
     stock_cold = {
         "seconds": time.perf_counter() - started,
         "energies_hartree": [float(value) for value in cold_energies],
-        "forces_hartree_per_bohr": [cp.asnumpy(-value).tolist() for value in cold_gradients],
+        "forces_hartree_per_bohr": [
+            cp.asnumpy(-value).tolist() for value in cold_gradients
+        ],
         "convergence": gpu_convergence_payload(engines, cold_trackers),
     }
     densities = [engine.make_rdm1().copy() for engine in engines]
@@ -327,10 +376,13 @@ def main() -> None:
     for _ in range(args.repeats):
         _reset_stock(engines, systems, original)
         _stock_sample(engines, densities, cp)
-        _reset_stock(engines, systems, changed)
-        stock_changed.append(_stock_sample(engines, densities, cp))
+        stock_changed.append(
+            _stock_sample(engines, densities, cp, systems=systems, coordinates=changed)
+        )
 
-    def paired(left, right):
+    def paired(
+        left: list[dict[str, Any]], right: list[dict[str, Any]]
+    ) -> list[dict[str, float]]:
         return [_paired_errors(a, b) for a, b in zip(left, right, strict=True)]
 
     warm_pairs = paired(native_warm, stock_warm)
@@ -343,7 +395,7 @@ def main() -> None:
             package_versions[package] = None
     payload = {
         "schema": "vibeqc.issue206.rebuild",
-        "version": 1,
+        "version": 2,
         "status": "pass"
         if all(
             pair["maximum_energy_error_hartree"] <= args.maximum_energy_error
@@ -366,7 +418,9 @@ def main() -> None:
             "batch_size": args.batch,
             "basis_representation": case.basis_representation,
             "basis_overrides": overrides,
-            "auxiliary_basis": native_auxiliary.name if args.auxiliary_basis_file else "same as orbital basis",
+            "auxiliary_basis": native_auxiliary.name
+            if args.auxiliary_basis_file
+            else "same as orbital basis",
             "geometries": serialized_original,
             "changed_displacement_bohr": args.displacement,
             "energy_tolerance": 1.0e-12,

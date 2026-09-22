@@ -52,3 +52,11 @@ library identity.
 The resident sentinel and timeline runner are exercised by the hardware-free
 tests `tests/python/test_issue206_resident_sentinel.py` and
 `tests/python/test_issue308_response_timeline.py`.
+
+## Rebuild protocol correction
+
+The retained rebuild records above use protocol version 1. That runner excluded
+the stock reference geometry reset from its changed-endpoint timer. Version 2
+includes that reset and rejects nonconverged reference solves before gradient
+execution. Historical raw records are unchanged and are not version-2 timing
+evidence. See the retained protocol-correction Agent Note.

@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "generated_direct_resident_psss_schedule.cuh"
 #include "integrals/ecp_cuda.hpp"
 #include "molecule/basis.hpp"
 #include "posthf/capacity.hpp"
@@ -111,6 +112,7 @@ using namespace cuda_execution;
 //   kExpandedConvergedFockReuseDensityRms = 2.0e-9
 //   kAutoMixedPrecisionErrorBudgetFraction = 6.25e-02
 //   kFloat32UnitRoundoff = 5.9604644775390625e-08
+using cuda_policy::aot_shell_class_selection_override_requested;
 using cuda_policy::bounded_direct_aot_only_diagnostic_requested;
 using cuda_policy::bounded_direct_count_diagnostic_requested;
 using cuda_policy::bounded_direct_fock_only_diagnostic_requested;
@@ -448,6 +450,18 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   plan.last_ppps_queue_profile.reset();
   plan.last_inactive_eigensolver_profile.reset();
 
+  cudaDeviceProp direct_device_properties{};
+  const cudaError_t direct_target_error =
+      cudaGetDeviceProperties(&direct_device_properties, device_id);
+  if (direct_target_error != cudaSuccess) {
+    fill_global_failure(outputs, cuda_status(direct_target_error));
+    return outputs;
+  }
+  const runtime::CudaTargetInfo direct_target =
+      runtime::cuda_target_info_from_properties(direct_device_properties);
+  const cuda_policy::DirectJkSchedulePolicy direct_schedule =
+      cuda_policy::resolve_direct_jk_schedule_policy(direct_target);
+
   const std::size_t nbf = host.nbf;
   const std::size_t direct_nbf = host.direct_nbf;
   const std::size_t spin_count = host.spin_count;
@@ -592,7 +606,7 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       direct_task_layout = {};
       total_shell_quartet_tiles = 0;
     } else if (direct_task_layout.exact_tile_count >
-               kFixedGeneratedTaskArenaMaximumBytes / sizeof(GeneratedShellTask)) {
+               direct_schedule.fixed_topology.arena_maximum_bytes / sizeof(GeneratedShellTask)) {
       // The uint32 grid limit is much larger than a practical descriptor
       // arena on a 32 GiB device.  Route large-but-grid-addressable buckets
       // through bounded streaming before make_layout() reserves the complete
@@ -730,7 +744,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       return outputs;
     }
     bounded_generated_task_capacity =
-        std::min(bounded_generated_task_capacity, kBoundedGeneratedMaximumTaskCapacity);
+        std::min(bounded_generated_task_capacity,
+                 cuda_policy::direct_jk_bounded_streaming_task_capacity_limit(
+                     direct_schedule, sizeof(GeneratedShellTask)));
   }
   if (requested_quartet_direct && first_setup && !requested_bounded_direct_streaming) {
     // The shared generated-task arena serves both exact Fock and force
@@ -1057,8 +1073,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // once per device; low-order kernels do not consume it.
     std::size_t stack_limit = 0;
     cuda_error = cudaDeviceGetLimit(&stack_limit, cudaLimitStackSize);
-    if (cuda_error == cudaSuccess && stack_limit < kDirectCudaStackLimitBytes) {
-      cuda_error = cudaDeviceSetLimit(cudaLimitStackSize, kDirectCudaStackLimitBytes);
+    if (cuda_error == cudaSuccess && stack_limit < direct_schedule.cuda_stack_limit_bytes) {
+      cuda_error = cudaDeviceSetLimit(cudaLimitStackSize, direct_schedule.cuda_stack_limit_bytes);
     }
     if (cuda_error != cudaSuccess) {
       fill_global_failure(outputs, cuda_status(cuda_error));
@@ -1066,18 +1082,16 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     }
   }
   if (first_setup && quartet_direct) {
-    int multiprocessor_count = 0;
-    cuda_error =
-        cudaDeviceGetAttribute(&multiprocessor_count, cudaDevAttrMultiProcessorCount, device_id);
-    if (cuda_error != cudaSuccess || multiprocessor_count <= 0 ||
-        static_cast<unsigned>(multiprocessor_count) >
-            std::numeric_limits<unsigned>::max() / kPersistentQuartetWarpsPerMultiprocessor) {
-      fill_global_failure(outputs, cuda_error == cudaSuccess ? VIBEQC_STATUS_INVALID_ARGUMENT
-                                                             : cuda_status(cuda_error));
+    if (direct_target.multiprocessor_count == 0U ||
+        direct_target.multiprocessor_count > std::numeric_limits<unsigned>::max() /
+                                                 direct_schedule.persistent_quartet_warps_per_sm) {
+      fill_global_failure(outputs, VIBEQC_STATUS_INVALID_ARGUMENT);
       return outputs;
     }
+    plan.persistent_quartet_warps_per_multiprocessor =
+        direct_schedule.persistent_quartet_warps_per_sm;
     plan.persistent_quartet_worker_blocks =
-        static_cast<unsigned>(multiprocessor_count) * kPersistentQuartetWarpsPerMultiprocessor;
+        direct_target.multiprocessor_count * direct_schedule.persistent_quartet_warps_per_sm;
   }
   cublasStatus_t blas_error = CUBLAS_STATUS_SUCCESS;
   cusolverStatus_t solver_error = CUSOLVER_STATUS_SUCCESS;
@@ -3419,11 +3433,19 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     // it to count every tested determinant, including final-state rejections.
     cuda_error =
         cudaMemsetAsync(final_fock_rebuild_count, 0, sizeof(std::uint32_t), resources.stream_);
+    // Device warm_mask is dead after initial-state admission. Reuse those
+    // per-item bytes as exact audit participation flags without growing the
+    // arena solely for diagnostics.
+    if (cuda_error == cudaSuccess) {
+      cuda_error =
+          cudaMemsetAsync(warm_mask, 0, batch_size * sizeof(std::uint8_t), resources.stream_);
+    }
     if (cuda_error == cudaSuccess) {
       launch_validate_force_residual_kernel(
           resources.stream_, static_cast<std::int32_t>(batch_size),
           static_cast<std::int32_t>(spin_count), static_cast<std::int32_t>(nbf),
-          options.density_tolerance, residual, active, converged, final_fock_rebuild_count);
+          options.density_tolerance, residual, active, converged, final_fock_rebuild_count,
+          warm_mask);
       cuda_error = cudaGetLastError();
     }
     if (cuda_error != cudaSuccess) {
@@ -3702,6 +3724,21 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
                                                        bounded_native_paged_force_shell_class_mask;
   const std::uint64_t uncovered_force_shell_class_mask =
       host_present_shell_class_mask & ~covered_force_shell_class_mask;
+  // A tuned compatible profile is a production qualification claim. Once all
+  // canonical s/p/d classes are covered, never let a missing registry entry
+  // silently resurrect the handwritten generic bounded mathematics: fail
+  // closed so the coverage regression is visible. Explicit AOT class filters
+  // remain diagnostic/oracle controls, while portable/unmeasured profiles and
+  // higher-l classes retain the bounded correctness fallback.
+  const generated::ProfileInfo& selected_aot_profile = generated::selected_profile();
+  const std::uint64_t unexpected_tuned_spd_fallback_mask =
+      uncovered_force_shell_class_mask & kCanonicalSpdShellClassMask;
+  if (options.compute_forces && bounded_direct_streaming && selected_aot_profile.tuned &&
+      selected_aot_profile.compatible && !aot_shell_class_selection_override_requested() &&
+      unexpected_tuned_spd_fallback_mask != 0U) {
+    fill_global_failure(outputs, cuda_status(cudaErrorNotSupported));
+    return outputs;
+  }
   std::size_t bounded_force_kernel_count = 0;
   const generated::ShellKernelMetadata* bounded_force_kernels =
       generated::selected_shell_kernels(bounded_force_kernel_count);
@@ -4364,6 +4401,8 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
   std::vector<std::uint8_t> host_converged(batch_size);
   std::vector<std::uint8_t> host_failed(batch_size);
   std::vector<std::uint32_t> host_iterations(batch_size);
+  std::vector<std::uint8_t> host_final_fock_reuse_mask(batch_size, 0U);
+  std::vector<std::uint8_t> host_final_audit_mask(batch_size, 0U);
   std::uint32_t host_inactive_eigensolver_profile_count = 0U;
   std::vector<DeviceInactiveEigensolverProfileEntry> host_inactive_eigensolver_profile(
       inactive_eigensolver_profiling ? options.max_iterations : 0U);
@@ -4388,6 +4427,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
       {host_converged.data(), converged, batch_size * sizeof(std::uint8_t)},
       {host_failed.data(), failed, batch_size * sizeof(std::uint8_t)},
       {host_iterations.data(), iterations, batch_size * sizeof(std::uint32_t)},
+      {host_final_fock_reuse_mask.data(), final_fock_reuse_mask,
+       reuse_converged_fock && !scf_force_ready_state ? batch_size * sizeof(std::uint8_t) : 0U},
+      {host_final_audit_mask.data(), warm_mask,
+       force_finalization_fallback ? batch_size * sizeof(std::uint8_t) : 0U},
   };
   for (const Download& download : downloads) {
     cuda_error = cudaMemcpyAsync(download.host, download.device, download.bytes,
@@ -4490,8 +4533,9 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     plan.last_inactive_eigensolver_profile = std::move(profile);
   }
   if (collect_ppps_queue_profile) {
-    const unsigned multiprocessor_count = std::max(
-        1U, plan.persistent_quartet_worker_blocks / kPersistentQuartetWarpsPerMultiprocessor);
+    const unsigned multiprocessor_count =
+        std::max(1U, plan.persistent_quartet_worker_blocks /
+                         std::max(1U, plan.persistent_quartet_warps_per_multiprocessor));
     CudaPppsQueueProfile ppps_profile = build_ppps_queue_profile(
         host, host_ppps_descriptor_counts, host_ppps_signatures, multiprocessor_count);
     if (ppps_profile.descriptor_slots != 0U) {
@@ -4584,6 +4628,10 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     result.converged = host_converged[system] != 0 && host_failed[system] == 0;
     result.initial_density_used = host.warm_mask[system] != 0;
     result.precision.requested_mode = requested_precision_mode;
+    // A numerical failure can occur after an operator application but before
+    // the iteration/final-audit counters advance. Do not certify that partial
+    // history as complete. Ordinary exhaustion/audit rejection remains counted.
+    result.precision.operator_work_counters_valid = host_failed[system] == 0 ? 1U : 0U;
     result.precision.effective_bits = precision_item_mixed ? 32U : 64U;
     result.precision.mixed_precision_fock_threshold =
         precision_item_mixed ? host_mixed_item_threshold[system] : 0.0;
@@ -4591,6 +4639,25 @@ std::vector<RhfBucketItem> execute_hf_cuda_bucket(CudaRhfBucketPlan& plan, const
     result.precision.mixed_precision_reserved_error =
         precision_item_mixed ? requested_precision_policy.item_budget_error : 0.0;
     result.precision.refinement_iterations = precision_item_mixed ? host_iterations[system] : 0U;
+    result.precision.mixed_stage_fock_builds =
+        precision_item_mixed ? host_mixed_iterations[system] : 0U;
+    result.precision.strict_stage_fock_builds = host_iterations[system];
+    const bool audited_item = host_final_audit_mask[system] != 0U;
+    const bool completed_item = host_converged[system] != 0 && host_failed[system] == 0;
+    const bool entered_finalization = completed_item || audited_item;
+    if (!scf_force_ready_state && entered_finalization) {
+      result.precision.post_scf_fock_builds =
+          reuse_converged_fock ? (host_final_fock_reuse_mask[system] == 0U ? 1U : 0U) : 1U;
+    }
+    if (audited_item) ++result.precision.post_scf_fock_builds;
+    result.precision.mixed_admission_census =
+        precision_item_mixed ? host_mixed_item_census[system] : 0U;
+    result.precision.final_residual_audits = audited_item ? 1U : 0U;
+    if (entered_finalization &&
+        (scf_force_ready_state ||
+         (reuse_converged_fock && host_final_fock_reuse_mask[system] != 0U))) {
+      result.precision.skipped_final_fock_builds = 1U;
+    }
     const std::size_t density_stride = spin_count * matrix_size;
     result.density.assign(host_density.begin() + system * density_stride,
                           host_density.begin() + (system + 1) * density_stride);

@@ -31,9 +31,6 @@ from fractions import Fraction
 from itertools import pairwise
 from types import MappingProxyType
 
-import numpy as np
-
-from .autodiff import _input_groups, _input_nodes
 from .ir import (
     TRANSCENDENTALS,
     Node,
@@ -53,6 +50,7 @@ from .ir import (
     power,
     reduce_sum,
     reshape,
+    runtime_indexed_scatter_add,
     runtime_indexed_select,
     scaled_bilinear,
     scatter_add,
@@ -61,7 +59,6 @@ from .ir import (
     sqrt,
     transpose,
 )
-from .packing import PackedLayout
 from .precision import derivative_precision_provenance
 from .program import Program
 from .types import Index, IndexSpace, TensorSpec
@@ -69,12 +66,35 @@ from .types import Index, IndexSpace, TensorSpec
 if typing.TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from .packing import PackedLayout
+
 GENERATION_SCHEMA = "vibeqc.tensor.ad_program"
 GENERATION_VERSION = 3
 TANGENT_PREFIX = "d_"
 COTANGENT_PREFIX = "bar_"
 DEFAULT_MAX_ELEMENTS = 1_000_000
 ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _input_groups(program: Program) -> dict[str, tuple[Node, ...]]:
+    """Group live occurrences of each named input without interpreter imports."""
+    groups: dict[str, list[Node]] = {}
+    for node in program.live_nodes:
+        if node.op == "input":
+            groups.setdefault(node.attrs["name"], []).append(node)
+    return {name: tuple(nodes) for name, nodes in groups.items()}
+
+
+def _input_nodes(program: Program) -> dict[str, Node]:
+    return {name: nodes[0] for name, nodes in _input_groups(program).items()}
+
+
+def _inverse_permutation(order: typing.Iterable[int]) -> tuple[int, ...]:
+    order = tuple(order)
+    inverse = [0] * len(order)
+    for position, axis in enumerate(order):
+        inverse[axis] = position
+    return tuple(inverse)
 
 
 def _select_names(mapping: Mapping, names: typing.Any, label: str) -> dict:
@@ -360,6 +380,18 @@ def _jvp_graph(node: Node, operand_tangents: typing.Any) -> Node | None:
         return segment_sum(
             tangent, axis, node.attrs["offsets"], node.spec.indices[axis]
         )
+    if node.op == "runtime_indexed_select":
+        return runtime_indexed_select(
+            tangent,
+            tuple(zip(node.attrs["axes"], node.inputs[1:], strict=True)),
+            node.spec.indices[0],
+        )
+    if node.op == "runtime_indexed_scatter_add":
+        return runtime_indexed_scatter_add(
+            tangent,
+            tuple(zip(node.attrs["axes"], node.inputs[1:], strict=True)),
+            node.spec.indices,
+        )
     if node.op == "reduce":
         return reduce_sum(tangent, node.attrs["axes"])
     if node.op == "broadcast":
@@ -484,15 +516,14 @@ def _embed_axis(
 
 def _slice_vjp_node(node: Node, bar: Node, *, max_elements: int) -> Node:
     """Adjoint of a unit-step contiguous slice, one axis at a time."""
+    del max_elements  # scatter_add is structural and allocates no incidence matrix.
     result = bar
     for axis, (start, stop) in enumerate(node.attrs["ranges"]):
-        result = _embed_axis(
+        result = scatter_add(
             result,
             axis,
-            node.inputs[0].spec.indices[axis],
             tuple(range(start, stop)),
-            node.inputs[0].spec.dtype,
-            max_elements=max_elements,
+            node.inputs[0].spec.indices[axis],
         )
     return result
 
@@ -538,7 +569,7 @@ def _vjp_graph(
     if node.op == "einsum":
         return _vjp_einsum(node, bar, active, max_elements=max_elements)
     if node.op == "transpose":
-        inverse = tuple(int(axis) for axis in np.argsort(node.attrs["axes"]))
+        inverse = _inverse_permutation(node.attrs["axes"])
         return [transpose(bar, inverse)]
     if node.op == "reshape":
         return [reshape(bar, node.inputs[0].spec.indices)]
@@ -558,7 +589,7 @@ def _vjp_graph(
         )
         summed = bar if not reduced else reduce_sum(bar, reduced)
         order = tuple(sorted(range(len(axes)), key=lambda axis: axes[axis]))
-        inverse = tuple(int(axis) for axis in np.argsort(order))
+        inverse = _inverse_permutation(order)
         return [transpose(summed, inverse)]
     if node.op == "slice":
         return [_slice_vjp_node(node, bar, max_elements=max_elements)]
@@ -591,6 +622,28 @@ def _vjp_graph(
             for _ in range(start, stop)
         )
         return [indexed_gather(bar, axis, positions, node.inputs[0].spec.indices[axis])]
+    if node.op == "runtime_indexed_select":
+        result = (
+            runtime_indexed_scatter_add(
+                bar,
+                tuple(zip(node.attrs["axes"], node.inputs[1:], strict=True)),
+                node.inputs[0].spec.indices,
+            )
+            if active[0]
+            else None
+        )
+        return [result, *([None] * (len(node.inputs) - 1))]
+    if node.op == "runtime_indexed_scatter_add":
+        result = (
+            runtime_indexed_select(
+                bar,
+                tuple(zip(node.attrs["axes"], node.inputs[1:], strict=True)),
+                node.inputs[0].spec.indices[0],
+            )
+            if active[0]
+            else None
+        )
+        return [result, *([None] * (len(node.inputs) - 1))]
     raise ValueError(f"no demand-driven VJP rule for primitive: {node.op}")
 
 
@@ -749,6 +802,12 @@ def _rebuild_node(node: Node, inputs: typing.Any) -> Node:
             tuple(zip(node.attrs["axes"], inputs[1:], strict=True)),
             node.spec.indices[0],
         )
+    if node.op == "runtime_indexed_scatter_add":
+        return runtime_indexed_scatter_add(
+            inputs[0],
+            tuple(zip(node.attrs["axes"], inputs[1:], strict=True)),
+            node.spec.indices,
+        )
     if node.op == "reduce":
         return reduce_sum(inputs[0], node.attrs["axes"])
     if node.op == "broadcast":
@@ -823,6 +882,8 @@ def _expand_packed_inputs(program: Program, packed: Mapping) -> tuple[Program, d
     """Replace packed parameters with explicit dense unpack DAGs."""
     if not packed:
         return program, {}
+    from .packing import PackedLayout
+
     inputs = _input_nodes(program)
     replacements, extra_definitions, layouts = {}, [], {}
     for name, layout in packed.items():
