@@ -34,7 +34,7 @@ def resident_record() -> dict:
     }
 
 
-def test_resident_route_records_policy_and_dimension_bounds():
+def test_resident_route_records_policy_and_dimension_bounds() -> None:
     result = validate_response_record(resident_record(), expected_policy="resident")
     assert result["policy"] == {
         "storage": "resident-jk-scratch",
@@ -61,7 +61,9 @@ def test_resident_route_records_policy_and_dimension_bounds():
         ("raw_value_upload_bytes", 4 * 4 * 5 * 8 + 4 * 4 * 8, "one full"),
     ],
 )
-def test_resident_route_rejects_hidden_recomputation_or_gather(field, value, match):
+def test_resident_route_rejects_hidden_recomputation_or_gather(
+    field: str, value: int, match: str
+) -> None:
     record = resident_record()
     record["counters"][field] = value
     if field == "raw_value_upload_bytes":
@@ -70,7 +72,7 @@ def test_resident_route_rejects_hidden_recomputation_or_gather(field, value, mat
         validate_response_record(record, expected_policy="resident")
 
 
-def test_resident_route_rejects_unbounded_panels_and_transformed_tiles():
+def test_resident_route_rejects_unbounded_panels_and_transformed_tiles() -> None:
     record = resident_record()
     record["counters"]["response_auxiliary_blocks"] = 2
     with pytest.raises(RuntimeError, match="panel count"):
@@ -102,7 +104,7 @@ def test_resident_route_rejects_unbounded_panels_and_transformed_tiles():
         )
 
 
-def test_declared_transfer_ceilings_are_enforced_without_gpu():
+def test_declared_transfer_ceilings_are_enforced_without_gpu() -> None:
     record = resident_record()
     with pytest.raises(RuntimeError, match="H2D bytes"):
         validate_response_record(record, max_h2d_bytes=63)
@@ -110,7 +112,7 @@ def test_declared_transfer_ceilings_are_enforced_without_gpu():
         validate_response_record(record, max_d2h_bytes=95)
 
 
-def test_streamed_and_fallback_routes_are_not_mislabeled_as_resident():
+def test_streamed_and_fallback_routes_are_not_mislabeled_as_resident() -> None:
     streamed = resident_record()
     streamed["source_backed"] = True
     streamed["streamed"] = True

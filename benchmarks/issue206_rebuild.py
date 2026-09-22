@@ -132,7 +132,7 @@ def _require_converged_reference(engines: Any) -> None:
 
 
 def _reset_stock(engines: Any, systems: Any, coordinates: Any) -> None:
-    """Reset stock molecules outside the timed changed-geometry endpoint."""
+    """Reset stock molecules; changed-geometry samples include this in their timer."""
 
     for engine, atoms, xyz in zip(engines, systems, coordinates, strict=True):
         engine.reset(

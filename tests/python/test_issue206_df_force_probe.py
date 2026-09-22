@@ -262,7 +262,9 @@ def test_trace_protocol_preserves_raw_evidence_and_requires_force_components(
     assert "VIBEQC_DF_HOST_TRACE" not in os.environ
 
 
-def test_traced_force_records_publish_selected_response_policy(protocol, monkeypatch):
+def test_traced_force_records_publish_selected_response_policy(
+    protocol: typing.Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Trace evidence must identify the executed route, not only its request."""
     _library, output, energy, force = protocol
     directory = output.parent / "policy-traces"
@@ -278,7 +280,9 @@ def test_traced_force_records_publish_selected_response_policy(protocol, monkeyp
         ],
     )
 
-    def sample(case, properties, selected_library):
+    def sample(
+        case: object, properties: tuple[str, ...], selected_library: object
+    ) -> dict[str, object]:
         operations = ["ri_j", "ri_k"]
         if "forces" in properties:
             operations.extend(["force_response", "one_electron_response"])

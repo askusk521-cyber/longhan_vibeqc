@@ -13,8 +13,8 @@ from benchmarks.issue308_response_timeline import (
     [(0, "dense", 4 * 4), (1, "packed", 4 * 5 // 2)],
 )
 def test_timeline_accepts_exact_dense_and_packed_response_work(
-    packed_pairs, pair_storage, pair_stride
-):
+    packed_pairs: int, pair_storage: str, pair_stride: int
+) -> None:
     """Both complete pair representations are valid response routes."""
 
     expected = 5 * pair_stride
@@ -36,7 +36,7 @@ def test_timeline_accepts_exact_dense_and_packed_response_work(
     }
 
 
-def test_timeline_rejects_dense_count_for_packed_route():
+def test_timeline_rejects_dense_count_for_packed_route() -> None:
     """A packed route must not pass by reporting the larger dense count."""
 
     with pytest.raises(RuntimeError, match="packed pairs"):
@@ -50,7 +50,7 @@ def test_timeline_rejects_dense_count_for_packed_route():
         )
 
 
-def test_timeline_rejects_weight_byte_mismatch():
+def test_timeline_rejects_weight_byte_mismatch() -> None:
     with pytest.raises(RuntimeError, match="weight bytes"):
         validate_three_center_response_work(
             {
@@ -63,7 +63,7 @@ def test_timeline_rejects_weight_byte_mismatch():
         )
 
 
-def test_timeline_recovers_host_fallback_work_from_exact_fp64_bytes():
+def test_timeline_recovers_host_fallback_work_from_exact_fp64_bytes() -> None:
     """Legacy host-weight traces may publish bytes without an element count."""
 
     expected = 5 * 4 * 4
@@ -79,7 +79,7 @@ def test_timeline_recovers_host_fallback_work_from_exact_fp64_bytes():
     assert result["observed_three_center_derivative_weights"] == expected
 
 
-def test_metric_work_accepts_exact_host_fallback_bytes():
+def test_metric_work_accepts_exact_host_fallback_bytes() -> None:
     assert (
         validate_metric_response_work({"metric_derivative_weight_bytes": 5 * 5 * 8}, 5)
         == 25
