@@ -83,8 +83,7 @@ void check_convergence(unsigned spins, bool retain, bool require_physical, bool 
                                         tested_items.data);
   check(cudaGetLastError());
   if (final_converged.read() != std::vector<std::uint8_t>{1, 1, 0, 0, 0, 0} ||
-      final_active.read() != std::vector<std::uint8_t>{1, 1, 0, 0, 0, 0} ||
-      tested.read()[0] != 5 ||
+      final_active.read() != std::vector<std::uint8_t>{1, 1, 0, 0, 0, 0} || tested.read()[0] != 5 ||
       tested_items.read() != std::vector<std::uint8_t>{1, 1, 1, 1, 1, 0})
     throw std::runtime_error("force validation missed a bad determinant or lost rejected work");
 }
