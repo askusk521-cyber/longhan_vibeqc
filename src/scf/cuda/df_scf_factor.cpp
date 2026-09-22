@@ -34,8 +34,7 @@ bool qualified_resident_rhf_exchange(const CudaDensityFittingJkPlan& plan,
   const bool dense_resident = plan.value_storage.pairs == DfPairStorage::Dense &&
                               plan.auxiliary_tile == plan.naux &&
                               (!plan.integral_source || plan.resident_raw_valid);
-  return packed_resident ||
-         dense_resident;
+  return packed_resident || dense_resident;
 }
 
 vibeqc_status factor_density_for_exchange(CudaDensityFittingJkPlan& plan, PersistentScfState& state,
@@ -51,11 +50,9 @@ vibeqc_status factor_density_for_exchange(CudaDensityFittingJkPlan& plan, Persis
   // Unsupported plans retain dense exchange without allocating another solver.
   const bool packed = plan.value_storage.pairs == DfPairStorage::SymmetricLower &&
                       plan.integral_source && plan.packed_raw;
-  const bool source_dense_resident = plan.integral_source && !packed &&
-                                     plan.resident_raw_valid;
+  const bool source_dense_resident = plan.integral_source && !packed && plan.resident_raw_valid;
   if (state.unrestricted || plan.batch_size != 1 || !state.occupied_exchange || plan.streamed ||
-      (plan.integral_source && !packed && !source_dense_resident) ||
-      plan.row_tile != plan.nbf ||
+      (plan.integral_source && !packed && !source_dense_resident) || plan.row_tile != plan.nbf ||
       (!packed && plan.auxiliary_tile != plan.naux) || plan.nbf < 2) {
     trace_counter("unsupported", 1);
     return VIBEQC_STATUS_SUCCESS;

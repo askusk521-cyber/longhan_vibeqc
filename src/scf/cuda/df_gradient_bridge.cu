@@ -1231,8 +1231,8 @@ vibeqc_status execute_cuda_df_hf_gradient(
         // The source index selects the current batch item; this temporary view
         // is valid for this response only, not a cache shared between items.
         const auto status = generate_cuda_density_fitting_raw_tile(
-            source, source_index, 0, n * n, 0, a, -1, stream_handle,
-            borrowed->staging_weights, detail);
+            source, source_index, 0, n * n, 0, a, -1, stream_handle, borrowed->staging_weights,
+            detail);
         if (status == VIBEQC_STATUS_OUT_OF_MEMORY) throw std::bad_alloc();
         if (status != VIBEQC_STATUS_SUCCESS) throw std::runtime_error(detail);
         cuda_df::launch_gather_auxiliary_tile_kernel(
@@ -1240,12 +1240,19 @@ vibeqc_status execute_cuda_df_hf_gradient(
             a, 0, 0, a, borrowed->staging_weights, borrowed->raw_auxiliary_major);
         check(cudaGetLastError());
         generated_buffers = *borrowed;
-        generated_buffers.resident_raw = {borrowed->raw_auxiliary_major, n, a, n * n, n, 1,
-                                          device_metric->owner_identity, *device_metric};
+        generated_buffers.resident_raw = {borrowed->raw_auxiliary_major,
+                                          n,
+                                          a,
+                                          n * n,
+                                          n,
+                                          1,
+                                          device_metric->owner_identity,
+                                          *device_metric};
         borrowed = &generated_buffers;
         arena.stats.recomputed_value_bytes += n * n * a * sizeof(double);
         arena.stats.value_slices += a;
-        runtime::cuda_trace::trace_counter("response_generated_raw_bytes", n * n * a * sizeof(double));
+        runtime::cuda_trace::trace_counter("response_generated_raw_bytes",
+                                           n * n * a * sizeof(double));
       }
       if (borrowed && !borrowed->resident_raw.data && !packed_borrow) {
         arena.stats.host_to_device_bytes += raw_a.size_bytes();

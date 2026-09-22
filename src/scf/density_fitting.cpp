@@ -1181,10 +1181,9 @@ static DensityFittingTilePlan plan_density_fitting_tiles_impl(
     // layout does not fit, the generated branch below finds the largest
     // bounded resident panel and the automatic wrapper drops the optional
     // factor reservation.
-    plan.auxiliary_tile = generated_source && occupied_exchange
-                              ? naux
-                              : generated_source ? std::min<std::size_t>(naux, 128)
-                                                  : naux;
+    plan.auxiliary_tile = generated_source && occupied_exchange ? naux
+                          : generated_source                    ? std::min<std::size_t>(naux, 128)
+                                                                : naux;
     plan.stores_full_three_center = generated_source;
     update_bytes();
     if (plan.peak_workspace_bytes <= memory_budget_bytes) {

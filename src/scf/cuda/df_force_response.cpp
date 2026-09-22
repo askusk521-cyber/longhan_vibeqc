@@ -186,15 +186,13 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
        plan->response_orbital_representation == orbital.basis_representation &&
        plan->response_auxiliary_representation == auxiliary.basis_representation);
   const bool source_dense_resident =
-      plan->integral_source && plan->value_storage.pairs == DfPairStorage::Dense &&
-      matching_source;
+      plan->integral_source && plan->value_storage.pairs == DfPairStorage::Dense && matching_source;
   // Retained B alone does not establish scratch capacity: generated resident
   // plans can retain B while their J/K temporaries cover only a small tile.
-  const bool full_scratch = !host_weights && !plan->streamed &&
-                            (!plan->integral_source || source_dense_resident) &&
-                            plan->row_tile == plan->nbf && plan->auxiliary_tile == plan->naux &&
-                            plan->auxiliary_tile_values && plan->exchange_intermediate &&
-                            plan->exchange_contributions;
+  const bool full_scratch =
+      !host_weights && !plan->streamed && (!plan->integral_source || source_dense_resident) &&
+      plan->row_tile == plan->nbf && plan->auxiliary_tile == plan->naux &&
+      plan->auxiliary_tile_values && plan->exchange_intermediate && plan->exchange_contributions;
   const bool packed_resident = !host_weights && plan->integral_source && !plan->streamed &&
                                plan->value_storage.pairs == DfPairStorage::SymmetricLower &&
                                plan->packed_raw && plan->row_tile == plan->nbf;
@@ -239,7 +237,8 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
       // when occupied factors are unavailable, without any new allocation or
       // inferring full capacity from retained B alone.
       if ((full_scratch && storage == "auto" &&
-           (!plan->integral_source || plan->resident_raw_valid)) || automatic_occupied)
+           (!plan->integral_source || plan->resident_raw_valid)) ||
+          automatic_occupied)
         borrow = true;
     }
   }

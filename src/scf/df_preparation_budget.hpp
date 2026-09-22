@@ -1,9 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <limits>
 
 namespace vibeqc::scf {
@@ -126,22 +126,23 @@ inline std::size_t df_resident_value_admission_floor(DfBudgetWorkload workload) 
   // Match the fixed DIIS reservation charged before tile selection. The
   // reserve is zero for the history sizes that do not allocate device DIIS.
   const long double diis_dimension = diis + 1.0L;
-  const long double diis_bytes =
-      diis < 2.0L
-          ? 0.0L
-          : batch * ((4.0L * diis + 6.0L) * matrix + diis_dimension * diis_dimension +
-                     diis_dimension) * sizeof(double) + batch * 2.0L * sizeof(std::uint32_t);
+  const long double diis_bytes = diis < 2.0L
+                                     ? 0.0L
+                                     : batch *
+                                               ((4.0L * diis + 6.0L) * matrix +
+                                                diis_dimension * diis_dimension + diis_dimension) *
+                                               sizeof(double) +
+                                           batch * 2.0L * sizeof(std::uint32_t);
 
   const long double eigen_workspace = 1.0L * mib + 16.0L * matrix_bytes;
-  const long double eigen_reservation = eigen_workspace + (3.0L * matrix + n) * sizeof(double) +
-                                        sizeof(int) + sizeof(unsigned char);
+  const long double eigen_reservation =
+      eigen_workspace + (3.0L * matrix + n) * sizeof(double) + sizeof(int) + sizeof(unsigned char);
   const long double snapshot =
       batch * (2.0L * (matrix + n) * sizeof(double) + 2.0L * (sizeof(std::uint64_t) + sizeof(int)));
   const long double final_validation =
       (9.0L * matrix + n) * sizeof(double) + (3.0L * 128.0L + 1.0L) * 128.0L;
   const long double control = batch * 154.0L;
-  const long double solver = 1.0L * mib + 16.0L * a * a * sizeof(double) +
-                             batch * eigen_workspace;
+  const long double solver = 1.0L * mib + 16.0L * a * a * sizeof(double) + batch * eigen_workspace;
   const long double metric = batch * a * a * sizeof(double);
 
   // Generated resident B plus the three full-width K panels, the persistent
@@ -151,11 +152,10 @@ inline std::size_t df_resident_value_admission_floor(DfBudgetWorkload workload) 
       7.0L * batch * matrix + batch * a + 3.0L * tensor + batch * tensor;
   const long double one_electron_doubles = 23.0L * batch * matrix;
   const long double source_margin = 64.0L * mib + 16.0L * (matrix + a * a) * sizeof(double);
-  return df_budget_bytes(diis_bytes + control + eigen_reservation + snapshot + final_validation +
-                         solver + metric +
-                         (setup_doubles + contraction_doubles + one_electron_doubles) *
-                             sizeof(double) +
-                         source_margin);
+  return df_budget_bytes(
+      diis_bytes + control + eigen_reservation + snapshot + final_validation + solver + metric +
+      (setup_doubles + contraction_doubles + one_electron_doubles) * sizeof(double) +
+      source_margin);
 }
 
 /** Resolve one value/response allowance without a fixed-size magic default.
@@ -194,10 +194,9 @@ inline DfResolvedBudget resolve_df_budget(DfBudgetWorkload workload, DfResourceE
   response_fraction = std::clamp(response_fraction, 0.20L, 0.70L);
   const auto resident_value_floor = df_resident_value_admission_floor(workload);
   const auto resident_target =
-      workload.forces
-          ? df_budget_ceiling(static_cast<long double>(resident_value_floor) /
-                             (1.0L - response_fraction))
-          : resident_value_floor;
+      workload.forces ? df_budget_ceiling(static_cast<long double>(resident_value_floor) /
+                                          (1.0L - response_fraction))
+                      : resident_value_floor;
 
   DfResolvedBudget result;
   result.requested_bytes = requested_bytes;
@@ -221,9 +220,8 @@ inline DfResolvedBudget resolve_df_budget(DfBudgetWorkload workload, DfResourceE
     // Promote only when the complete resident value owner fits inside the
     // actual post-reservation envelope. Otherwise preserve the smaller target
     // so constrained devices still select the bounded streamed route.
-    const auto admitted_target = resident_target <= available
-                                     ? std::max(workload_target, resident_target)
-                                     : workload_target;
+    const auto admitted_target =
+        resident_target <= available ? std::max(workload_target, resident_target) : workload_target;
     result.total_bytes = std::min(admitted_target, available);
   } else {
     result.total_bytes = std::min(workload_target, max_fallback);

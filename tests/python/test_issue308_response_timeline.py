@@ -80,6 +80,7 @@ def test_timeline_recovers_host_fallback_work_from_exact_fp64_bytes():
 
 
 def test_metric_work_accepts_exact_host_fallback_bytes():
-    assert validate_metric_response_work(
-        {"metric_derivative_weight_bytes": 5 * 5 * 8}, 5
-    ) == 25
+    assert (
+        validate_metric_response_work({"metric_derivative_weight_bytes": 5 * 5 * 8}, 5)
+        == 25
+    )

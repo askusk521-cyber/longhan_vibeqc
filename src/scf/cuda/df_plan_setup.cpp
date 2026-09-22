@@ -144,10 +144,10 @@ vibeqc_status materialize_generated_tensor(CudaDensityFittingJkPlan& plan, const
             reinterpret_cast<void*>(plan.stream), plan.auxiliary_tile_values, detail);
         if (status != VIBEQC_STATUS_SUCCESS) return status;
         if (retain_raw) {
-          launch_gather_auxiliary_tile_kernel(
-              blocks_for(pairs * plan.naux), kThreads, 0, plan.stream, plan.matrix_elements,
-              plan.naux, system, 0, plan.naux, plan.auxiliary_tile_values,
-              plan.exchange_contributions);
+          launch_gather_auxiliary_tile_kernel(blocks_for(pairs * plan.naux), kThreads, 0,
+                                              plan.stream, plan.matrix_elements, plan.naux, system,
+                                              0, plan.naux, plan.auxiliary_tile_values,
+                                              plan.exchange_contributions);
           const auto cuda_error = cudaGetLastError();
           if (cuda_error != cudaSuccess)
             return cuda_failure(cuda_error, "retain generated raw DF tensor", detail);
@@ -168,10 +168,10 @@ vibeqc_status materialize_generated_tensor(CudaDensityFittingJkPlan& plan, const
             reinterpret_cast<void*>(plan.stream), plan.auxiliary_tile_values, detail);
         if (status != VIBEQC_STATUS_SUCCESS) return status;
         if (retain_raw) {
-          launch_gather_auxiliary_tile_kernel(
-              blocks_for(pairs * plan.naux), kThreads, 0, plan.stream, plan.matrix_elements,
-              plan.naux, system, 0, plan.naux, plan.auxiliary_tile_values,
-              plan.exchange_contributions);
+          launch_gather_auxiliary_tile_kernel(blocks_for(pairs * plan.naux), kThreads, 0,
+                                              plan.stream, plan.matrix_elements, plan.naux, system,
+                                              0, plan.naux, plan.auxiliary_tile_values,
+                                              plan.exchange_contributions);
           const auto cuda_error = cudaGetLastError();
           if (cuda_error != cudaSuccess)
             return cuda_failure(cuda_error, "retain generated raw DF tensor", detail);
@@ -195,8 +195,8 @@ vibeqc_status materialize_generated_tensor(CudaDensityFittingJkPlan& plan, const
   }
   if (retain_raw) {
     plan.resident_raw_valid = true;
-    runtime::cuda_trace::trace_counter(
-        "resident_raw_bytes", plan.tensor_elements_per_system * sizeof(double));
+    runtime::cuda_trace::trace_counter("resident_raw_bytes",
+                                       plan.tensor_elements_per_system * sizeof(double));
   }
   runtime::cuda_trace::trace_counter(
       "resident_transformed_bytes",
@@ -300,8 +300,8 @@ vibeqc_status create_cuda_density_fitting_jk_plan_tiled_impl(
       !retain_three_center && (auxiliary_tile < naux || ao_pair_tile < matrix_elements);
   const std::size_t staged_row_tile =
       streamed ? std::min<std::size_t>(nbf, std::max<std::size_t>(1, ao_pair_tile / nbf)) : nbf;
-  const bool complete_resident_layout = !streamed && ao_pair_tile == matrix_elements &&
-                                        auxiliary_tile == naux;
+  const bool complete_resident_layout =
+      !streamed && ao_pair_tile == matrix_elements && auxiliary_tile == naux;
   std::size_t staged_pair_capacity = 0;
   std::size_t auxiliary_vector_elements = 0;
   std::size_t auxiliary_vector_bytes = 0;
