@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "generated_direct_resident_psss_schedule.cuh"
 #include "integrals/ecp_cuda.hpp"
 #include "molecule/basis.hpp"
 #include "posthf/capacity.hpp"
