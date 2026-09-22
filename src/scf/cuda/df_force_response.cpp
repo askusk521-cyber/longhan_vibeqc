@@ -162,6 +162,11 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
     detail = "invalid generated DF force plan or batch index";
     return VIBEQC_STATUS_INVALID_ARGUMENT;
   }
+  if (plan->integral_source && !cuda_density_fitting_integral_source_geometry_matches(
+                                   plan->integral_source, system, orbital, auxiliary)) {
+    detail = "generated DF response source geometry or basis does not match";
+    return VIBEQC_STATUS_INVALID_ARGUMENT;
+  }
   const auto elements = plan->naux * plan->naux, offset = system * elements;
   const char* host_policy = std::getenv("VIBEQC_DF_HOST_RESPONSE_WEIGHTS");
   const bool host_weights = host_policy && host_policy[0] == '1' && host_policy[1] == '\0';
@@ -173,7 +178,8 @@ vibeqc_status execute_cuda_density_fitting_generated_force_response(
   }
   // Prepared generated-source metadata deliberately releases host A. In that
   // case the integral source itself is the immutable geometry/metric owner;
-  // an empty raw span is therefore the validated source binding, not a
+  // an empty raw span is therefore valid only after the exact per-item check
+  // above; it is not independently a geometry identity. This is not a
   // missing owner. Materialized host routes still require every allocation
   // identity below to match exactly.
   const bool matching_source =
