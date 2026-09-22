@@ -250,33 +250,35 @@ VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_create(
     vibeqc_fock_plan* plan, const double* coefficients_alpha, uint64_t coefficients_alpha_count,
     const double* orbital_energies_alpha, uint64_t orbital_energies_alpha_count,
     uint32_t nocc_alpha, const double* coefficients_beta, uint64_t coefficients_beta_count,
-    const double* orbital_energies_beta, uint64_t orbital_energies_beta_count,
-    uint32_t nocc_beta, uint32_t vector_slots, uint64_t device_budget_bytes,
-    vibeqc_uhf_response_resident** output);
+    const double* orbital_energies_beta, uint64_t orbital_energies_beta_count, uint32_t nocc_beta,
+    uint32_t vector_slots, uint64_t device_budget_bytes, vibeqc_uhf_response_resident** output);
 VIBEQC_API void vibeqc_uhf_response_resident_destroy(vibeqc_uhf_response_resident* owner);
 VIBEQC_API const char* vibeqc_uhf_response_resident_last_error(
     const vibeqc_uhf_response_resident* owner);
 VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_get_diagnostic(
-    const vibeqc_uhf_response_resident* owner,
-    vibeqc_uhf_response_resident_diagnostic* diagnostic);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_upload(
-    vibeqc_uhf_response_resident* owner, uint32_t slot, const double* values, uint64_t count);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_download(
-    vibeqc_uhf_response_resident* owner, uint32_t slot, double* values, uint64_t count);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_zero(
-    vibeqc_uhf_response_resident* owner, uint32_t slot);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_copy(
-    vibeqc_uhf_response_resident* owner, uint32_t destination, uint32_t source);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_scale(
-    vibeqc_uhf_response_resident* owner, uint32_t slot, double alpha);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_axpy(
-    vibeqc_uhf_response_resident* owner, uint32_t destination, double alpha, uint32_t source);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_dot(
-    vibeqc_uhf_response_resident* owner, uint32_t left, uint32_t right, double* value);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_norm(
-    vibeqc_uhf_response_resident* owner, uint32_t slot, double* value);
-VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_apply(
-    vibeqc_uhf_response_resident* owner, uint32_t destination, uint32_t source);
+    const vibeqc_uhf_response_resident* owner, vibeqc_uhf_response_resident_diagnostic* diagnostic);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_upload(vibeqc_uhf_response_resident* owner,
+                                                             uint32_t slot, const double* values,
+                                                             uint64_t count);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_download(vibeqc_uhf_response_resident* owner,
+                                                               uint32_t slot, double* values,
+                                                               uint64_t count);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_zero(vibeqc_uhf_response_resident* owner,
+                                                           uint32_t slot);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_copy(vibeqc_uhf_response_resident* owner,
+                                                           uint32_t destination, uint32_t source);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_scale(vibeqc_uhf_response_resident* owner,
+                                                            uint32_t slot, double alpha);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_axpy(vibeqc_uhf_response_resident* owner,
+                                                           uint32_t destination, double alpha,
+                                                           uint32_t source);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_dot(vibeqc_uhf_response_resident* owner,
+                                                          uint32_t left, uint32_t right,
+                                                          double* value);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_norm(vibeqc_uhf_response_resident* owner,
+                                                           uint32_t slot, double* value);
+VIBEQC_API vibeqc_status vibeqc_uhf_response_resident_apply(vibeqc_uhf_response_resident* owner,
+                                                            uint32_t destination, uint32_t source);
 
 #ifdef __cplusplus
 }
