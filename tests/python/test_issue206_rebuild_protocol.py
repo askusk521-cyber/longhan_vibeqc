@@ -1,6 +1,7 @@
 """Every recorded phase must qualify; changed endpoints include reset work."""
 
 import json
+import os
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -237,6 +238,9 @@ def test_cold_endpoint_participates_in_cli_acceptance(
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "fake")
     library, output = tmp_path / "fake.so", tmp_path / "result.json"
     library.touch()
+    # main selects this library globally; register the key so teardown restores
+    # the previous selection rather than poisoning later native tests.
+    monkeypatch.setenv("VIBEQC_LIBRARY", str(library))
     monkeypatch.setattr(
         sys,
         "argv",
@@ -267,3 +271,23 @@ def test_cold_endpoint_participates_in_cli_acceptance(
     assert payload["accuracy"]["cold_pair"][
         "maximum_force_error_hartree_per_bohr"
     ] == pytest.approx(1e-3 if cold_error == "force" else 0.0)
+
+
+@pytest.mark.parametrize("selected_library", [None, "/existing/native-library.so"])
+@pytest.mark.parametrize("cold_error", ["none", "energy", "force"])
+def test_cold_cli_stub_does_not_leak_library_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected_library: str | None,
+    cold_error: str,
+) -> None:
+    """A fake CLI run must not redirect later native tests to its empty .so."""
+    if selected_library is None:
+        monkeypatch.delenv("VIBEQC_LIBRARY", raising=False)
+    else:
+        monkeypatch.setenv("VIBEQC_LIBRARY", selected_library)
+    with pytest.MonkeyPatch.context() as isolated:
+        test_cold_endpoint_participates_in_cli_acceptance(
+            tmp_path, isolated, cold_error
+        )
+    assert os.environ.get("VIBEQC_LIBRARY") == selected_library
